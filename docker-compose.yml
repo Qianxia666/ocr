@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  web-oai-ocr:
+    build: .
+    container_name: web-oai-ocr
+    restart: unless-stopped
+
+    # 端口映射 - 使用环境变量配置
+    ports:
+      - "${HOST_PORT:-54188}:${PORT:-54188}"
+
+    # 环境变量配置
+    environment:
+      # API 配置
+      - API_BASE_URL=${API_BASE_URL:-https://api.openai.com}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MODEL=${MODEL:-gpt-4o}
+      - PASSWORD=${PASSWORD:-pwd}
+
+      # 服务端口配置
+      - PORT=${PORT:-54188}
+
+      # 并发和重试配置
+      - CONCURRENCY=${CONCURRENCY:-5}
+      - MAX_RETRIES=${MAX_RETRIES:-5}
+
+      # PDF处理优化配置
+      - PDF_DPI=${PDF_DPI:-200}
+      - BATCH_SIZE=${BATCH_SIZE:-8}
+
+      # 文件大小限制配置 (单位: MB)
+      - MAX_IMAGE_SIZE_MB=${MAX_IMAGE_SIZE_MB:-50}
+      - MAX_PDF_SIZE_MB=${MAX_PDF_SIZE_MB:-200}
+      - MAX_PDF_PAGES=${MAX_PDF_PAGES:-500}
+
+      # 前端配置
+      - FAVICON_URL=${FAVICON_URL:-/static/favicon.ico}
+      - TITLE=${TITLE:-呱呱的oai图转文}
+      - BACK_URL=${BACK_URL:-}
+
+      # 数据库路径配置
+      - DATABASE_PATH=/app/data/tasks.db
+      - RECOVERY_DB_PATH=/app/data/recovery.db
+      - CHECKPOINT_DIR=/app/data/checkpoints
+
+    # 数据卷映射
+    volumes:
+      # 持久化数据库文件
+      - ./data:/app/data
+      # 临时文件目录（可选，用于调试）
+      # - ./tmp:/app/tmp
+
+    # 环境变量文件
+    env_file:
+      - .env
+
+    # 健康检查（使用专用端点，无需密码）
+    healthcheck:
+      test: ["CMD", "sh", "-c", "python -c \"import urllib.request, os; port = os.getenv('PORT', '54188'); urllib.request.urlopen(f'http://localhost:{port}/healthz').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # 资源限制（可选，根据实际情况调整）
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

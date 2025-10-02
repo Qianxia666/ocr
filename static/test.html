@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>上传测试页面</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              200: '#bfdbfe',
+              300: '#93c5fd',
+              400: '#60a5fa',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #3b82f6, #2563eb);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, #60a5fa, #3b82f6);
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-100 p-6 font-sans">
+  <div class="max-w-5xl mx-auto">
+    <h1 class="text-3xl font-bold text-gray-800 mb-6">🔧 上传功能诊断页面</h1>
+
+    <div id="uploadArea" class="border-3 border-dashed border-blue-400 bg-white rounded-2xl p-12 text-center cursor-pointer transition-all duration-300 hover:bg-blue-50 hover:border-blue-500 hover:shadow-lg mb-6">
+      <h2 class="text-2xl font-semibold text-gray-700 mb-2">📤 点击或拖拽文件到这里</h2>
+      <p class="text-gray-500">支持图片和PDF文件</p>
+    </div>
+
+    <h3 class="text-xl font-bold text-gray-800 mb-3">📋 控制台日志:</h3>
+    <div id="console" class="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm h-96 overflow-y-auto shadow-xl"></div>
+  </div>
+
+  <script>
+    const consoleDiv = document.getElementById('console');
+    const uploadArea = document.getElementById('uploadArea');
+
+    // 自定义控制台
+    function log(message, type = 'info') {
+      const div = document.createElement('div');
+      const colorClass = {
+        'error': 'text-red-400',
+        'success': 'text-green-400',
+        'info': 'text-blue-400'
+      }[type] || 'text-green-400';
+      div.className = `my-1 ${colorClass}`;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      consoleDiv.appendChild(div);
+      consoleDiv.scrollTop = consoleDiv.scrollHeight;
+      console.log(message);
+    }
+
+    log('页面加载完成', 'success');
+    log('document.readyState: ' + document.readyState, 'info');
+
+    // 定义上传处理函数
+    window.handleUpload = function(file) {
+      log(`准备上传文件: ${file.name}, 大小: ${(file.size / 1024 / 1024).toFixed(2)}MB`, 'info');
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const isPdf = file.type.includes("pdf");
+      const url = isPdf ? '/your-password-here/api/async/pdf' : '/your-password-here/api/async/image';
+
+      log(`上传URL: ${url}`, 'info');
+      log('开始上传...', 'info');
+
+      fetch(url, { method: "POST", body: formData })
+        .then(response => {
+          log(`服务器响应状态: ${response.status}`, response.ok ? 'success' : 'error');
+          return response.json();
+        })
+        .then(data => {
+          log('服务器响应数据: ' + JSON.stringify(data), 'success');
+          if (data.status === "success") {
+            log(`✓ 上传成功! 任务ID: ${data.task_id}`, 'success');
+          } else {
+            log(`✗ 上传失败: ${data.message || data.detail}`, 'error');
+          }
+        })
+        .catch(err => {
+          log(`✗ 上传错误: ${err.message}`, 'error');
+        });
+    };
+
+    // 点击上传
+    uploadArea.addEventListener('click', function() {
+      log('点击上传区域', 'info');
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*,.pdf';
+      input.onchange = function(e) {
+        const file = e.target.files[0];
+        if (file) {
+          log(`选择文件: ${file.name}`, 'success');
+          window.handleUpload(file);
+        }
+      };
+      input.click();
+    });
+
+    // 拖拽上传
+    uploadArea.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      uploadArea.classList.add('border-green-500', 'bg-green-50');
+      uploadArea.classList.remove('border-blue-400');
+    });
+
+    uploadArea.addEventListener('dragleave', function(e) {
+      uploadArea.classList.remove('border-green-500', 'bg-green-50');
+      uploadArea.classList.add('border-blue-400');
+    });
+
+    uploadArea.addEventListener('drop', function(e) {
+      e.preventDefault();
+      uploadArea.classList.remove('border-green-500', 'bg-green-50');
+      uploadArea.classList.add('border-blue-400');
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        log(`拖放文件: ${file.name}`, 'success');
+        window.handleUpload(file);
+      }
+    });
+
+    log('事件监听器已绑定', 'success');
+    log('等待文件上传...', 'info');
+  </script>
+</body>
+</html>

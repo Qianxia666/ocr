@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>{{ title }}</title>
+  <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .success-rate {
+      color: #10b981;
+    }
+
+    .partial-success-rate {
+      color: #f59e0b;
+    }
+
+    .error-rate {
+      color: #ef4444;
+    }
+
+    /* 确保 Markdown 预览区域的文字可见 */
+    #markdown-preview {
+      color: #1f2937 !important;
+    }
+
+    #markdown-preview * {
+      color: inherit;
+    }
+
+    /* 确保按钮始终可见 */
+    #copy-btn {
+      z-index: 9999 !important;
+      position: fixed !important;
+      bottom: 2rem !important;
+      right: 2rem !important;
+      display: flex !important;
+      visibility: visible !important;
+    }
+
+    #copy-btn:hover span {
+      opacity: 1 !important;
+    }
+
+    #copy-btn:hover {
+      background: linear-gradient(to right, #0284c7, #1d4ed8) !important;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25) !important;
+    }
+
+    /* 菜单样式 */
+    #menu-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 0.5rem;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #e0f2fe;
+      border-radius: 0.75rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      z-index: 50;
+    }
+
+    #menu-dropdown.show {
+      display: block;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      color: #0c4a6e;
+      transition: all 0.2s;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .menu-item:hover {
+      background: #f0f9ff;
+    }
+
+    .menu-item:active {
+      background: #e0f2fe;
+    }
+
+    .menu-item svg {
+      margin-right: 0.75rem;
+      width: 1.25rem;
+      height: 1.25rem;
+      flex-shrink: 0;
+    }
+
+    /* 移动端优化 */
+    @media (max-width: 768px) {
+      /* 隐藏复制按钮的悬停提示 */
+      #copy-btn span {
+        display: none !important;
+      }
+
+      /* 移动端复制按钮调整 */
+      #copy-btn {
+        width: 3rem !important;
+        height: 3rem !important;
+        bottom: 1rem !important;
+        right: 1rem !important;
+      }
+
+      #copy-btn svg {
+        width: 1.25rem !important;
+        height: 1.25rem !important;
+      }
+
+      /* 任务卡片优化 */
+      .task-item {
+        padding: 0.75rem !important;
+      }
+
+      /* 增大点击区域 */
+      button, .task-item {
+        min-height: 44px;
+      }
+
+      /* 优化滚动区域 */
+      #task-list, #markdown-preview, #raw-text {
+        -webkit-overflow-scrolling: touch;
+      }
+
+      /* 输入框优化 */
+      #raw-text {
+        font-size: 16px !important; /* 防止iOS自动缩放 */
+      }
+
+      /* 移动端高度优化 */
+      body {
+        height: 100vh;
+        height: 100dvh; /* 动态视口高度 */
+      }
+
+      /* 移动端布局优化 - 确保任务列表可滚动 */
+      .flex-1.p-2 {
+        overflow-y: auto !important;
+      }
+
+      /* 上传框移动端高度限制 */
+      #upload-box {
+        min-height: 130px !important;
+        max-height: 150px !important;
+      }
+
+      /* 任务列表移动端高度限制 */
+      .md\:w-\[25\%\] > div {
+        min-height: 180px !important;
+        max-height: 220px !important;
+      }
+
+      /* 输出区域移动端优化 */
+      .md\:w-\[55\%\] {
+        flex: 1 !important;
+        min-height: 0 !important;
+      }
+    }
+
+    /* 平板优化 */
+    @media (min-width: 769px) and (max-width: 1024px) {
+      #copy-btn {
+        bottom: 1.5rem !important;
+        right: 1.5rem !important;
+      }
+    }
+  </style>
+  <!-- 引入 KaTeX 样式 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.css">
+</head>
+<body class="h-screen bg-gradient-to-br from-blue-50 via-white to-sky-50 flex flex-col overflow-hidden">
+  <!-- 顶栏 -->
+  <header class="bg-white border-b border-sky-200 shadow-sm flex-shrink-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between relative">
+      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-sky-700">{{ title }}</h1>
+      <!-- 菜单按钮 -->
+      <button id="menu-btn" class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-sky-50 active:bg-sky-100 rounded-lg transition-all duration-200 flex-shrink-0">
+        <svg class="w-6 h-6 sm:w-6 sm:h-6 text-sky-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <!-- 下拉菜单 -->
+      <div id="menu-dropdown">
+        <a href="https://github.com/Qianxia666/ocr" target="_blank" class="menu-item">
+          <svg fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+          </svg>
+          项目地址
+        </a>
+        <a href="https://github.com/gua12345/web_oai_img2text" target="_blank" class="menu-item">
+          <svg fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+          </svg>
+          原作者地址
+        </a>
+        <a href="#" class="menu-item" id="about-menu">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          关于
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容区 -->
+  <div class="flex-1 p-2 sm:p-4 md:p-6 overflow-hidden flex items-center justify-center">
+    <div class="w-full max-w-5xl h-full flex flex-col md:flex-row gap-3 md:gap-4">
+    <!-- 上传图片/文件框 -->
+    <div class="md:w-[20%] relative group flex-shrink-0">
+      <div class="h-full min-h-[140px] md:min-h-0 border-3 border-dashed border-sky-300 hover:border-sky-500 active:border-sky-600 rounded-xl bg-white shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer overflow-hidden" id="upload-box">
+        <div class="h-full flex flex-col items-center justify-center p-3 md:p-4 text-center" id="upload-prompt">
+          <svg class="w-12 h-12 md:w-14 md:h-14 mb-2 md:mb-3 text-sky-400 group-hover:text-sky-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+          </svg>
+          <div class="text-sm md:text-base font-medium text-sky-700 mb-1.5">点击或拖拽上传</div>
+          <div class="text-xs md:text-sm text-sky-600">支持图片和PDF</div>
+          <div class="mt-2 text-xs text-sky-500 bg-sky-50 px-2.5 py-1 rounded-full">
+            ≤50MB
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 任务列表 -->
+    <div class="md:w-[25%] relative flex flex-col flex-shrink-0">
+      <div class="h-full min-h-[200px] md:min-h-0 border border-sky-200 rounded-xl bg-white shadow-md overflow-hidden flex flex-col">
+        <div class="bg-gradient-to-r from-sky-50 to-blue-50 px-3 py-2 border-b border-sky-200 flex-shrink-0">
+          <h3 class="font-bold text-sky-800 text-sm flex items-center justify-between">
+            <span class="flex items-center">
+              <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
+                <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"></path>
+              </svg>
+              任务列表
+            </span>
+            <button id="refresh-tasks-btn" class="text-sky-600 hover:text-sky-800 active:text-sky-900 transition-colors p-1 -m-1" title="刷新列表">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+              </svg>
+            </button>
+          </h3>
+        </div>
+        <div id="task-list" class="flex-1 overflow-y-auto p-2 space-y-2">
+          <div class="text-center text-sky-600 text-sm py-8">暂无任务</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 输出框 -->
+    <div class="md:w-[55%] relative flex flex-col gap-2 flex-shrink-0 overflow-hidden">
+      <!-- 统计信息 -->
+      <div id="result-stats" class="flex-shrink-0 bg-gradient-to-r from-sky-50 to-blue-50 border border-sky-200 rounded-xl p-3 shadow-md" style="display: none;">
+        <h4 class="font-bold text-sky-800 text-sm mb-2 flex items-center">
+          <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
+            <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"></path>
+          </svg>
+          处理结果统计
+        </h4>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          <div class="flex justify-between">
+            <span class="text-sky-700">总页数：</span>
+            <span class="font-bold text-sky-900" id="total-pages">-</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sky-700">成功页数：</span>
+            <span class="font-bold text-sky-900" id="success-pages">-</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sky-700">失败页数：</span>
+            <span class="font-bold text-sky-900" id="failed-pages">-</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sky-700">成功率：</span>
+            <span class="font-bold" id="success-rate">-</span>
+          </div>
+          <div class="flex justify-between col-span-2">
+            <span class="text-sky-700">文件大小：</span>
+            <span class="font-bold text-sky-900" id="file-size">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 错误信息 -->
+      <div id="error-message" class="flex-shrink-0 bg-red-50 border border-red-300 rounded-xl p-3 shadow-md" style="display: none;">
+        <h4 class="font-bold text-red-700 text-sm mb-1 flex items-center">
+          <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+          </svg>
+          处理错误
+        </h4>
+        <div id="error-content" class="text-red-600 text-sm"></div>
+      </div>
+
+      <!-- Markdown预览 -->
+      <div class="flex-[3] min-h-0 border border-sky-200 rounded-xl p-3 bg-white shadow-md overflow-y-auto" id="markdown-preview"></div>
+
+      <!-- 原始文本 -->
+      <textarea id="raw-text" placeholder="原始文本 (Markdown 格式)" class="flex-[2] min-h-0 w-full p-3 bg-sky-50 border border-sky-200 rounded-xl text-gray-800 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent shadow-inner"></textarea>
+
+      <!-- 复制按钮 - 右下角悬浮，常驻显示 -->
+      <button id="copy-btn" class="fixed bottom-4 right-4 w-14 h-14 rounded-full shadow-2xl transition-all duration-300 transform hover:scale-110 active:scale-95 flex items-center justify-center group" style="z-index: 9999; background: linear-gradient(to right, #0ea5e9, #2563eb); color: white; display: flex !important; visibility: visible !important;" title="一键复制">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color: white; stroke: white;">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+        </svg>
+        <span class="absolute whitespace-nowrap pointer-events-none" style="right: 60px; top: 50%; transform: translateY(-50%); background: #1f2937; color: white; font-size: 0.875rem; padding: 0.5rem 1rem; border-radius: 0.5rem; opacity: 0; transition: opacity 0.3s; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">复制</span>
+      </button>
+    </div>
+  </div>
+  </div>
+
+  <script>
+    const uploadBox = document.getElementById("upload-box");
+    const uploadPrompt = document.getElementById("upload-prompt");
+    const rawText = document.getElementById("raw-text");
+    const markdownPreview = document.getElementById("markdown-preview");
+    const copyBtn = document.getElementById("copy-btn");
+    const resultStats = document.getElementById("result-stats");
+    const errorMessage = document.getElementById("error-message");
+    const errorContent = document.getElementById("error-content");
+    const taskList = document.getElementById("task-list");
+    const refreshTasksBtn = document.getElementById("refresh-tasks-btn");
+
+    let currentTaskId = null;
+
+    // 上传文件事件
+    uploadBox.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      uploadBox.classList.add("border-sky-600");
+      uploadBox.classList.remove("border-sky-300");
+    });
+
+    uploadBox.addEventListener("dragleave", () => {
+      uploadBox.classList.remove("border-sky-600");
+      uploadBox.classList.add("border-sky-300");
+    });
+
+    uploadBox.addEventListener("drop", (e) => {
+      e.preventDefault();
+      uploadBox.classList.remove("border-sky-600");
+      uploadBox.classList.add("border-sky-300");
+      const file = e.dataTransfer.files[0];
+      resetFields(); // 清空字段
+      handleFile(file);
+    });
+
+    uploadBox.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*,.pdf";
+      input.onchange = (e) => {
+        const file = e.target.files[0];
+        resetFields(); // 清空字段
+        handleFile(file);
+      };
+      input.click();
+    });
+
+    function handleFile(file) {
+      // 检查文件大小限制
+      const maxSizeMB = 50;
+      const fileSizeMB = file.size / (1024 * 1024);
+      if (fileSizeMB > maxSizeMB) {
+        showError(`文件大小 (${fileSizeMB.toFixed(2)} MB) 超过限制 (${maxSizeMB} MB)`);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const backurl = "{{ backurl }}";
+      const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
+      const isPdf = file.type.includes("pdf");
+      const url = isPdf ? `${baseUrl}/process/pdf` : `${baseUrl}/process/image`;
+
+      console.log("上传URL:", url);
+
+      fetch(url, { method: "POST", body: formData })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: 处理请求失败`);
+          }
+          return response.json();
+        })
+        .then((data) => {
+          handleProcessResult(data, isPdf);
+          // 延迟刷新任务列表，确保任务已经创建
+          setTimeout(() => {
+            loadTasks();
+          }, 500);
+        })
+        .catch((err) => {
+          console.error("处理失败:", err);
+          showError(`文件处理失败: ${err.message}`);
+        });
+    }
+
+    function handleProcessResult(data, isPdf) {
+      // 处理新的异步任务响应格式
+      if (data.status === "accepted" && data.task_id) {
+        currentTaskId = data.task_id;
+        markdownPreview.innerHTML = '<div class="text-center text-sky-600 py-8">任务已提交，正在处理中...</div>';
+        rawText.value = '';
+
+        // 轮询任务结果
+        pollTaskResult(data.task_id);
+        return;
+      }
+
+      // 处理旧的同步响应格式
+      if (data.status === "success" || data.status === "partial_success") {
+        rawText.value = data.content;
+        updateMarkdownPreview();
+
+        // 显示PDF处理统计信息
+        if (isPdf && data.report) {
+          showResultStats(data.report, data.status);
+        }
+
+        // 如果是部分成功，显示警告
+        if (data.status === "partial_success") {
+          showWarning("处理完成，但部分页面识别失败。请检查结果完整性。");
+        }
+      } else {
+        showError(data.message || "处理失败，请重试");
+      }
+    }
+
+    // 轮询任务结果
+    async function pollTaskResult(taskId, maxAttempts = 60) {
+      let attempts = 0;
+      const pollInterval = 2000; // 2秒
+
+      const poll = async () => {
+        if (attempts >= maxAttempts) {
+          showError("任务处理超时，请刷新页面查看结果");
+          loadTasks(); // 最后刷新一次任务列表
+          return;
+        }
+
+        attempts++;
+
+        try {
+          // 每次轮询都刷新任务列表，以显示最新状态
+          loadTasks();
+
+          await loadTaskResult(taskId);
+
+          // 检查任务状态
+          const backurl = "{{ backurl }}";
+          const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
+          const response = await fetch(`${baseUrl}/api/tasks/${taskId}`);
+          const data = await response.json();
+
+          if (data.status === "success" && data.data) {
+            const taskStatus = data.data.status;
+
+            if (taskStatus === 'completed' || taskStatus === 'failed') {
+              // 任务完成，停止轮询
+              loadTasks(); // 最后刷新一次任务列表
+              return;
+            }
+          }
+
+          // 继续轮询
+          setTimeout(poll, pollInterval);
+        } catch (err) {
+          console.error("轮询任务结果失败:", err);
+          setTimeout(poll, pollInterval);
+        }
+      };
+
+      // 立即刷新任务列表显示新任务
+      loadTasks();
+      poll();
+    }
+
+    function showResultStats(report, status) {
+      document.getElementById("total-pages").textContent = report.total_pages;
+      document.getElementById("success-pages").textContent = report.successful_pages;
+      document.getElementById("failed-pages").textContent = report.failed_pages;
+      document.getElementById("file-size").textContent = report.file_size_mb + " MB";
+      
+      const successRateElement = document.getElementById("success-rate");
+      successRateElement.textContent = report.success_rate;
+      
+      // 根据成功率设置颜色
+      const rate = parseFloat(report.success_rate);
+      if (rate >= 90) {
+        successRateElement.className = "stat-value success-rate";
+      } else if (rate >= 50) {
+        successRateElement.className = "stat-value partial-success-rate";
+      } else {
+        successRateElement.className = "stat-value error-rate";
+      }
+      
+      resultStats.style.display = "block";
+    }
+
+    function showError(message) {
+      errorContent.textContent = message;
+      errorMessage.style.display = "block";
+      resultStats.style.display = "none";
+    }
+
+    function showWarning(message) {
+      // 警告样式
+      errorContent.innerHTML = `<strong>注意：</strong> ${message}`;
+      errorMessage.style.display = "block";
+      errorMessage.className = "flex-shrink-0 bg-yellow-50 border border-yellow-300 rounded-xl p-3 shadow-md";
+      errorContent.className = "text-yellow-700 text-sm";
+    }
+
+    function resetFields() {
+      rawText.value = "";
+      markdownPreview.innerHTML = "";
+      resultStats.style.display = "none";
+      errorMessage.style.display = "none";
+      // 重置错误消息样式
+      errorMessage.className = "flex-shrink-0 bg-red-50 border border-red-300 rounded-xl p-3 shadow-md";
+      errorContent.className = "text-red-600 text-sm";
+      // 隐藏复制按钮
+      toggleCopyButton();
+    }
+
+    // 切换复制按钮显示/隐藏
+    function toggleCopyButton() {
+      if (rawText.value.trim() !== "") {
+        copyBtn.classList.remove("hidden");
+        copyBtn.classList.add("flex");
+      } else {
+        copyBtn.classList.add("hidden");
+        copyBtn.classList.remove("flex");
+      }
+    }
+
+    // 实时更新 Markdown 预览
+    rawText.addEventListener("input", () => {
+      updateMarkdownPreview();
+      toggleCopyButton();
+    });
+
+    function updateMarkdownPreview() {
+      const markdown = rawText.value;
+      const html = marked.parse(markdown);
+
+      // 渲染 Markdown 内容
+      markdownPreview.innerHTML = html;
+
+      // 使用 KaTeX 渲染公式
+      renderMathInElement(markdownPreview, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "$", right: "$", display: false }
+        ]
+      });
+    }
+
+    // 复制按钮功能
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(rawText.value).then(() => {
+        alert("复制成功！");
+      });
+    });
+
+    // 加载任务列表
+    async function loadTasks() {
+      const backurl = "{{ backurl }}";
+      const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
+      const apiUrl = `${baseUrl}/api/tasks?limit=50`;
+
+      console.log("正在加载任务列表:", apiUrl);
+
+      try {
+        const response = await fetch(apiUrl);
+        const data = await response.json();
+
+        console.log("任务列表响应:", data);
+
+        if (data.status === "success" && data.data) {
+          console.log("任务数量:", data.data.length);
+          displayTasks(data.data);
+        } else {
+          console.error("任务列表加载失败:", data);
+          taskList.innerHTML = '<div class="text-center text-red-600 text-sm py-8">加载任务失败</div>';
+        }
+      } catch (err) {
+        console.error("加载任务列表失败:", err);
+        taskList.innerHTML = '<div class="text-center text-red-600 text-sm py-8">加载任务失败</div>';
+      }
+    }
+
+    // 显示任务列表
+    function displayTasks(tasks) {
+      console.log("显示任务列表，任务数:", tasks ? tasks.length : 0);
+
+      if (!tasks || tasks.length === 0) {
+        taskList.innerHTML = '<div class="text-center text-sky-600 text-sm py-8">暂无任务</div>';
+        return;
+      }
+
+      console.log("任务详情:", tasks);
+
+      taskList.innerHTML = tasks.map(task => {
+        const statusColors = {
+          'pending': 'bg-yellow-100 text-yellow-700',
+          'processing': 'bg-blue-100 text-blue-700',
+          'completed': 'bg-green-100 text-green-700',
+          'failed': 'bg-red-100 text-red-700'
+        };
+        const statusText = {
+          'pending': '等待中',
+          'processing': '处理中',
+          'completed': '已完成',
+          'failed': '失败'
+        };
+
+        const statusClass = statusColors[task.status] || 'bg-gray-100 text-gray-700';
+        const statusLabel = statusText[task.status] || task.status;
+        const progress = task.progress || 0;
+        const isActive = currentTaskId === task.id;
+
+        return `
+          <div class="task-item border border-sky-200 rounded-lg p-2.5 hover:shadow-md active:shadow-lg transition-all cursor-pointer ${isActive ? 'bg-sky-50 border-sky-400' : 'bg-white'}"
+               data-task-id="${task.id}"
+               onclick="loadTaskResult('${task.id}')">
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex-1 truncate font-medium text-sky-800 text-sm">${task.file_name || '未命名文件'}</div>
+              <span class="px-2 py-0.5 rounded-full text-xs font-semibold ${statusClass} ml-2 flex-shrink-0">${statusLabel}</span>
+            </div>
+            <div class="flex items-center justify-between text-xs text-sky-600">
+              <span>${task.task_type === 'pdf_ocr' ? 'PDF' : '图片'} · ${task.total_pages || 1}页</span>
+              <span class="text-xs">${new Date(task.created_at).toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 加载任务结果
+    async function loadTaskResult(taskId) {
+      const backurl = "{{ backurl }}";
+      const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
+      currentTaskId = taskId;
+
+      // 更新UI显示选中状态
+      document.querySelectorAll('.task-item').forEach(item => {
+        if (item.dataset.taskId === taskId) {
+          item.classList.add('bg-sky-50', 'border-sky-400');
+        } else {
+          item.classList.remove('bg-sky-50', 'border-sky-400');
+        }
+      });
+
+      try {
+        // 显示加载状态
+        markdownPreview.innerHTML = '<div class="text-center text-sky-600 py-8">正在加载...</div>';
+        rawText.value = '';
+
+        const response = await fetch(`${baseUrl}/api/tasks/${taskId}/result`);
+        const data = await response.json();
+
+        if (data.status === "success" && data.data) {
+          const result = data.data;
+
+          // 显示任务内容
+          if (result.status === 'completed') {
+            rawText.value = result.content || '';
+            updateMarkdownPreview();
+
+            // 显示统计信息
+            if (result.result_summary) {
+              showResultStats(result.result_summary, result.status);
+            }
+
+            errorMessage.style.display = "none";
+          } else if (result.status === 'processing') {
+            markdownPreview.innerHTML = '<div class="text-center text-sky-600 py-8">任务处理中，请稍候...</div>';
+            rawText.value = '';
+          } else if (result.status === 'failed') {
+            showError(result.error_message || '任务处理失败');
+            markdownPreview.innerHTML = '';
+            rawText.value = '';
+          } else {
+            markdownPreview.innerHTML = '<div class="text-center text-sky-600 py-8">任务等待处理中...</div>';
+            rawText.value = '';
+          }
+        } else {
+          showError('获取任务结果失败');
+        }
+      } catch (err) {
+        console.error("加载任务结果失败:", err);
+        showError(`加载任务结果失败: ${err.message}`);
+      }
+    }
+
+    // 刷新任务列表按钮事件
+    refreshTasksBtn.addEventListener("click", () => {
+      loadTasks();
+    });
+
+    // 菜单控制
+    const menuBtn = document.getElementById("menu-btn");
+    const menuDropdown = document.getElementById("menu-dropdown");
+    const aboutMenu = document.getElementById("about-menu");
+
+    // 切换菜单显示/隐藏
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuDropdown.classList.toggle("show");
+    });
+
+    // 点击页面其他地方关闭菜单
+    document.addEventListener("click", () => {
+      menuDropdown.classList.remove("show");
+    });
+
+    // 防止菜单内点击关闭菜单
+    menuDropdown.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+
+    // 关于菜单点击事件
+    aboutMenu.addEventListener("click", (e) => {
+      e.preventDefault();
+      alert("OCR 识别工具\n\n支持图片和PDF文件的文字识别\n基于AI技术实现高精度识别");
+      menuDropdown.classList.remove("show");
+    });
+
+    // 页面加载时自动加载任务列表
+    window.addEventListener('load', () => {
+      loadTasks();
+      // 每30秒自动刷新任务列表
+      setInterval(loadTasks, 30000);
+    });
+  </script>
+  <!-- 引入 marked.js 和 KaTeX -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex/dist/contrib/auto-render.min.js"></script>
+</body>
+</html>
