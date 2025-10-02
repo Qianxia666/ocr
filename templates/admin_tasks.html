@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      corePlugins: {
+        outline: false,
+      }
+    }
+  </script>
+  <style>
+    .status-pending { color: #f59e0b; }
+    .status-processing { color: #3b82f6; }
+    .status-completed { color: #10b981; }
+    .status-failed { color: #ef4444; }
+
+    /* 移除所有按钮的聚焦外框 */
+    * {
+      outline: none !important;
+    }
+
+    *:focus,
+    *:focus-visible,
+    *:active {
+      outline: none !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+
+    button,
+    button:focus,
+    button:focus-visible,
+    button:active {
+      outline: none !important;
+      box-shadow: none !important;
+    }
+
+    /* 移除按钮周围的所有边框和线条 */
+    td button {
+      outline: none !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+
+    td {
+      border: none !important;
+    }
+
+    /* 菜单样式 */
+    #menu-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 0.5rem;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #e0f2fe;
+      border-radius: 0.75rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      z-index: 50;
+    }
+
+    #menu-dropdown.show {
+      display: block;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      color: #0c4a6e;
+      transition: all 0.2s;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .menu-item:hover {
+      background: #f0f9ff;
+    }
+
+    .menu-item:active {
+      background: #e0f2fe;
+    }
+
+    .menu-item svg {
+      margin-right: 0.75rem;
+      width: 1.25rem;
+      height: 1.25rem;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body class="h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
+  <!-- 顶栏 -->
+  <header class="bg-white border-b border-blue-200 shadow-sm flex-shrink-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between relative">
+      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-blue-700">任务管理</h1>
+
+      <!-- 菜单按钮 -->
+      <button id="menu-btn" class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-blue-50 active:bg-blue-100 rounded-lg transition-all duration-200 flex-shrink-0">
+        <svg class="w-6 h-6 sm:w-6 sm:h-6 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+
+      <!-- 下拉菜单 -->
+      <div id="menu-dropdown">
+        <div class="menu-item" onclick="window.location.href='{{ password_prefix }}/admin'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          返回管理后台
+        </div>
+        <div class="menu-item" onclick="window.location.href='{{ password_prefix }}/'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+          </svg>
+          返回主页
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容 -->
+  <div class="flex-1 overflow-auto p-4">
+    <div class="max-w-7xl mx-auto">
+      <!-- 统计卡片 -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white rounded-lg shadow-md p-4">
+          <div class="text-sm text-gray-600 mb-1">总任务数</div>
+          <div class="text-2xl font-bold text-blue-600" id="total-tasks">0</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-4">
+          <div class="text-sm text-gray-600 mb-1">已完成</div>
+          <div class="text-2xl font-bold text-green-600" id="completed-tasks">0</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-4">
+          <div class="text-sm text-gray-600 mb-1">处理中</div>
+          <div class="text-2xl font-bold text-blue-600" id="processing-tasks">0</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-4">
+          <div class="text-sm text-gray-600 mb-1">失败</div>
+          <div class="text-2xl font-bold text-red-600" id="failed-tasks">0</div>
+        </div>
+      </div>
+
+      <!-- 筛选器 -->
+      <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+        <div class="flex flex-wrap gap-4 items-end">
+          <div class="flex-1 min-w-[200px]">
+            <label class="block text-sm font-medium text-gray-700 mb-1">搜索</label>
+            <input type="text" id="search-input" placeholder="搜索文件名、用户名、UUID或内容..." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <label class="block text-sm font-medium text-gray-700 mb-1">用户筛选</label>
+            <select id="user-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">所有用户</option>
+            </select>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <label class="block text-sm font-medium text-gray-700 mb-1">状态筛选</label>
+            <select id="status-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">所有状态</option>
+              <option value="pending">等待中</option>
+              <option value="processing">处理中</option>
+              <option value="completed">已完成</option>
+              <option value="failed">失败</option>
+            </select>
+          </div>
+          <button onclick="loadTasks()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+            应用筛选
+          </button>
+        </div>
+      </div>
+
+      <!-- 任务列表 -->
+      <div class="bg-white rounded-lg shadow-md overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+              <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用户</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">任务ID</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">文件名</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">进度</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">创建时间</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+              </tr>
+            </thead>
+            <tbody id="tasks-table" class="bg-white divide-y divide-gray-200">
+              <tr>
+                <td colspan="8" class="px-6 py-4 text-center text-gray-500">加载中...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 内容查看模态框 -->
+  <div id="content-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+      <!-- 模态框头部 -->
+      <div class="flex items-center justify-between p-4 border-b border-gray-200">
+        <h2 class="text-xl font-bold text-gray-900" id="modal-title">OCR内容</h2>
+        <button onclick="closeContentModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+      </div>
+
+      <!-- 模态框内容 -->
+      <div class="flex-1 overflow-auto p-6">
+        <div id="modal-loading" class="text-center py-8">
+          <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <p class="mt-2 text-gray-600">加载中...</p>
+        </div>
+        <div id="modal-content" class="hidden">
+          <div class="mb-4 p-4 bg-gray-50 rounded-lg">
+            <div class="grid grid-cols-2 gap-4 text-sm">
+              <div><span class="font-medium">文件名:</span> <span id="content-filename"></span></div>
+              <div><span class="font-medium">总页数:</span> <span id="content-pages"></span></div>
+              <div><span class="font-medium">状态:</span> <span id="content-status"></span></div>
+              <div><span class="font-medium">创建时间:</span> <span id="content-created"></span></div>
+            </div>
+          </div>
+
+          <!-- 页面内容 -->
+          <div id="pages-container" class="space-y-4">
+          </div>
+        </div>
+        <div id="modal-error" class="hidden text-center py-8">
+          <p class="text-red-600">加载失败</p>
+        </div>
+      </div>
+
+      <!-- 模态框底部 -->
+      <div class="flex items-center justify-between p-4 border-t border-gray-200">
+        <button onclick="copyAllContent()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+          复制全部内容
+        </button>
+        <button onclick="closeContentModal()" class="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors">
+          关闭
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const passwordPrefix = "{{ password_prefix }}";
+
+    // 加载用户列表到筛选器
+    async function loadUsers() {
+      try {
+        const response = await fetch(`${passwordPrefix}/api/admin/users/list`);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.data) {
+          const userFilter = document.getElementById('user-filter');
+          data.data.forEach(user => {
+            const option = document.createElement('option');
+            option.value = user.id;
+            option.textContent = `${user.username} (${user.id.substring(0, 8)}...)`;
+            userFilter.appendChild(option);
+          });
+        }
+      } catch (err) {
+        console.error('加载用户列表失败:', err);
+      }
+    }
+
+    // 加载统计信息
+    async function loadStats(userId = null) {
+      try {
+        const url = userId
+          ? `${passwordPrefix}/api/admin/tasks/stats?user_id=${userId}`
+          : `${passwordPrefix}/api/admin/tasks/stats`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.data) {
+          const stats = data.data;
+          document.getElementById('total-tasks').textContent = stats.total_tasks || 0;
+          document.getElementById('completed-tasks').textContent = stats.completed_tasks || 0;
+          document.getElementById('processing-tasks').textContent = stats.processing_tasks || 0;
+          document.getElementById('failed-tasks').textContent = stats.failed_tasks || 0;
+        }
+      } catch (err) {
+        console.error('加载统计信息失败:', err);
+      }
+    }
+
+    // 防抖函数
+    function debounce(func, wait) {
+      let timeout;
+      return function executedFunction(...args) {
+        const later = () => {
+          clearTimeout(timeout);
+          func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+      };
+    }
+
+    // 加载任务列表
+    async function loadTasks() {
+      const userId = document.getElementById('user-filter').value;
+      const status = document.getElementById('status-filter').value;
+      const searchQuery = document.getElementById('search-input').value;
+
+      try {
+        let url = `${passwordPrefix}/api/admin/tasks/list?limit=200`;
+        if (userId) {
+          url += `&user_id=${userId}`;
+        }
+        if (searchQuery) {
+          url += `&search=${encodeURIComponent(searchQuery)}`;
+        }
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.data) {
+          displayTasks(data.data, status);
+          loadStats(userId); // 同时更新统计信息
+        } else {
+          document.getElementById('tasks-table').innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
+        }
+      } catch (err) {
+        console.error('加载任务列表失败:', err);
+        document.getElementById('tasks-table').innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
+      }
+    }
+
+    // 显示任务列表
+    function displayTasks(tasks, statusFilter = '') {
+      const tbody = document.getElementById('tasks-table');
+
+      // 按状态筛选
+      let filteredTasks = tasks;
+      if (statusFilter) {
+        filteredTasks = tasks.filter(task => task.status === statusFilter);
+      }
+
+      if (filteredTasks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="px-6 py-4 text-center text-gray-500">暂无任务</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filteredTasks.map(task => {
+        const statusText = {
+          'pending': '等待中',
+          'processing': '处理中',
+          'completed': '已完成',
+          'failed': '失败'
+        }[task.status] || task.status;
+
+        const taskType = task.task_type === 'pdf_ocr' ? 'PDF' : '图片';
+        const progress = task.progress ? (task.progress * 100).toFixed(1) + '%' : '0%';
+        const createdAt = new Date(task.created_at).toLocaleString('zh-CN');
+        const username = task.username || '未知用户';
+
+        const rowClick = task.status === 'completed' ? `onclick="viewContent('${task.id}')" style="cursor: pointer;"` : '';
+        const rowClass = task.status === 'completed' ? 'hover:bg-blue-50' : 'hover:bg-gray-50';
+
+        return `
+          <tr class="${rowClass}" ${rowClick}>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${username}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600" title="${task.id}">${task.id.substring(0, 8)}...</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${task.file_name || '-'}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${taskType}</td>
+            <td class="px-6 py-4 whitespace-nowrap">
+              <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full status-${task.status}">
+                ${statusText}
+              </span>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+              ${progress} (${task.processed_pages || 0}/${task.total_pages || 0})
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${createdAt}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${task.status === 'completed' ? '点击查看' : '-'}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // 存储当前查看的内容数据（用于复制）
+    let currentContentData = null;
+
+    // 查看OCR内容
+    async function viewContent(taskId) {
+      const modal = document.getElementById('content-modal');
+      const loading = document.getElementById('modal-loading');
+      const content = document.getElementById('modal-content');
+      const error = document.getElementById('modal-error');
+
+      // 显示模态框和加载状态
+      modal.classList.remove('hidden');
+      loading.classList.remove('hidden');
+      content.classList.add('hidden');
+      error.classList.add('hidden');
+
+      try {
+        const response = await fetch(`${passwordPrefix}/api/admin/tasks/${taskId}/content`);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.data) {
+          currentContentData = data.data;
+          displayContent(data.data);
+        } else {
+          throw new Error('获取内容失败');
+        }
+      } catch (err) {
+        console.error('获取内容失败:', err);
+        loading.classList.add('hidden');
+        error.classList.remove('hidden');
+      }
+    }
+
+    // 显示内容
+    function displayContent(data) {
+      document.getElementById('content-filename').textContent = data.file_name || '-';
+      document.getElementById('content-pages').textContent = `${data.processed_pages}/${data.total_pages}`;
+      document.getElementById('content-status').textContent = {
+        'pending': '等待中',
+        'processing': '处理中',
+        'completed': '已完成',
+        'failed': '失败'
+      }[data.status] || data.status;
+      document.getElementById('content-created').textContent = new Date(data.created_at).toLocaleString('zh-CN');
+
+      const pagesContainer = document.getElementById('pages-container');
+      pagesContainer.innerHTML = '';
+
+      if (data.pages && data.pages.length > 0) {
+        data.pages.forEach(page => {
+          const pageDiv = document.createElement('div');
+          pageDiv.className = 'border border-gray-200 rounded-lg p-4';
+
+          const pageStatus = page.status === 'completed' ? 'text-green-600' : 'text-red-600';
+          const pageContent = page.content || page.error_message || '无内容';
+
+          pageDiv.innerHTML = `
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-medium text-gray-900">第 ${page.page_number} 页</h3>
+              <span class="text-xs ${pageStatus}">${page.status}</span>
+            </div>
+            <div class="bg-gray-50 p-3 rounded text-sm whitespace-pre-wrap font-mono">${pageContent}</div>
+          `;
+
+          pagesContainer.appendChild(pageDiv);
+        });
+      } else {
+        pagesContainer.innerHTML = '<p class="text-gray-500 text-center py-4">无内容</p>';
+      }
+
+      document.getElementById('modal-loading').classList.add('hidden');
+      document.getElementById('modal-content').classList.remove('hidden');
+    }
+
+    // 关闭模态框
+    function closeContentModal() {
+      document.getElementById('content-modal').classList.add('hidden');
+      currentContentData = null;
+    }
+
+    // 复制全部内容
+    function copyAllContent() {
+      if (!currentContentData || !currentContentData.pages) {
+        alert('没有可复制的内容');
+        return;
+      }
+
+      let allText = `文件名: ${currentContentData.file_name}\n`;
+      allText += `总页数: ${currentContentData.total_pages}\n`;
+      allText += `创建时间: ${new Date(currentContentData.created_at).toLocaleString('zh-CN')}\n`;
+      allText += '\n' + '='.repeat(50) + '\n\n';
+
+      currentContentData.pages.forEach(page => {
+        allText += `第 ${page.page_number} 页:\n`;
+        allText += '-'.repeat(50) + '\n';
+        allText += (page.content || page.error_message || '无内容') + '\n\n';
+      });
+
+      navigator.clipboard.writeText(allText).then(() => {
+        alert('内容已复制到剪贴板');
+      }).catch(err => {
+        console.error('复制失败:', err);
+        alert('复制失败，请手动复制');
+      });
+    }
+
+    // 页面加载时初始化
+    window.addEventListener('load', () => {
+      loadUsers();
+      loadTasks();
+      loadStats();
+
+      // 搜索框输入时使用防抖
+      const searchInput = document.getElementById('search-input');
+      const debouncedLoadTasks = debounce(loadTasks, 500);
+      searchInput.addEventListener('input', debouncedLoadTasks);
+
+      // 每30秒自动刷新
+      setInterval(() => {
+        loadTasks();
+      }, 30000);
+    });
+
+    // 菜单控制
+    const menuBtn = document.getElementById('menu-btn');
+    const menuDropdown = document.getElementById('menu-dropdown');
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menuDropdown.classList.toggle('show');
+    });
+
+    // 点击页面其他地方关闭菜单
+    document.addEventListener('click', () => {
+      menuDropdown.classList.remove('show');
+    });
+
+    // 阻止菜单内点击事件冒泡
+    menuDropdown.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+  </script>
+</body>
+</html>

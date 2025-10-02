@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        html {
+            scroll-behavior: smooth;
+            scroll-snap-type: y mandatory;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+        }
+
+        .section {
+            min-height: 100vh;
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .blue-gradient-bg {
+            background: linear-gradient(to bottom right, #2563eb, #4f46e5);
+        }
+
+        .feature-card {
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .hero-animation {
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .typewriter-text {
+            display: inline;
+        }
+
+        .typewriter-cursor {
+            display: inline-block;
+            width: 3px;
+            height: 1em;
+            background-color: currentColor;
+            margin-left: 2px;
+            animation: blink 0.75s step-end infinite;
+        }
+
+        @keyframes blink {
+            50% {
+                opacity: 0;
+            }
+        }
+
+        @keyframes fadeIn {
+            to {
+                opacity: 1;
+            }
+        }
+
+        .ocr-blue {
+            color: #2563eb;
+        }
+
+        .nav-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.5);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .nav-dot.active {
+            background: white;
+            transform: scale(1.2);
+        }
+
+        @media (max-width: 768px) {
+            .section {
+                min-height: 100vh;
+                min-height: 100dvh; /* 动态视口高度 */
+                padding-top: 5rem;
+                padding-bottom: 3rem;
+            }
+
+            .feature-card {
+                padding: 1.5rem !important;
+            }
+
+            nav h1 {
+                font-size: 1rem !important;
+            }
+
+            /* 调整间距以适应移动端全屏 */
+            .text-center.mb-8 {
+                margin-bottom: 2rem !important;
+            }
+
+            .grid.gap-6 {
+                gap: 1rem !important;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .section {
+                padding-top: 4rem;
+                padding-bottom: 2rem;
+            }
+
+            .blue-gradient-bg.rounded-2xl {
+                padding: 2rem !important;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100">
+    <!-- 导航栏 -->
+    <nav class="bg-white/90 backdrop-blur-md shadow-sm fixed w-full top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-14 sm:h-16">
+                <div class="flex items-center space-x-2">
+                    <svg class="w-6 h-6 sm:w-8 sm:h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                    <h1 class="text-base sm:text-xl font-bold text-gray-800 truncate max-w-[150px] sm:max-w-none">{{ title }}</h1>
+                </div>
+                <div class="flex items-center space-x-2 sm:space-x-4">
+                    <a href="/login" class="text-sm sm:text-base text-gray-600 hover:text-blue-600 font-medium transition">登录</a>
+                    {% if registration_enabled %}
+                    <a href="/login" onclick="showRegisterTab(event)" class="bg-blue-600 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-base font-medium hover:bg-blue-700 transition">注册</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 导航指示器 -->
+    <div class="fixed right-8 top-1/2 transform -translate-y-1/2 z-40 hidden md:flex flex-col gap-3">
+        <div class="nav-dot active" onclick="scrollToSection(0)"></div>
+        <div class="nav-dot" onclick="scrollToSection(1)"></div>
+        <div class="nav-dot" onclick="scrollToSection(2)"></div>
+        <div class="nav-dot" onclick="scrollToSection(3)"></div>
+    </div>
+
+    <!-- Hero 区域 -->
+    <section class="section px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-blue-50 to-indigo-100 pt-20 sm:pt-24" id="section-0">
+        <div class="max-w-7xl mx-auto">
+            <div class="text-center hero-animation">
+                <h2 class="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-gray-900 mb-4 sm:mb-6 leading-tight px-2" style="min-height: 4.5rem;">
+                    <span id="typewriter-container" class="typewriter-text"></span><span class="typewriter-cursor"></span>
+                </h2>
+                <p class="text-base sm:text-lg md:text-xl text-gray-600 mb-8 sm:mb-10 max-w-3xl mx-auto px-4">
+                    基于 AI 技术的专业 OCR 解决方案
+                </p>
+                <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 px-4" style="opacity: 0; animation: fadeIn 0.5s ease-in 3s forwards;">
+                    <a href="/login" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition shadow-lg hover:shadow-xl">
+                        立即使用
+                    </a>
+                    {% if registration_enabled %}
+                    <a href="/login" onclick="showRegisterTab(event)" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-blue-600 bg-white rounded-lg hover:bg-gray-50 transition shadow-lg hover:shadow-xl border border-gray-200">
+                        免费注册
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 功能特性 -->
+    <section class="section px-4 sm:px-6 lg:px-8 bg-white" id="section-1">
+        <div class="max-w-7xl mx-auto">
+            <div class="text-center mb-8 sm:mb-12 lg:mb-16">
+                <h3 class="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900 mb-3 sm:mb-4">产品功能</h3>
+                <p class="text-base sm:text-lg text-gray-600 px-4">企业级 OCR 识别能力，满足多样化业务需求</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
+                <!-- 功能卡片 1 -->
+                <div class="feature-card bg-gradient-to-br from-blue-50 to-white rounded-2xl p-6 lg:p-8 shadow-lg border border-blue-100">
+                    <div class="w-14 h-14 bg-blue-100 rounded-lg flex items-center justify-center mb-6">
+                        <svg class="w-7 h-7 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-3">多格式图片识别</h4>
+                    <p class="text-gray-600 leading-relaxed">支持 PNG、JPG、JPEG、WEBP 等主流图片格式，单文件最大 {{ max_image_size_mb }}MB</p>
+                </div>
+
+                <!-- 功能卡片 2 -->
+                <div class="feature-card bg-gradient-to-br from-blue-50 to-white rounded-2xl p-6 lg:p-8 shadow-lg border border-blue-100">
+                    <div class="w-14 h-14 bg-blue-100 rounded-lg flex items-center justify-center mb-6">
+                        <svg class="w-7 h-7 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-3">PDF 批量处理</h4>
+                    <p class="text-gray-600 leading-relaxed">支持 {{ max_pdf_size_mb }}MB 以内、最多 {{ max_pdf_pages }} 页的 PDF 文档，自动分页识别导出 Markdown</p>
+                </div>
+
+                <!-- 功能卡片 3 -->
+                <div class="feature-card bg-gradient-to-br from-blue-50 to-white rounded-2xl p-6 lg:p-8 shadow-lg border border-blue-100">
+                    <div class="w-14 h-14 bg-blue-100 rounded-lg flex items-center justify-center mb-6">
+                        <svg class="w-7 h-7 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-3">智能高效</h4>
+                    <p class="text-gray-600 leading-relaxed">基于 {{ model }} 模型，支持并发处理和智能重试，确保识别准确性</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 使用流程 -->
+    <section class="section px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-blue-50 to-indigo-50" id="section-2">
+        <div class="max-w-7xl mx-auto">
+            <div class="text-center mb-8 sm:mb-12 lg:mb-16">
+                <h3 class="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900 mb-3 sm:mb-4">使用流程</h3>
+                <p class="text-base sm:text-lg text-gray-600 px-4">三步即可开始使用专业 OCR 识别服务</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 lg:gap-12">
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-lg">1</div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-2">注册账号</h4>
+                    <p class="text-gray-600">快速注册或使用激活码兑换使用次数</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-lg">2</div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-2">上传文件</h4>
+                    <p class="text-gray-600">选择图片或 PDF 文件进行上传</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-lg">3</div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-2">获取结果</h4>
+                    <p class="text-gray-600">实时查看识别进度，导出 Markdown 格式</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA 区域 -->
+    <section class="section px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-blue-100 to-indigo-100" id="section-3">
+        <div class="max-w-4xl mx-auto text-center">
+            <div class="blue-gradient-bg rounded-2xl p-6 sm:p-8 md:p-12 shadow-2xl">
+                <h3 class="text-2xl sm:text-3xl md:text-4xl font-bold text-white mb-4 sm:mb-6">开始使用</h3>
+                <p class="text-base sm:text-lg md:text-xl text-white/90 mb-6 sm:mb-8 px-2">立即体验专业的智能 OCR 识别服务</p>
+                <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4">
+                    <a href="/login" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-blue-600 bg-white rounded-lg hover:bg-gray-100 transition shadow-lg">
+                        登录账号
+                    </a>
+                    {% if registration_enabled %}
+                    <a href="/login" onclick="showRegisterTab(event)" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-white bg-white/20 border-2 border-white rounded-lg hover:bg-white/30 transition">
+                        免费注册
+                    </a>
+                    {% endif %}
+                </div>
+
+                <!-- 页脚信息 -->
+                <div class="mt-8 sm:mt-12 md:mt-16 pt-6 sm:pt-8 border-t border-white/20">
+                    <div class="flex flex-col md:flex-row justify-between items-center gap-3 sm:gap-4">
+                        <p class="text-white/80 text-xs sm:text-sm text-center md:text-left">&copy; 2024 {{ title }}. All rights reserved.</p>
+                        <a href="https://github.com/Qianxia666/ocr" target="_blank" class="inline-flex items-center gap-2 text-white hover:text-white/80 transition-colors">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                            </svg>
+                            <span class="text-xs sm:text-sm">GitHub</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        // 打字机效果
+        function typeWriter() {
+            const text = 'Optical Character Recognition';
+            const container = document.getElementById('typewriter-container');
+            let index = 0;
+
+            function type() {
+                if (index < text.length) {
+                    const char = text.charAt(index);
+                    // 将 OCR (Optical Character Recognition) 的首字母变蓝
+                    if (index === 0 || index === 8 || index === 18) {
+                        container.innerHTML += `<span class="ocr-blue">${char}</span>`;
+                    } else {
+                        container.innerHTML += char;
+                    }
+                    index++;
+                    setTimeout(type, 100);
+                } else {
+                    // 打字完成后移除光标
+                    document.querySelector('.typewriter-cursor').style.display = 'none';
+                }
+            }
+
+            type();
+        }
+
+        // 页面加载后启动打字机效果
+        window.addEventListener('load', typeWriter);
+
+        function showRegisterTab(event) {
+            event.preventDefault();
+            window.location.href = '/login#register';
+        }
+
+        // 导航点击滚动
+        function scrollToSection(index) {
+            const section = document.getElementById(`section-${index}`);
+            if (section) {
+                section.scrollIntoView({ behavior: 'smooth' });
+            }
+        }
+
+        // 监听滚动更新导航指示器
+        let isScrolling;
+        window.addEventListener('scroll', function() {
+            clearTimeout(isScrolling);
+            isScrolling = setTimeout(function() {
+                const sections = document.querySelectorAll('.section');
+                const navDots = document.querySelectorAll('.nav-dot');
+
+                let currentSection = 0;
+                sections.forEach((section, index) => {
+                    const rect = section.getBoundingClientRect();
+                    if (rect.top <= window.innerHeight / 2 && rect.bottom >= window.innerHeight / 2) {
+                        currentSection = index;
+                    }
+                });
+
+                navDots.forEach((dot, index) => {
+                    if (index === currentSection) {
+                        dot.classList.add('active');
+                    } else {
+                        dot.classList.remove('active');
+                    }
+                });
+            }, 100);
+        }, false);
+    </script>
+</body>
+</html>

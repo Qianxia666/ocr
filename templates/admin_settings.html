@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* 文字对比度增强 */
+    body .text-gray-800 {
+      color: #1e293b !important;
+    }
+    body .text-gray-700 {
+      color: #334155 !important;
+    }
+    body .text-gray-600 {
+      color: #475569 !important;
+    }
+    body .text-gray-500:not(#registration-status) {
+      color: #64748b !important;
+    }
+
+    /* 菜单样式 */
+    #menu-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 0.5rem;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #e0f2fe;
+      border-radius: 0.75rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      z-index: 50;
+    }
+
+    #menu-dropdown.show {
+      display: block;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      color: #0c4a6e;
+      transition: all 0.2s;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .menu-item:hover {
+      background: #f0f9ff;
+    }
+
+    .menu-item:active {
+      background: #e0f2fe;
+    }
+
+    .menu-item svg {
+      margin-right: 0.75rem;
+      width: 1.25rem;
+      height: 1.25rem;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body class="h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
+  <!-- 顶栏 -->
+  <header class="bg-white border-b border-blue-200 shadow-sm flex-shrink-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between relative">
+      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-blue-700">系统设置</h1>
+
+      <!-- 菜单按钮 -->
+      <button id="menu-btn" class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-blue-50 active:bg-blue-100 rounded-lg transition-all duration-200 flex-shrink-0">
+        <svg class="w-6 h-6 sm:w-6 sm:h-6 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+
+      <!-- 下拉菜单 -->
+      <div id="menu-dropdown">
+        <div class="menu-item" onclick="window.location.href='/admin'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          返回管理后台
+        </div>
+        <div class="menu-item" onclick="window.location.href='/'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+          </svg>
+          返回主页
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容 -->
+  <div class="flex-1 overflow-hidden p-4">
+    <div class="max-w-7xl mx-auto h-full flex flex-col">
+      <!-- 系统设置卡片 -->
+      <div class="bg-white rounded-xl shadow-md p-6">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6">功能开关</h2>
+
+        <div class="space-y-4">
+          <!-- 注册功能开关 -->
+          <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div>
+              <h3 class="text-lg font-semibold text-gray-800">注册功能</h3>
+              <p class="text-sm text-gray-600 mt-1">控制新用户是否可以注册账号</p>
+            </div>
+            <div class="flex items-center gap-3">
+              <button id="registration-toggle" onclick="toggleRegistration()" class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <span id="toggle-slider" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
+              </button>
+              <span id="registration-status" class="text-sm font-semibold text-gray-600 min-w-[4rem]">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const baseUrl = window.location.origin;
+    const passwordPrefix = "{{ password_prefix }}";
+
+    // 加载注册开关状态
+    async function loadRegistrationStatus() {
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/settings/registration`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          updateRegistrationToggle(data.registration_enabled);
+        }
+      } catch (err) {
+        console.error("加载注册状态失败:", err);
+      }
+    }
+
+    // 更新注册开关UI
+    function updateRegistrationToggle(enabled) {
+      const toggle = document.getElementById('registration-toggle');
+      const slider = document.getElementById('toggle-slider');
+      const status = document.getElementById('registration-status');
+
+      if (enabled) {
+        toggle.classList.add('bg-blue-500');
+        toggle.classList.remove('bg-gray-300');
+        slider.classList.add('translate-x-5');
+        slider.classList.remove('translate-x-1');
+        status.textContent = '已开放';
+        status.classList.add('text-blue-600');
+        status.classList.remove('text-gray-600');
+      } else {
+        toggle.classList.add('bg-gray-300');
+        toggle.classList.remove('bg-blue-500');
+        slider.classList.add('translate-x-1');
+        slider.classList.remove('translate-x-5');
+        status.textContent = '已禁止';
+        status.classList.add('text-gray-600');
+        status.classList.remove('text-blue-600');
+      }
+    }
+
+    // 切换注册开关
+    async function toggleRegistration() {
+      try {
+        // 获取当前状态
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/settings/registration`);
+        const data = await response.json();
+        const currentStatus = data.registration_enabled;
+
+        // 切换状态
+        const toggleResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/settings/registration`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            enabled: !currentStatus
+          })
+        });
+
+        const toggleData = await toggleResponse.json();
+
+        if (toggleData.status === "success") {
+          updateRegistrationToggle(toggleData.registration_enabled);
+          alert(toggleData.message);
+        } else {
+          alert("操作失败: " + (toggleData.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("切换注册状态失败:", err);
+        alert("操作失败,请重试");
+      }
+    }
+
+    // 菜单控制
+    const menuBtn = document.getElementById("menu-btn");
+    const menuDropdown = document.getElementById("menu-dropdown");
+
+    // 切换菜单显示/隐藏
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuDropdown.classList.toggle("show");
+    });
+
+    // 点击页面其他地方关闭菜单
+    document.addEventListener("click", () => {
+      menuDropdown.classList.remove("show");
+    });
+
+    // 防止菜单内点击关闭菜单
+    menuDropdown.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+
+    // 页面加载时
+    window.addEventListener('load', () => {
+      loadRegistrationStatus();
+    });
+  </script>
+</body>
+</html>

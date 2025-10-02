@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* 文字对比度增强 */
+    body .text-gray-800 {
+      color: #1e293b !important;
+    }
+    body .text-gray-700 {
+      color: #334155 !important;
+    }
+    body .text-gray-600 {
+      color: #475569 !important;
+    }
+    body .text-gray-500 {
+      color: #64748b !important;
+    }
+
+    /* 菜单样式 */
+    #menu-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 0.5rem;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #e0f2fe;
+      border-radius: 0.75rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      z-index: 50;
+    }
+
+    #menu-dropdown.show {
+      display: block;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      color: #0c4a6e;
+      transition: all 0.2s;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .menu-item:hover {
+      background: #f0f9ff;
+    }
+
+    .menu-item:active {
+      background: #e0f2fe;
+    }
+
+    .menu-item svg {
+      margin-right: 0.75rem;
+      width: 1.25rem;
+      height: 1.25rem;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body class="h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
+  <!-- 顶栏 -->
+  <header class="bg-white border-b border-blue-200 shadow-sm flex-shrink-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between relative">
+      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-blue-700">兑换码管理</h1>
+
+      <!-- 菜单按钮 -->
+      <button id="menu-btn" class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-blue-50 active:bg-blue-100 rounded-lg transition-all duration-200 flex-shrink-0">
+        <svg class="w-6 h-6 sm:w-6 sm:h-6 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+
+      <!-- 下拉菜单 -->
+      <div id="menu-dropdown">
+        <div class="menu-item" onclick="window.location.href='/admin'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          返回管理后台
+        </div>
+        <div class="menu-item" onclick="window.location.href='/'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+          </svg>
+          返回主页
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容 -->
+  <div class="flex-1 overflow-hidden p-4">
+    <div class="max-w-7xl mx-auto h-full flex flex-col">
+      <!-- 兑换码管理卡片 -->
+      <div class="bg-white rounded-xl shadow-md flex-1 overflow-hidden flex flex-col">
+        <div class="p-4 border-b border-gray-200 flex gap-2 flex-shrink-0">
+          <button onclick="showGenerateCodeForm()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+            + 生成兑换码
+          </button>
+          <button onclick="loadCodes()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+            刷新列表
+          </button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4">
+          <!-- 标签切换 -->
+          <div class="flex gap-2 mb-4 border-b border-gray-200">
+            <button id="tab-unused" onclick="switchTab('unused')" class="px-4 py-2 font-medium border-b-2 border-blue-500 text-blue-600">
+              未使用兑换码
+            </button>
+            <button id="tab-used" onclick="switchTab('used')" class="px-4 py-2 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+              已使用兑换码
+            </button>
+          </div>
+
+          <!-- 未使用兑换码列表 -->
+          <div id="unused-codes-list" class="space-y-2">
+            <p class="text-center py-8 text-gray-500">加载中...</p>
+          </div>
+
+          <!-- 已使用兑换码列表 -->
+          <div id="used-codes-list" class="space-y-2 hidden">
+            <p class="text-center py-8 text-gray-500">加载中...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 生成兑换码表单弹窗 -->
+  <div id="generate-code-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onclick="if(event.target === this) hideGenerateCodeForm()">
+    <div class="bg-white rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
+      <h3 class="text-xl font-bold text-gray-800 mb-4">生成兑换码</h3>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">页数</label>
+          <input type="number" id="code-pages" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" value="100" min="1">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">最大使用次数</label>
+          <input type="number" id="code-max-uses" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" value="1" min="1">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">有效期(天,留空为永久)</label>
+          <input type="number" id="code-expires-days" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="留空为永久">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">备注(可选)</label>
+          <input type="text" id="code-description" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="如:测试用兑换码">
+        </div>
+        <div class="flex gap-2 pt-2">
+          <button onclick="generateCode()" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+            生成
+          </button>
+          <button onclick="hideGenerateCodeForm()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const baseUrl = window.location.origin;
+    const password = "{{ password }}" || "";
+    const apiPrefix = password ? `/${password}` : "";
+    let currentTab = 'unused';
+
+    // 切换标签
+    function switchTab(tab) {
+      currentTab = tab;
+
+      const unusedTab = document.getElementById('tab-unused');
+      const usedTab = document.getElementById('tab-used');
+      const unusedList = document.getElementById('unused-codes-list');
+      const usedList = document.getElementById('used-codes-list');
+
+      if (tab === 'unused') {
+        unusedTab.className = 'px-4 py-2 font-medium border-b-2 border-blue-500 text-blue-600';
+        usedTab.className = 'px-4 py-2 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700';
+        unusedList.classList.remove('hidden');
+        usedList.classList.add('hidden');
+      } else {
+        unusedTab.className = 'px-4 py-2 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700';
+        usedTab.className = 'px-4 py-2 font-medium border-b-2 border-blue-500 text-blue-600';
+        unusedList.classList.add('hidden');
+        usedList.classList.remove('hidden');
+      }
+    }
+
+    // 加载兑换码列表
+    async function loadCodes() {
+      try {
+        // 加载所有兑换码
+        const codesResponse = await fetch(`${baseUrl}${apiPrefix}/api/admin/codes/list`);
+        const codesData = await codesResponse.json();
+
+        // 加载兑换记录
+        const historyResponse = await fetch(`${baseUrl}${apiPrefix}/api/admin/codes/history`);
+        const historyData = await historyResponse.json();
+
+        const unusedContainer = document.getElementById('unused-codes-list');
+        const usedContainer = document.getElementById('used-codes-list');
+
+        // 分离未使用和已使用的兑换码
+        if (codesData.status === "success" && codesData.data && codesData.data.length > 0) {
+          const unusedCodes = codesData.data.filter(code => code.used_count === 0);
+          const usedCodes = codesData.data.filter(code => code.used_count > 0);
+
+          // 创建兑换记录映射（按code分组）
+          const historyMap = {};
+          if (historyData.status === "success" && historyData.data) {
+            historyData.data.forEach(record => {
+              if (!historyMap[record.code]) {
+                historyMap[record.code] = [];
+              }
+              historyMap[record.code].push(record);
+            });
+          }
+
+          // 渲染未使用兑换码
+          if (unusedCodes.length > 0) {
+            unusedContainer.innerHTML = unusedCodes.map(code => `
+              <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <div class="flex justify-between items-start mb-2">
+                  <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-1">
+                      <code class="text-lg font-bold text-blue-600">${code.code}</code>
+                      <button onclick="copyCode('${code.code}')" class="text-gray-500 hover:text-blue-600">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                        </svg>
+                      </button>
+                    </div>
+                    <div class="text-sm text-gray-600 space-y-1">
+                      <p>页数: <span class="font-semibold text-gray-800">${code.pages}</span></p>
+                      <p>使用情况: <span class="font-semibold text-gray-800">${code.used_count}/${code.max_uses}</span></p>
+                      ${code.expires_at ? `<p>过期时间: <span class="font-semibold text-gray-800">${new Date(code.expires_at).toLocaleString('zh-CN')}</span></p>` : '<p>永久有效</p>'}
+                      ${code.description ? `<p>备注: ${code.description}</p>` : ''}
+                    </div>
+                  </div>
+                  <div class="flex gap-2">
+                    ${code.is_active ?
+                      `<button onclick="toggleCode('${code.code}', false)" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">禁用</button>` :
+                      `<button onclick="toggleCode('${code.code}', true)" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">启用</button>`
+                    }
+                  </div>
+                </div>
+              </div>
+            `).join('');
+          } else {
+            unusedContainer.innerHTML = '<p class="text-center py-8 text-gray-500">暂无未使用的兑换码</p>';
+          }
+
+          // 渲染已使用兑换码
+          if (usedCodes.length > 0) {
+            usedContainer.innerHTML = usedCodes.map(code => {
+              const records = historyMap[code.code] || [];
+              const recordsHtml = records.map(record => `
+                <div class="text-xs text-gray-600 bg-blue-50 p-2 rounded mt-1">
+                  用户: <span class="font-semibold">${record.username || '未知'}</span>
+                  (UUID: <code class="text-xs">${record.user_uuid || 'N/A'}</code>)
+                  | 兑换时间: ${new Date(record.redeemed_at).toLocaleString('zh-CN')}
+                </div>
+              `).join('');
+
+              return `
+                <div class="bg-green-50 rounded-lg p-4 border border-green-200">
+                  <div class="flex justify-between items-start mb-2">
+                    <div class="flex-1">
+                      <div class="flex items-center gap-2 mb-1">
+                        <code class="text-lg font-bold text-green-600">${code.code}</code>
+                        <span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">已使用</span>
+                        <button onclick="copyCode('${code.code}')" class="text-gray-500 hover:text-green-600">
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                          </svg>
+                        </button>
+                      </div>
+                      <div class="text-sm text-gray-600 space-y-1">
+                        <p>页数: <span class="font-semibold text-gray-800">${code.pages}</span></p>
+                        <p>使用情况: <span class="font-semibold text-gray-800">${code.used_count}/${code.max_uses}</span></p>
+                        ${code.expires_at ? `<p>过期时间: <span class="font-semibold text-gray-800">${new Date(code.expires_at).toLocaleString('zh-CN')}</span></p>` : '<p>永久有效</p>'}
+                        ${code.description ? `<p>备注: ${code.description}</p>` : ''}
+                      </div>
+                      ${recordsHtml ? `
+                        <div class="mt-2">
+                          <p class="text-sm font-semibold text-gray-700 mb-1">兑换记录:</p>
+                          ${recordsHtml}
+                        </div>
+                      ` : ''}
+                    </div>
+                    <div class="flex gap-2">
+                      ${code.is_active ?
+                        `<button onclick="toggleCode('${code.code}', false)" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">禁用</button>` :
+                        `<button onclick="toggleCode('${code.code}', true)" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">启用</button>`
+                      }
+                    </div>
+                  </div>
+                </div>
+              `;
+            }).join('');
+          } else {
+            usedContainer.innerHTML = '<p class="text-center py-8 text-gray-500">暂无已使用的兑换码</p>';
+          }
+        } else {
+          unusedContainer.innerHTML = '<p class="text-center py-8 text-gray-500">暂无兑换码</p>';
+          usedContainer.innerHTML = '<p class="text-center py-8 text-gray-500">暂无兑换码</p>';
+        }
+      } catch (err) {
+        console.error("加载兑换码失败:", err);
+        document.getElementById('unused-codes-list').innerHTML = '<p class="text-center py-8 text-red-500">加载失败</p>';
+        document.getElementById('used-codes-list').innerHTML = '<p class="text-center py-8 text-red-500">加载失败</p>';
+      }
+    }
+
+    // 显示生成兑换码表单
+    function showGenerateCodeForm() {
+      document.getElementById('generate-code-modal').classList.remove('hidden');
+    }
+
+    // 隐藏生成兑换码表单
+    function hideGenerateCodeForm() {
+      document.getElementById('generate-code-modal').classList.add('hidden');
+    }
+
+    // 生成兑换码
+    async function generateCode() {
+      const pages = parseInt(document.getElementById('code-pages').value);
+      const maxUses = parseInt(document.getElementById('code-max-uses').value);
+      const expiresDays = document.getElementById('code-expires-days').value;
+      const description = document.getElementById('code-description').value;
+
+      if (!pages || pages < 1) {
+        alert("请输入有效的页数");
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiPrefix}/api/admin/codes/generate`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            pages,
+            max_uses: maxUses,
+            expires_days: expiresDays ? parseInt(expiresDays) : null,
+            description: description || null
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(`兑换码生成成功!\n\n${data.code}\n\n页数: ${data.pages}\n使用次数: ${data.max_uses}`);
+          hideGenerateCodeForm();
+          loadCodes();
+        } else {
+          alert("生成失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("生成兑换码失败:", err);
+        alert("生成失败,请重试");
+      }
+    }
+
+    // 切换兑换码状态
+    async function toggleCode(code, activate) {
+      const action = activate ? 'activate' : 'deactivate';
+      try {
+        const response = await fetch(`${baseUrl}${apiPrefix}/api/admin/codes/${code}/${action}`, {
+          method: 'POST'
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          loadCodes();
+        } else {
+          alert("操作失败");
+        }
+      } catch (err) {
+        console.error("切换兑换码状态失败:", err);
+        alert("操作失败,请重试");
+      }
+    }
+
+    // 复制兑换码
+    function copyCode(code) {
+      navigator.clipboard.writeText(code).then(() => {
+        alert("已复制: " + code);
+      });
+    }
+
+    // 菜单控制
+    const menuBtn = document.getElementById("menu-btn");
+    const menuDropdown = document.getElementById("menu-dropdown");
+
+    // 切换菜单显示/隐藏
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuDropdown.classList.toggle("show");
+    });
+
+    // 点击页面其他地方关闭菜单
+    document.addEventListener("click", () => {
+      menuDropdown.classList.remove("show");
+    });
+
+    // 防止菜单内点击关闭菜单
+    menuDropdown.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+
+    // 页面加载时
+    window.addEventListener('load', () => {
+      loadCodes();
+    });
+  </script>
+</body>
+</html>

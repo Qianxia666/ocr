@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>登录测试</title>
+</head>
+<body>
+    <h1>登录测试</h1>
+    <form id="loginForm">
+        <input type="text" id="username" placeholder="用户名" value="testuser"><br><br>
+        <input type="password" id="password" placeholder="密码" value="test123"><br><br>
+        <button type="submit">登录</button>
+    </form>
+
+    <div id="result" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc;"></div>
+
+    <script>
+        const form = document.getElementById('loginForm');
+        const result = document.getElementById('result');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            result.innerHTML = '正在登录...';
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                result.innerHTML = `
+                    <h3>响应信息：</h3>
+                    <p>状态码: ${response.status}</p>
+                    <p>响应数据: ${JSON.stringify(data, null, 2)}</p>
+                    <p>是否成功: ${response.ok}</p>
+                `;
+
+                if (response.ok) {
+                    result.innerHTML += '<p style="color: green;">登录成功！3秒后跳转...</p>';
+                    setTimeout(() => {
+                        alert('即将跳转到首页');
+                        window.location.href = '/';
+                    }, 3000);
+                }
+            } catch (error) {
+                result.innerHTML = `<p style="color: red;">错误: ${error.message}</p>`;
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+</html>

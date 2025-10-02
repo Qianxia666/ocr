@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* 文字对比度增强 */
+    body .text-gray-800 {
+      color: #1e293b !important;
+    }
+    body .text-gray-700 {
+      color: #334155 !important;
+    }
+    body .text-gray-600 {
+      color: #475569 !important;
+    }
+    body .text-gray-500 {
+      color: #64748b !important;
+    }
+
+    /* 菜单样式 */
+    #menu-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 0.5rem;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #e0f2fe;
+      border-radius: 0.75rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      z-index: 50;
+    }
+
+    #menu-dropdown.show {
+      display: block;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      color: #0c4a6e;
+      transition: all 0.2s;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .menu-item:hover {
+      background: #f0f9ff;
+    }
+
+    .menu-item:active {
+      background: #e0f2fe;
+    }
+
+    .menu-item svg {
+      margin-right: 0.75rem;
+      width: 1.25rem;
+      height: 1.25rem;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body class="h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
+  <!-- 顶栏 -->
+  <header class="bg-white border-b border-blue-200 shadow-sm flex-shrink-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between relative">
+      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-blue-700">用户管理</h1>
+
+      <!-- 菜单按钮 -->
+      <button id="menu-btn" class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-blue-50 active:bg-blue-100 rounded-lg transition-all duration-200 flex-shrink-0">
+        <svg class="w-6 h-6 sm:w-6 sm:h-6 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+
+      <!-- 下拉菜单 -->
+      <div id="menu-dropdown">
+        <div class="menu-item" onclick="window.location.href='/admin'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          返回管理后台
+        </div>
+        <div class="menu-item" onclick="window.location.href='/'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+          </svg>
+          返回主页
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容 -->
+  <div class="flex-1 overflow-auto p-4">
+    <div class="max-w-7xl mx-auto">
+      <!-- 统计卡片 -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="rounded-xl p-4 shadow-lg" style="background: linear-gradient(to bottom right, #3b82f6, #2563eb);">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm opacity-90" style="color: white;">总用户数</p>
+              <p class="text-3xl font-bold mt-1" id="total-users" style="color: white;">-</p>
+            </div>
+            <svg class="w-12 h-12 opacity-50" fill="none" stroke="white" viewBox="0 0 24 24" style="color: white;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="rounded-xl p-4 shadow-lg" style="background: linear-gradient(to bottom right, #22c55e, #16a34a);">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm opacity-90" style="color: white;">总页数配额</p>
+              <p class="text-3xl font-bold mt-1" id="total-pages-granted" style="color: white;">-</p>
+            </div>
+            <svg class="w-12 h-12 opacity-50" fill="none" stroke="white" viewBox="0 0 24 24" style="color: white;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="rounded-xl p-4 shadow-lg" style="background: linear-gradient(to bottom right, #0ea5e9, #0284c7);">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm opacity-90" style="color: white;">已使用页数</p>
+              <p class="text-3xl font-bold mt-1" id="total-pages-used" style="color: white;">-</p>
+            </div>
+            <svg class="w-12 h-12 opacity-50" fill="none" stroke="white" viewBox="0 0 24 24" style="color: white;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- 标签页卡片 -->
+      <div class="bg-white rounded-xl shadow-md">
+        <!-- 标签头部 -->
+        <div class="border-b border-gray-200">
+          <div class="flex">
+            <button id="tab-users" onclick="switchTab('users')" class="px-6 py-3 font-medium border-b-2 border-blue-500 text-blue-600">
+              用户管理
+            </button>
+            <button id="tab-tokens" onclick="switchTab('tokens')" class="px-6 py-3 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+              注册令牌
+            </button>
+          </div>
+        </div>
+
+        <!-- 用户管理内容 -->
+        <div id="content-users">
+          <div class="p-4 border-b border-gray-200 flex gap-2">
+            <input
+              type="text"
+              id="search-input"
+              placeholder="搜索用户名..."
+              class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              oninput="filterUsers()"
+            >
+            <button onclick="loadUsers()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+              刷新列表
+            </button>
+          </div>
+          <div class="p-4">
+            <div id="users-list" class="space-y-2">
+              <p class="text-center py-8 text-gray-500">加载中...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 注册令牌内容 -->
+        <div id="content-tokens" class="hidden">
+          <div class="p-4 border-b border-gray-200 flex gap-2">
+            <button onclick="createToken()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+              创建注册令牌
+            </button>
+            <button onclick="loadTokens()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+              刷新列表
+            </button>
+          </div>
+          <div class="p-4">
+            <div id="tokens-list" class="space-y-2">
+              <p class="text-center py-8 text-gray-500">点击"刷新列表"加载令牌</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const baseUrl = window.location.origin;
+    const passwordPrefix = "{{ password_prefix }}";
+    let allUsers = []; // 存储所有用户数据
+
+    // 加载统计信息
+    async function loadStats() {
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/stats`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          const stats = data.data;
+          document.getElementById('total-users').textContent = stats.users.total.toLocaleString();
+          document.getElementById('total-pages-granted').textContent = stats.pages.total_granted.toLocaleString();
+          document.getElementById('total-pages-used').textContent = stats.pages.total_used.toLocaleString();
+        }
+      } catch (err) {
+        console.error("加载统计失败:", err);
+      }
+    }
+
+    // 渲染用户列表
+    function renderUsers(users) {
+      const container = document.getElementById('users-list');
+
+      if (users && users.length > 0) {
+        container.innerHTML = users.map(user => `
+          <div class="bg-gray-50 rounded-lg p-4 border border-gray-200 ${user.is_disabled ? 'opacity-60' : ''}" data-username="${user.username.toLowerCase()}">
+            <div class="flex justify-between items-start">
+              <div class="flex-1">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="font-bold text-gray-800">${user.username}</span>
+                  ${user.is_admin ? '<span class="bg-blue-500 text-white text-xs px-2 py-0.5 rounded">管理员</span>' : ''}
+                  ${user.is_disabled ? '<span class="bg-red-500 text-white text-xs px-2 py-0.5 rounded">已禁用</span>' : ''}
+                </div>
+                <div class="text-xs text-gray-500 mb-2 font-mono">UUID: ${user.id}</div>
+                <div class="text-sm text-gray-600 space-y-1">
+                  <p>配额: <span class="font-semibold text-gray-800">${user.remaining_pages.toLocaleString()}/${user.total_pages.toLocaleString()}</span> 页</p>
+                  <p>已使用: <span class="font-semibold text-gray-800">${user.used_pages.toLocaleString()}</span> 页</p>
+                  <p>注册时间: ${new Date(user.created_at).toLocaleString('zh-CN')}</p>
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <button onclick="adjustQuota('${user.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm">
+                  调整配额
+                </button>
+                ${user.is_disabled
+                  ? `<button onclick="toggleUserStatus('${user.id}', false)" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">启用</button>`
+                  : `<button onclick="toggleUserStatus('${user.id}', true)" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">禁用</button>`
+                }
+              </div>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        container.innerHTML = '<p class="text-center py-8 text-gray-500">暂无用户</p>';
+      }
+    }
+
+    // 加载用户列表
+    async function loadUsers() {
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/users/list`);
+        const data = await response.json();
+
+        if (data.status === "success" && data.data) {
+          allUsers = data.data;
+          renderUsers(allUsers);
+          // 清空搜索框
+          document.getElementById('search-input').value = '';
+        } else {
+          allUsers = [];
+          renderUsers([]);
+        }
+      } catch (err) {
+        console.error("加载用户失败:", err);
+        document.getElementById('users-list').innerHTML = '<p class="text-center py-8 text-red-500">加载失败</p>';
+      }
+    }
+
+    // 搜索过滤用户
+    function filterUsers() {
+      const searchTerm = document.getElementById('search-input').value.toLowerCase().trim();
+
+      if (!searchTerm) {
+        renderUsers(allUsers);
+        return;
+      }
+
+      const filteredUsers = allUsers.filter(user =>
+        user.username.toLowerCase().includes(searchTerm)
+      );
+
+      renderUsers(filteredUsers);
+    }
+
+    // 调整用户配额
+    async function adjustQuota(userId) {
+      const pages = prompt("输入新的总配额页数:");
+      if (!pages || isNaN(pages) || parseInt(pages) < 0) {
+        alert("请输入有效的页数");
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/users/${userId}/quota`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            action: 'set',
+            pages: parseInt(pages)
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          loadUsers();
+          loadStats();
+        } else {
+          alert("操作失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("调整配额失败:", err);
+        alert("操作失败,请重试");
+      }
+    }
+
+    // 切换用户状态（禁用/启用）
+    async function toggleUserStatus(userId, disable) {
+      const action = disable ? "禁用" : "启用";
+      if (!confirm(`确定要${action}该用户吗？`)) {
+        return;
+      }
+
+      try {
+        const endpoint = disable ? 'disable' : 'enable';
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/users/${userId}/${endpoint}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'}
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          loadUsers();
+        } else {
+          alert("操作失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error(`${action}用户失败:`, err);
+        alert("操作失败,请重试");
+      }
+    }
+
+    // ========== 标签切换 ==========
+    function switchTab(tab) {
+      const tabUsers = document.getElementById('tab-users');
+      const tabTokens = document.getElementById('tab-tokens');
+      const contentUsers = document.getElementById('content-users');
+      const contentTokens = document.getElementById('content-tokens');
+
+      if (tab === 'users') {
+        tabUsers.className = 'px-6 py-3 font-medium border-b-2 border-blue-500 text-blue-600';
+        tabTokens.className = 'px-6 py-3 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700';
+        contentUsers.className = '';
+        contentTokens.className = 'hidden';
+      } else {
+        tabUsers.className = 'px-6 py-3 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700';
+        tabTokens.className = 'px-6 py-3 font-medium border-b-2 border-blue-500 text-blue-600';
+        contentUsers.className = 'hidden';
+        contentTokens.className = '';
+      }
+    }
+
+    // ========== 注册令牌管理 ==========
+    async function loadTokens() {
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/list`);
+        const data = await response.json();
+
+        const container = document.getElementById('tokens-list');
+
+        if (data.status === "success" && data.data && data.data.length > 0) {
+          container.innerHTML = data.data.map(token => {
+            const registrationUrl = `${baseUrl}/register?token=${token.token}`;
+            const isExpired = token.expires_at && new Date(token.expires_at) < new Date();
+            const isExhausted = token.remaining_uses <= 0;
+
+            return `
+              <div class="bg-gray-50 rounded-lg p-4 border border-gray-200 ${!token.is_active || isExpired || isExhausted ? 'opacity-60' : ''}">
+                <div class="flex justify-between items-start mb-3">
+                  <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-2">
+                      <span class="text-xs font-mono bg-gray-200 px-2 py-1 rounded">${token.token.substring(0, 16)}...</span>
+                      ${!token.is_active ? '<span class="bg-red-500 text-white text-xs px-2 py-0.5 rounded">已禁用</span>' : ''}
+                      ${isExpired ? '<span class="bg-orange-500 text-white text-xs px-2 py-0.5 rounded">已过期</span>' : ''}
+                      ${isExhausted ? '<span class="bg-yellow-500 text-white text-xs px-2 py-0.5 rounded">已用完</span>' : ''}
+                    </div>
+                    <div class="text-sm text-gray-600 space-y-1">
+                      <p>使用次数: <span class="font-semibold text-gray-800">${token.used_count}/${token.max_uses}</span> (剩余: ${token.remaining_uses})</p>
+                      ${token.expires_at ? `<p>过期时间: ${new Date(token.expires_at).toLocaleString('zh-CN')}</p>` : '<p>永不过期</p>'}
+                      <p>创建时间: ${new Date(token.created_at).toLocaleString('zh-CN')}</p>
+                      ${token.description ? `<p>描述: ${token.description}</p>` : ''}
+                    </div>
+                  </div>
+                </div>
+                <div class="flex gap-2 flex-wrap">
+                  <button onclick="copyUrl('${registrationUrl}')" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">
+                    复制注册链接
+                  </button>
+                  <button onclick="toggleToken('${token.token}')" class="bg-${token.is_active ? 'orange' : 'blue'}-500 hover:bg-${token.is_active ? 'orange' : 'blue'}-600 text-white px-3 py-1 rounded text-sm">
+                    ${token.is_active ? '禁用' : '启用'}
+                  </button>
+                  <button onclick="deleteToken('${token.token}')" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">
+                    删除
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join('');
+        } else {
+          container.innerHTML = '<p class="text-center py-8 text-gray-500">暂无注册令牌</p>';
+        }
+      } catch (err) {
+        console.error("加载令牌失败:", err);
+        document.getElementById('tokens-list').innerHTML = '<p class="text-center py-8 text-red-500">加载失败</p>';
+      }
+    }
+
+    async function createToken() {
+      const maxUses = prompt("输入最大使用次数 (默认为1):");
+      if (maxUses === null) return;
+
+      const maxUsesNum = parseInt(maxUses) || 1;
+      if (maxUsesNum < 1) {
+        alert("最大使用次数必须大于0");
+        return;
+      }
+
+      const expiresDays = prompt("输入过期天数 (留空表示永不过期):");
+      const expiresDaysNum = expiresDays ? parseInt(expiresDays) : null;
+
+      const description = prompt("输入描述 (可选):");
+
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/create`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            max_uses: maxUsesNum,
+            expires_days: expiresDaysNum,
+            description: description || null
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(`注册令牌创建成功！\n\n注册链接:\n${data.registration_url}\n\n点击确定后自动复制链接到剪贴板`);
+          copyToClipboard(data.registration_url);
+          loadTokens();
+        } else {
+          alert("创建失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("创建令牌失败:", err);
+        alert("操作失败,请重试");
+      }
+    }
+
+    async function toggleToken(token) {
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/${token}/toggle`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'}
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          loadTokens();
+        } else {
+          alert("操作失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("切换令牌状态失败:", err);
+        alert("操作失败,请重试");
+      }
+    }
+
+    async function deleteToken(token) {
+      if (!confirm("确定要删除此令牌吗？此操作不可撤销！")) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/${token}`, {
+          method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          loadTokens();
+        } else {
+          alert("删除失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("删除令牌失败:", err);
+        alert("操作失败,请重试");
+      }
+    }
+
+    function copyUrl(url) {
+      copyToClipboard(url);
+      alert("注册链接已复制到剪贴板！");
+    }
+
+    function copyToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        // 降级方案
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+    }
+
+    // 菜单控制
+    const menuBtn = document.getElementById("menu-btn");
+    const menuDropdown = document.getElementById("menu-dropdown");
+
+    // 切换菜单显示/隐藏
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuDropdown.classList.toggle("show");
+    });
+
+    // 点击页面其他地方关闭菜单
+    document.addEventListener("click", () => {
+      menuDropdown.classList.remove("show");
+    });
+
+    // 防止菜单内点击关闭菜单
+    menuDropdown.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+
+    // 页面加载时
+    window.addEventListener('load', () => {
+      loadStats();
+      loadUsers();
+      // 定时刷新
+      setInterval(loadStats, 30000);
+    });
+  </script>
+</body>
+</html>

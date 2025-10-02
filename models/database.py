@@ -44,11 +44,88 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             # 启用外键约束
             await db.execute("PRAGMA foreign_keys = ON")
-            
+
+            # 创建用户表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    is_admin BOOLEAN DEFAULT 0,
+                    is_disabled BOOLEAN DEFAULT 0,
+                    total_pages INTEGER DEFAULT 0,
+                    used_pages INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_login TEXT,
+                    session_token TEXT
+                )
+            """)
+
+            # 创建兑换码表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS redemption_codes (
+                    code TEXT PRIMARY KEY,
+                    pages INTEGER NOT NULL,
+                    max_uses INTEGER DEFAULT 1,
+                    used_count INTEGER DEFAULT 0,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    is_active BOOLEAN DEFAULT 1,
+                    description TEXT,
+                    FOREIGN KEY (created_by) REFERENCES users (id)
+                )
+            """)
+
+            # 创建兑换记录表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS redemption_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    pages_granted INTEGER NOT NULL,
+                    redeemed_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id),
+                    FOREIGN KEY (code) REFERENCES redemption_codes (code)
+                )
+            """)
+
+            # 创建系统设置表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS system_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    description TEXT,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+            # 创建注册令牌表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS registration_tokens (
+                    token TEXT PRIMARY KEY,
+                    max_uses INTEGER NOT NULL,
+                    used_count INTEGER DEFAULT 0,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    is_active BOOLEAN DEFAULT 1,
+                    description TEXT,
+                    FOREIGN KEY (created_by) REFERENCES users (id)
+                )
+            """)
+
+            # 初始化系统设置（如果不存在）
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('registration_enabled', 'true', '是否允许新用户注册', ?)
+            """, (datetime.now(timezone.utc).isoformat(),))
+
             # 创建任务表
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY,
+                    user_id TEXT,  -- 所属用户ID
                     task_type TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     file_name TEXT,
@@ -69,7 +146,8 @@ class DatabaseManager:
                     page_strategy TEXT DEFAULT 'auto',  -- 分页策略: auto/fixed/adaptive
                     batch_size INTEGER DEFAULT 4,  -- 批处理大小
                     retry_count INTEGER DEFAULT 0,  -- 重试次数
-                    max_retries INTEGER DEFAULT 3  -- 最大重试次数
+                    max_retries INTEGER DEFAULT 3,  -- 最大重试次数
+                    FOREIGN KEY (user_id) REFERENCES users (id)
                 )
             """)
             
@@ -136,12 +214,48 @@ class DatabaseManager:
             """)
             
             # 创建索引以提高查询性能
+            # 用户表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_session_token ON users (session_token)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users (is_admin)")
+
+            # 兑换码表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_codes_is_active ON redemption_codes (is_active)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_codes_created_by ON redemption_codes (created_by)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_codes_expires_at ON redemption_codes (expires_at)")
+
+            # 兑换记录表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_history_user_id ON redemption_history (user_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_history_code ON redemption_history (code)")
+
+            # 注册令牌表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_tokens_is_active ON registration_tokens (is_active)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_tokens_created_by ON registration_tokens (created_by)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_tokens_expires_at ON registration_tokens (expires_at)")
+
+            # 检查并迁移旧数据：如果tasks表存在但没有user_id列，则添加
+            try:
+                # 检查user_id列是否存在
+                async with db.execute("PRAGMA table_info(tasks)") as cursor:
+                    columns = await cursor.fetchall()
+                    column_names = [col[1] for col in columns]
+
+                    if 'user_id' not in column_names and len(column_names) > 0:
+                        # 旧表存在但没有user_id列，需要迁移
+                        logger.warning("检测到旧的tasks表结构，正在添加user_id列...")
+                        await db.execute("ALTER TABLE tasks ADD COLUMN user_id TEXT")
+                        logger.info("tasks表迁移完成，已添加user_id列")
+            except Exception as e:
+                logger.error(f"tasks表迁移检查失败: {e}")
+
+            # 任务表索引（在迁移后创建）
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks (user_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_progress ON tasks (progress)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_page_results_task_id ON page_results (task_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_page_results_status ON page_results (status)")
-            
+
             # 检查 batch_id 列是否存在，如果存在则创建索引
             try:
                 await db.execute("CREATE INDEX IF NOT EXISTS idx_page_results_batch ON page_results (batch_id)")
@@ -150,12 +264,12 @@ class DatabaseManager:
                     logger.warning("batch_id 列不存在，跳过创建索引")
                 else:
                     raise
-                    
+
             await db.execute("CREATE INDEX IF NOT EXISTS idx_task_progress_task_id ON task_progress (task_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_task_progress_timestamp ON task_progress (timestamp)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_page_batches_task_id ON page_batches (task_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_page_batches_status ON page_batches (status)")
-            
+
             await db.commit()
             logger.info("数据库表结构初始化完成")
     
@@ -176,23 +290,25 @@ class TaskModel:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
     
-    async def create_task(self, 
+    async def create_task(self,
                          task_id: str,
                          task_type: TaskType,
                          file_name: str,
                          file_size: int,
                          total_pages: int = 1,
+                         user_id: Optional[str] = None,
                          metadata: Optional[Dict[str, Any]] = None) -> bool:
         """创建新任务"""
         try:
             async with self.db_manager.get_connection() as db:
                 await db.execute("""
                     INSERT INTO tasks (
-                        id, task_type, status, file_name, file_size, 
+                        id, user_id, task_type, status, file_name, file_size,
                         total_pages, created_at, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     task_id,
+                    user_id,
                     task_type.value,
                     TaskStatus.PENDING.value,
                     file_name,
@@ -202,7 +318,7 @@ class TaskModel:
                     json.dumps(metadata) if metadata else None
                 ))
                 await db.commit()
-                logger.info(f"任务 {task_id} 创建成功")
+                logger.info(f"任务 {task_id} 创建成功 (用户: {user_id})")
                 return True
         except Exception as e:
             logger.error(f"创建任务失败 {task_id}: {e}")
@@ -327,15 +443,29 @@ class TaskModel:
             logger.error(f"获取任务列表失败 {status.value}: {e}")
             return []
     
-    async def get_recent_tasks(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """获取最近的任务列表"""
+    async def get_recent_tasks(self, limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取最近的任务列表，可选按用户筛选"""
         try:
             async with self.db_manager.get_connection() as db:
                 db.row_factory = aiosqlite.Row
-                async with db.execute("""
-                    SELECT * FROM tasks
-                    ORDER BY created_at DESC LIMIT ?
-                """, (limit,)) as cursor:
+
+                if user_id:
+                    # 按用户筛选
+                    query = """
+                        SELECT * FROM tasks
+                        WHERE user_id = ?
+                        ORDER BY created_at DESC LIMIT ?
+                    """
+                    params = (user_id, limit)
+                else:
+                    # 返回所有任务
+                    query = """
+                        SELECT * FROM tasks
+                        ORDER BY created_at DESC LIMIT ?
+                    """
+                    params = (limit,)
+
+                async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
                     tasks = []
                     for row in rows:
@@ -349,6 +479,129 @@ class TaskModel:
         except Exception as e:
             logger.error(f"获取最近任务列表失败: {e}")
             return []
+
+    async def get_all_tasks_with_users(self, limit: int = 200, user_id_filter: Optional[str] = None, search_query: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取所有任务列表（包含用户信息），供管理员使用"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+
+                # 构建基础查询
+                query_parts = []
+                params = []
+
+                # 用户筛选条件
+                if user_id_filter:
+                    query_parts.append("t.user_id = ?")
+                    params.append(user_id_filter)
+
+                # 搜索条件 - 搜索文件名、用户名、任务UUID
+                if search_query:
+                    search_pattern = f"%{search_query}%"
+                    query_parts.append("(t.file_name LIKE ? OR u.username LIKE ? OR t.id LIKE ? OR t.user_id LIKE ?)")
+                    params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+
+                # 构建WHERE子句
+                where_clause = ""
+                if query_parts:
+                    where_clause = "WHERE " + " AND ".join(query_parts)
+
+                # 如果有搜索关键词，还需要搜索文件内容
+                if search_query:
+                    # 先查询匹配内容的任务ID
+                    content_query = """
+                        SELECT DISTINCT task_id FROM page_results
+                        WHERE content LIKE ?
+                    """
+                    content_params = [f"%{search_query}%"]
+
+                    async with db.execute(content_query, content_params) as cursor:
+                        content_rows = await cursor.fetchall()
+                        content_task_ids = [row[0] for row in content_rows]
+
+                    # 合并基础查询和内容查询
+                    if content_task_ids:
+                        placeholders = ','.join('?' * len(content_task_ids))
+                        if query_parts:
+                            # 已有其他筛选条件，添加OR条件
+                            where_clause += f" OR t.id IN ({placeholders})"
+                            params.extend(content_task_ids)
+                        else:
+                            # 没有其他筛选条件，只有内容搜索
+                            where_clause = f"WHERE t.id IN ({placeholders})"
+                            params = content_task_ids
+
+                # 完整查询
+                query = f"""
+                    SELECT
+                        t.id, t.user_id, t.task_type, t.status, t.file_name, t.file_size,
+                        t.total_pages, t.processed_pages, t.failed_pages, t.progress,
+                        t.created_at, t.started_at, t.completed_at, t.error_message,
+                        u.username, u.id as user_uuid
+                    FROM tasks t
+                    LEFT JOIN users u ON t.user_id = u.id
+                    {where_clause}
+                    ORDER BY t.created_at DESC LIMIT ?
+                """
+                params.append(limit)
+
+                async with db.execute(query, params) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"获取任务列表（含用户信息）失败: {e}")
+            return []
+
+    async def get_task_stats_by_user(self, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """获取任务统计信息，可选按用户筛选"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                if user_id:
+                    # 特定用户的统计
+                    query = """
+                        SELECT
+                            COUNT(*) as total_tasks,
+                            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_tasks,
+                            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_tasks,
+                            SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing_tasks,
+                            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_tasks,
+                            SUM(total_pages) as total_pages,
+                            SUM(processed_pages) as processed_pages
+                        FROM tasks
+                        WHERE user_id = ?
+                    """
+                    params = (user_id,)
+                else:
+                    # 全局统计
+                    query = """
+                        SELECT
+                            COUNT(*) as total_tasks,
+                            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_tasks,
+                            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_tasks,
+                            SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing_tasks,
+                            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_tasks,
+                            SUM(total_pages) as total_pages,
+                            SUM(processed_pages) as processed_pages
+                        FROM tasks
+                    """
+                    params = ()
+
+                async with db.execute(query, params) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        return {
+                            'total_tasks': row[0] or 0,
+                            'completed_tasks': row[1] or 0,
+                            'failed_tasks': row[2] or 0,
+                            'processing_tasks': row[3] or 0,
+                            'pending_tasks': row[4] or 0,
+                            'total_pages': row[5] or 0,
+                            'processed_pages': row[6] or 0
+                        }
+                    return {}
+        except Exception as e:
+            logger.error(f"获取任务统计失败: {e}")
+            return {}
 
 class PageResultModel:
     """页面结果模型，提供页面处理结果相关的数据库操作"""

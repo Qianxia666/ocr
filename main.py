@@ -3,12 +3,12 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 import fitz  # PyMuPDF
 import logging
-from fastapi.responses import JSONResponse
 from io import BytesIO
 from PIL import Image
 import aiohttp
 import asyncio
-from fastapi import FastAPI, Request, UploadFile, Query, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, UploadFile, Query, HTTPException, WebSocket, WebSocketDisconnect, Response
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, RedirectResponse
 from typing import Optional
 from contextlib import asynccontextmanager
 import os
@@ -16,7 +16,6 @@ import json
 from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, Response, JSONResponse
 
 # 配置日志记录 - 支持UTF-8编码
 import sys
@@ -74,9 +73,20 @@ async def lifespan(app: FastAPI):
     # 启动时执行
     try:
         # 初始化数据库
-        from models.database import init_database
+        from models.database import init_database, db_manager
         await init_database()
         logger.info("数据库初始化完成")
+
+        # 初始化用户模型和认证管理器
+        from models.user import UserModel, RedemptionCodeModel, RegistrationTokenModel
+        from core.auth import init_auth_manager
+
+        global user_model, redemption_code_model, registration_token_model, auth_manager_instance
+        user_model = UserModel(db_manager)
+        redemption_code_model = RedemptionCodeModel(db_manager)
+        registration_token_model = RegistrationTokenModel(db_manager)
+        auth_manager_instance = await init_auth_manager(user_model, db_manager)
+        logger.info("用户系统初始化完成")
 
         # 初始化WebSocket管理器
         await init_websocket_manager()
@@ -216,12 +226,17 @@ from core.task_manager import init_task_manager, shutdown_task_manager
 # 任务管理器将在初始化后设置为全局变量
 task_manager = None
 
+# 用户系统全局变量
+user_model = None
+redemption_code_model = None
+auth_manager_instance = None
+
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 环境变量配置
 FAVICON_URL = os.getenv("FAVICON_URL", "/static/favicon.ico")
-TITLE = os.getenv("TITLE", "呱呱的oai图转文")
+TITLE = os.getenv("TITLE", "智能图文识别服务")
 BACK_URL = os.getenv("BACK_URL", "")
 
 # 配置 Jinja2 模板目录
@@ -439,7 +454,7 @@ async def process_pages_batch(session: aiohttp.ClientSession, pages_data: list, 
     return processed_results
 
 @app.post(f"/{PASSWORD}/process/image" if PASSWORD else "/process/image")
-async def process_image_endpoint(file: UploadFile):
+async def process_image_endpoint(file: UploadFile, request: Request, response: Response):
     """同步图片处理端点（保持兼容性）- 立即返回任务ID"""
     import tempfile
 
@@ -448,6 +463,14 @@ async def process_image_endpoint(file: UploadFile):
 
     if not file:
         raise HTTPException(status_code=400, detail="未收到文件")
+
+    # 获取当前用户
+    user = await auth_manager_instance.get_current_user(request)
+
+    # 检查用户配额(图片算1页)
+    has_quota, quota_message = await auth_manager_instance.check_quota(user['id'], 1)
+    if not has_quota:
+        raise HTTPException(status_code=403, detail=f"配额不足: {quota_message}")
 
     tmp_file_path = None
     try:
@@ -472,9 +495,13 @@ async def process_image_endpoint(file: UploadFile):
             metadata={
                 "source": "sync_endpoint",
                 "sync_mode": True,
-                "file_size_mb": file_size_mb
+                "file_size_mb": file_size_mb,
+                "user_id": user['id']  # 添加用户ID用于配额扣除
             }
         )
+
+        # 扣除用户配额(图片算1页)
+        await auth_manager_instance.deduct_quota(user['id'], 1)
 
         # 立即返回任务ID，避免长时间等待
         return JSONResponse({
@@ -507,7 +534,7 @@ async def process_image_endpoint(file: UploadFile):
 
 
 @app.post(f"/{PASSWORD}/process/pdf" if PASSWORD else "/process/pdf")
-async def process_pdf_endpoint(file: UploadFile):
+async def process_pdf_endpoint(file: UploadFile, request: Request, response: Response):
     """同步PDF处理端点（保持兼容性）- 立即返回任务ID"""
     import tempfile
 
@@ -516,6 +543,9 @@ async def process_pdf_endpoint(file: UploadFile):
 
     if not file:
         raise HTTPException(status_code=400, detail="未收到文件")
+
+    # 获取当前用户
+    user = await auth_manager_instance.get_current_user(request)
 
     tmp_file_path = None
     try:
@@ -543,6 +573,13 @@ async def process_pdf_endpoint(file: UploadFile):
                 os.unlink(tmp_file_path)
             raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
 
+        # 检查用户配额
+        has_quota, quota_message = await auth_manager_instance.check_quota(user['id'], page_count)
+        if not has_quota:
+            if tmp_file_path and os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+            raise HTTPException(status_code=403, detail=f"配额不足: {quota_message}")
+
         # 提交异步任务(传递临时文件路径而非数据)
         task_id = await task_manager.submit_pdf_task_from_file(
             file_path=tmp_file_path,
@@ -551,9 +588,13 @@ async def process_pdf_endpoint(file: UploadFile):
                 "source": "sync_endpoint",
                 "sync_mode": True,
                 "file_size_mb": file_size_mb,
-                "total_pages": page_count
+                "total_pages": page_count,
+                "user_id": user['id']  # 添加用户ID用于配额扣除
             }
         )
+
+        # 扣除用户配额
+        await auth_manager_instance.deduct_quota(user['id'], page_count)
 
         # 估算处理时间
         estimated_time = page_count * 3  # 每页约3秒
@@ -591,19 +632,43 @@ async def process_pdf_endpoint(file: UploadFile):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def root_page(request: Request):
-    """根路径 - 如果设置了密码则显示密码页面，否则显示主页"""
-    if PASSWORD:
-        # 检查是否有有效的密码cookie或session
-        # 显示密码输入页面
+async def root_page(request: Request, response: Response):
+    """根路径 - 检查登录状态"""
+    # 检查用户是否已登录
+    user = await auth_manager_instance.get_current_user(request)
+
+    if not user:
+        # 未登录，显示开屏页面
+        # 获取注册开关状态
+        from models.database import db_manager
+        try:
+            async with db_manager.get_connection() as db:
+                async with db.execute(
+                    "SELECT value FROM system_settings WHERE key = 'registration_enabled'"
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    registration_enabled = row[0] == 'true' if row else True
+        except Exception as e:
+            logger.error(f"获取注册状态失败: {e}")
+            registration_enabled = False
+
         return templates.TemplateResponse(
-            "password.html",
+            "landing.html",
             {
                 "request": request,
                 "favicon_url": FAVICON_URL,
-                "title": TITLE
+                "title": TITLE,
+                "registration_enabled": registration_enabled,
+                "model": MODEL,
+                "max_image_size_mb": MAX_IMAGE_SIZE_MB,
+                "max_pdf_size_mb": MAX_PDF_SIZE_MB,
+                "max_pdf_pages": MAX_PDF_PAGES
             }
         )
+
+    if PASSWORD:
+        # 已登录但设置了密码，重定向到密码保护的主页
+        return RedirectResponse(url=f"/{PASSWORD}", status_code=302)
     else:
         # 没有设置密码，直接显示主页
         return templates.TemplateResponse(
@@ -617,8 +682,15 @@ async def root_page(request: Request):
         )
 
 @app.get(f"/{PASSWORD}" if PASSWORD else "/main", response_class=HTMLResponse)
-async def access_with_password(request: Request):
+async def access_with_password(request: Request, response: Response):
     """受密码保护的主页"""
+    # 检查用户是否已登录
+    user = await auth_manager_instance.get_current_user(request)
+
+    if not user:
+        # 未登录，重定向到登录页面
+        return RedirectResponse(url="/login", status_code=302)
+
     return templates.TemplateResponse(
         "web.html",
         {
@@ -628,6 +700,162 @@ async def access_with_password(request: Request):
             "backurl": BACK_URL
         }
     )
+
+# 管理员页面路由 - 支持两种路径
+@app.get("/admin", response_class=HTMLResponse)
+@app.get(f"/{PASSWORD}/admin" if PASSWORD else "/admin-disabled", response_class=HTMLResponse)
+async def admin_page(request: Request, response: Response):
+    """管理员后台导航页面"""
+    try:
+        # 检查用户是否已登录
+        user = await auth_manager_instance.get_current_user(request)
+
+        if not user:
+            # 未登录，重定向到登录页面
+            return RedirectResponse(url="/login", status_code=302)
+
+        # 检查是否是管理员
+        if not user.get('is_admin'):
+            return HTMLResponse(
+                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
+                status_code=403
+            )
+
+        return templates.TemplateResponse(
+            "admin.html",
+            {
+                "request": request,
+                "favicon_url": FAVICON_URL,
+                "title": f"{TITLE} - 管理后台",
+                "backurl": BACK_URL
+            }
+        )
+    except HTTPException as e:
+        if e.status_code == 403:
+            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
+        elif e.status_code == 401:
+            return RedirectResponse(url="/login", status_code=302)
+        raise
+
+# 兑换码管理页面路由
+@app.get("/admin/codes", response_class=HTMLResponse)
+@app.get(f"/{PASSWORD}/admin/codes" if PASSWORD else "/admin/codes-disabled", response_class=HTMLResponse)
+async def admin_codes_page(request: Request, response: Response):
+    """兑换码管理页面"""
+    try:
+        user = await auth_manager_instance.get_current_user(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=302)
+        if not user.get('is_admin'):
+            return HTMLResponse(
+                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
+                status_code=403
+            )
+        return templates.TemplateResponse(
+            "admin_codes.html",
+            {
+                "request": request,
+                "favicon_url": FAVICON_URL,
+                "title": f"{TITLE} - 兑换码管理",
+                "password": PASSWORD
+            }
+        )
+    except HTTPException as e:
+        if e.status_code == 403:
+            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
+        elif e.status_code == 401:
+            return RedirectResponse(url="/login", status_code=302)
+        raise
+
+# 用户管理页面路由
+@app.get("/admin/users", response_class=HTMLResponse)
+@app.get(f"/{PASSWORD}/admin/users" if PASSWORD else "/admin/users-disabled", response_class=HTMLResponse)
+async def admin_users_page(request: Request, response: Response):
+    """用户管理页面"""
+    try:
+        user = await auth_manager_instance.get_current_user(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=302)
+        if not user.get('is_admin'):
+            return HTMLResponse(
+                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
+                status_code=403
+            )
+        return templates.TemplateResponse(
+            "admin_users.html",
+            {
+                "request": request,
+                "favicon_url": FAVICON_URL,
+                "title": f"{TITLE} - 用户管理",
+                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
+            }
+        )
+    except HTTPException as e:
+        if e.status_code == 403:
+            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
+        elif e.status_code == 401:
+            return RedirectResponse(url="/login", status_code=302)
+        raise
+
+# 任务管理页面路由
+@app.get("/admin/tasks", response_class=HTMLResponse)
+@app.get(f"/{PASSWORD}/admin/tasks" if PASSWORD else "/admin/tasks-disabled", response_class=HTMLResponse)
+async def admin_tasks_page(request: Request, response: Response):
+    """任务管理页面"""
+    try:
+        user = await auth_manager_instance.get_current_user(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=302)
+        if not user.get('is_admin'):
+            return HTMLResponse(
+                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
+                status_code=403
+            )
+        return templates.TemplateResponse(
+            "admin_tasks.html",
+            {
+                "request": request,
+                "favicon_url": FAVICON_URL,
+                "title": f"{TITLE} - 任务管理",
+                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
+            }
+        )
+    except HTTPException as e:
+        if e.status_code == 403:
+            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
+        elif e.status_code == 401:
+            return RedirectResponse(url="/login", status_code=302)
+        raise
+
+# 系统设置页面路由
+@app.get("/admin/settings", response_class=HTMLResponse)
+@app.get(f"/{PASSWORD}/admin/settings" if PASSWORD else "/admin/settings-disabled", response_class=HTMLResponse)
+async def admin_settings_page(request: Request, response: Response):
+    """系统设置页面"""
+    try:
+        user = await auth_manager_instance.get_current_user(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=302)
+        if not user.get('is_admin'):
+            return HTMLResponse(
+                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
+                status_code=403
+            )
+        return templates.TemplateResponse(
+            "admin_settings.html",
+            {
+                "request": request,
+                "favicon_url": FAVICON_URL,
+                "title": f"{TITLE} - 系统设置",
+                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
+            }
+        )
+    except HTTPException as e:
+        if e.status_code == 403:
+            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
+        elif e.status_code == 401:
+            return RedirectResponse(url="/login", status_code=302)
+        raise
 
 # WebSocket路由
 @app.websocket(f"/{PASSWORD}/ws" if PASSWORD else "/ws")
@@ -781,25 +1009,32 @@ async def get_task_result_api(task_id: str):
 
 @app.get(f"/{PASSWORD}/api/tasks" if PASSWORD else "/api/tasks")
 async def get_tasks_list_api(
+    request: Request,
     status: Optional[str] = Query(None, description="任务状态筛选"),
     limit: int = Query(100, description="返回数量限制"),
     offset: int = Query(0, description="偏移量")
 ):
-    """获取任务列表API"""
+    """获取任务列表API（用户只能看到自己的任务）"""
     # 从全局模块导入任务管理器，确保获取到最新的实例
     from core.task_manager import task_manager as global_task_manager
-    
+    from models.database import task_model
+
     if not global_task_manager:
         raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
+
     try:
-        # 使用任务管理器的get_tasks_list方法获取任务列表
-        tasks = await global_task_manager.get_tasks_list(status, limit)
-        
+        # 获取当前登录用户
+        user = await auth_manager_instance.require_user(request)
+
+        # 只返回当前用户的任务
+        tasks = await task_model.get_recent_tasks(limit=limit, user_id=user['id'])
+
         return JSONResponse({
             "status": "success",
             "data": tasks
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取任务列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -824,6 +1059,838 @@ async def get_system_stats_api():
         
     except Exception as e:
         logger.error(f"获取系统统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== 认证 API 端点 ====================
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """登录页面"""
+    # 获取注册开关状态
+    from models.database import db_manager
+    try:
+        async with db_manager.get_connection() as db:
+            async with db.execute(
+                "SELECT value FROM system_settings WHERE key = 'registration_enabled'"
+            ) as cursor:
+                row = await cursor.fetchone()
+                registration_enabled = row[0] == 'true' if row else True
+    except Exception as e:
+        logger.error(f"获取注册状态失败: {e}")
+        registration_enabled = False
+
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "favicon_url": FAVICON_URL,
+        "title": TITLE,
+        "registration_enabled": registration_enabled
+    })
+
+@app.get("/test-login", response_class=HTMLResponse)
+async def test_login_page(request: Request):
+    """测试登录页面"""
+    return templates.TemplateResponse("test_login.html", {
+        "request": request
+    })
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request, token: str = ""):
+    """注册页面"""
+    return templates.TemplateResponse("register.html", {
+        "request": request,
+        "token": token,
+        "favicon_url": FAVICON_URL,
+        "title": TITLE
+    })
+
+@app.post("/api/auth/register")
+async def register_api(user_data: dict):
+    """用户注册（支持开放注册和令牌注册）"""
+    try:
+        username = user_data.get('username', '').strip()
+        password = user_data.get('password', '')
+        token = user_data.get('token', '').strip()
+
+        # 验证必填字段
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+
+        if len(username) < 3 or len(username) > 20:
+            raise HTTPException(status_code=400, detail="用户名长度应为3-20个字符")
+
+        if len(password) < 6:
+            raise HTTPException(status_code=400, detail="密码长度至少为6个字符")
+
+        # 获取注册开关状态
+        from models.database import db_manager
+        async with db_manager.get_connection() as db:
+            async with db.execute(
+                "SELECT value FROM system_settings WHERE key = 'registration_enabled'"
+            ) as cursor:
+                row = await cursor.fetchone()
+                registration_enabled = row[0] == 'true' if row else True
+
+        # 如果注册功能关闭，必须使用有效令牌
+        if not registration_enabled:
+            if not token:
+                raise HTTPException(status_code=400, detail="注册功能已关闭，请使用管理员提供的注册令牌")
+            is_valid, message = await registration_token_model.validate_token(token)
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=message)
+        # 如果注册功能开放，但提供了token，也需要验证token
+        elif token:
+            is_valid, message = await registration_token_model.validate_token(token)
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=message)
+
+        # 创建用户
+        success, register_message, user_id = await auth_manager_instance.register(username, password)
+
+        if not success:
+            raise HTTPException(status_code=400, detail=register_message)
+
+        # 如果使用了令牌，标记令牌为已使用
+        if token:
+            token_success, token_message = await registration_token_model.use_token(token)
+            if not token_success:
+                logger.error(f"用户创建成功但令牌使用失败: {token_message}")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "注册成功",
+            "user_id": user_id
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"用户注册失败: {e}")
+        raise HTTPException(status_code=500, detail="注册失败")
+
+@app.post("/api/auth/login")
+async def login_api(user_data: dict):
+    """用户登录"""
+    try:
+        username = user_data.get('username', '').strip()
+        password = user_data.get('password', '')
+
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+
+        # 验证用户名密码
+        user = await user_model.authenticate(username, password)
+
+        if not user:
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+        # 生成新的session token
+        new_session_token = auth_manager_instance.generate_session_token()
+        await user_model.update_session_token(user['id'], new_session_token)
+
+        # 创建响应并设置cookie
+        response = JSONResponse({
+            "status": "success",
+            "message": "登录成功",
+            "data": {
+                "user_id": user['id'],
+                "username": user['username'],
+                "is_admin": user['is_admin']
+            }
+        })
+
+        response.set_cookie(
+            key="ocr_session",
+            value=new_session_token,
+            path='/',
+            max_age=30 * 24 * 60 * 60,  # 30天
+            httponly=True,
+            samesite='lax'
+        )
+
+        logger.info(f"用户 {username} 登录成功")
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"用户登录失败: {e}")
+        raise HTTPException(status_code=500, detail="登录失败")
+
+@app.post(f"/{PASSWORD}/api/auth/logout" if PASSWORD else "/api/auth/logout")
+async def logout_api(request: Request, response: Response):
+    """用户登出"""
+    try:
+        await auth_manager_instance.logout(response, request)
+        return JSONResponse({
+            "status": "success",
+            "message": "已登出"
+        })
+    except Exception as e:
+        logger.error(f"用户登出失败: {e}")
+        raise HTTPException(status_code=500, detail="登出失败")
+
+# ==================== 用户系统 API 端点 ====================
+
+@app.get(f"/{PASSWORD}/api/user/current" if PASSWORD else "/api/user/current")
+async def get_current_user_api(request: Request):
+    """获取当前用户信息"""
+    try:
+        user = await auth_manager_instance.get_current_user(request)
+        if not user:
+            raise HTTPException(status_code=401, detail="未登录")
+
+        quota = await user_model.get_quota(user['id'])
+
+        return JSONResponse({
+            "status": "success",
+            "data": {
+                "user_id": user['id'],
+                "username": user['username'],
+                "is_admin": user['is_admin'],
+                "quota": quota
+            }
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取当前用户信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/user/redeem" if PASSWORD else "/api/user/redeem")
+async def redeem_code_api(request: Request, code_data: dict):
+    """兑换码兑换"""
+    try:
+        user = await auth_manager_instance.require_user(request)
+        code = code_data.get('code', '').strip().upper()
+
+        if not code:
+            raise HTTPException(status_code=400, detail="兑换码不能为空")
+
+        # 使用兑换码
+        success, message, pages = await redemption_code_model.use_code(code, user['id'])
+
+        if not success:
+            return JSONResponse({
+                "status": "error",
+                "message": message
+            }, status_code=400)
+
+        # 增加用户配额
+        await user_model.add_pages(user['id'], pages)
+
+        # 获取更新后的配额
+        quota = await user_model.get_quota(user['id'])
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"兑换成功!获得{pages}页配额",
+            "pages_granted": pages,
+            "quota": quota
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"兑换码兑换失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/user/quota" if PASSWORD else "/api/user/quota")
+async def get_user_quota_api(request: Request):
+    """获取用户配额信息"""
+    try:
+        user = await auth_manager_instance.require_user(request)
+        quota = await user_model.get_quota(user['id'])
+
+        if not quota:
+            raise HTTPException(status_code=404, detail="配额信息不存在")
+
+        return JSONResponse({
+            "status": "success",
+            "data": quota
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取用户配额失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/user/history" if PASSWORD else "/api/user/history")
+async def get_user_redemption_history_api(request: Request):
+    """获取用户兑换历史"""
+    try:
+        user = await auth_manager_instance.require_user(request)
+        history = await redemption_code_model.get_redemption_history(user_id=user['id'])
+
+        return JSONResponse({
+            "status": "success",
+            "data": history
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取兑换历史失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== 管理员 API 端点 ====================
+
+@app.post(f"/{PASSWORD}/api/admin/codes/generate" if PASSWORD else "/api/admin/codes/generate")
+async def generate_redemption_code_api(request: Request, code_config: dict):
+    """生成兑换码(仅管理员)"""
+    try:
+        user = await auth_manager_instance.require_admin(request)
+
+        logger.info(f"管理员 {user.get('username')} (ID: {user.get('id')}) 尝试生成兑换码")
+
+        pages = code_config.get('pages', 0)
+        max_uses = code_config.get('max_uses', 1)
+        expires_days = code_config.get('expires_days')
+        description = code_config.get('description')
+
+        if pages <= 0:
+            raise HTTPException(status_code=400, detail="页数必须大于0")
+
+        if max_uses <= 0:
+            raise HTTPException(status_code=400, detail="使用次数必须大于0")
+
+        logger.info(f"创建兑换码参数: pages={pages}, max_uses={max_uses}, expires_days={expires_days}, created_by={user.get('id')}")
+
+        code = await redemption_code_model.create_code(
+            created_by=user['id'],
+            pages=pages,
+            max_uses=max_uses,
+            expires_days=expires_days,
+            description=description
+        )
+
+        if not code:
+            logger.error(f"兑换码创建返回 None, user_id={user.get('id')}")
+            raise HTTPException(status_code=500, detail="兑换码生成失败: 请检查日志获取详细错误信息")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "兑换码生成成功",
+            "code": code,
+            "pages": pages,
+            "max_uses": max_uses,
+            "expires_days": expires_days
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"生成兑换码失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/codes/list" if PASSWORD else "/api/admin/codes/list")
+async def list_redemption_codes_api(request: Request):
+    """查看所有兑换码(仅管理员)"""
+    try:
+        user = await auth_manager_instance.require_admin(request)
+        codes = await redemption_code_model.get_all_codes(limit=200)
+
+        return JSONResponse({
+            "status": "success",
+            "data": codes,
+            "total": len(codes)
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取兑换码列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/codes/{{code}}/deactivate" if PASSWORD else "/api/admin/codes/{code}/deactivate")
+async def deactivate_redemption_code_api(request: Request, code: str):
+    """禁用兑换码(仅管理员)"""
+    try:
+        user = await auth_manager_instance.require_admin(request)
+        success = await redemption_code_model.deactivate_code(code)
+
+        if not success:
+            raise HTTPException(status_code=500, detail="禁用失败")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"兑换码 {code} 已禁用"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"禁用兑换码失败 {code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/codes/{{code}}/activate" if PASSWORD else "/api/admin/codes/{code}/activate")
+async def activate_redemption_code_api(request: Request, code: str):
+    """激活兑换码(仅管理员)"""
+    try:
+        user = await auth_manager_instance.require_admin(request)
+        success = await redemption_code_model.activate_code(code)
+
+        if not success:
+            raise HTTPException(status_code=500, detail="激活失败")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"兑换码 {code} 已激活"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"激活兑换码失败 {code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/codes/history" if PASSWORD else "/api/admin/codes/history")
+async def get_redemption_history_api(request: Request):
+    """获取所有兑换记录(仅管理员)"""
+    try:
+        user = await auth_manager_instance.require_admin(request)
+        history = await redemption_code_model.get_redemption_history_with_users(limit=500)
+
+        return JSONResponse({
+            "status": "success",
+            "data": history,
+            "total": len(history)
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取兑换记录失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/users/list" if PASSWORD else "/api/admin/users/list")
+async def list_users_api(request: Request):
+    """查看所有用户(仅管理员)"""
+    try:
+        user = await auth_manager_instance.require_admin(request)
+        users = await user_model.get_all_users(limit=200)
+
+        return JSONResponse({
+            "status": "success",
+            "data": users,
+            "total": len(users)
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取用户列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/users/{{user_id}}/quota" if PASSWORD else "/api/admin/users/{user_id}/quota")
+async def adjust_user_quota_api(request: Request, user_id: str, quota_data: dict):
+    """调整用户配额(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        action = quota_data.get('action')  # 'set' or 'add'
+        pages = quota_data.get('pages', 0)
+
+        if pages < 0:
+            raise HTTPException(status_code=400, detail="页数不能为负数")
+
+        if action == 'set':
+            success = await user_model.set_quota(user_id, pages)
+            message = f"用户 {user_id} 配额已设置为 {pages} 页"
+        elif action == 'add':
+            success = await user_model.add_pages(user_id, pages)
+            message = f"用户 {user_id} 配额已增加 {pages} 页"
+        else:
+            raise HTTPException(status_code=400, detail="action必须是'set'或'add'")
+
+        if not success:
+            raise HTTPException(status_code=500, detail="配额调整失败")
+
+        quota = await user_model.get_quota(user_id)
+
+        return JSONResponse({
+            "status": "success",
+            "message": message,
+            "quota": quota
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"调整用户配额失败 {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/users/{{user_id}}/disable" if PASSWORD else "/api/admin/users/{user_id}/disable")
+async def disable_user_api(request: Request, user_id: str):
+    """禁用用户(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        # 防止管理员禁用自己
+        if admin['id'] == user_id:
+            raise HTTPException(status_code=400, detail="不能禁用自己的账户")
+
+        success = await user_model.disable_user(user_id)
+
+        if not success:
+            raise HTTPException(status_code=500, detail="禁用用户失败")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "用户已被禁用"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"禁用用户失败 {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/users/{{user_id}}/enable" if PASSWORD else "/api/admin/users/{user_id}/enable")
+async def enable_user_api(request: Request, user_id: str):
+    """启用用户(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        success = await user_model.enable_user(user_id)
+
+        if not success:
+            raise HTTPException(status_code=500, detail="启用用户失败")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "用户已被启用"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"启用用户失败 {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/settings/registration" if PASSWORD else "/api/admin/settings/registration")
+async def get_registration_status_api(request: Request):
+    """获取注册开关状态(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        from models.database import db_manager
+        async with db_manager.get_connection() as db:
+            async with db.execute(
+                "SELECT value FROM system_settings WHERE key = 'registration_enabled'"
+            ) as cursor:
+                row = await cursor.fetchone()
+                enabled = row[0] == 'true' if row else True
+
+        return JSONResponse({
+            "status": "success",
+            "registration_enabled": enabled
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取注册状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/settings/registration" if PASSWORD else "/api/admin/settings/registration")
+async def toggle_registration_api(request: Request, settings_data: dict):
+    """切换注册开关状态(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        enabled = settings_data.get('enabled', True)
+
+        from models.database import db_manager
+        from datetime import datetime, timezone
+        async with db_manager.get_connection() as db:
+            await db.execute("""
+                UPDATE system_settings
+                SET value = ?, updated_at = ?
+                WHERE key = 'registration_enabled'
+            """, ('true' if enabled else 'false', datetime.now(timezone.utc).isoformat()))
+            await db.commit()
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"注册功能已{'开放' if enabled else '禁止'}",
+            "registration_enabled": enabled
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"切换注册状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== 注册令牌管理API ====================
+
+@app.post(f"/{PASSWORD}/api/admin/registration-tokens/create" if PASSWORD else "/api/admin/registration-tokens/create")
+async def create_registration_token_api(request: Request, token_data: dict):
+    """创建注册令牌(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        max_uses = token_data.get('max_uses', 1)
+        expires_days = token_data.get('expires_days')
+        description = token_data.get('description')
+
+        if max_uses < 1:
+            raise HTTPException(status_code=400, detail="最大使用次数必须大于0")
+
+        token = await registration_token_model.create_token(
+            created_by=admin['id'],
+            max_uses=max_uses,
+            expires_days=expires_days,
+            description=description
+        )
+
+        if not token:
+            raise HTTPException(status_code=500, detail="创建注册令牌失败")
+
+        # 构建完整的注册链接
+        base_url = str(request.base_url).rstrip('/')
+        registration_url = f"{base_url}/register?token={token}"
+
+        return JSONResponse({
+            "status": "success",
+            "message": "注册令牌创建成功",
+            "token": token,
+            "registration_url": registration_url,
+            "max_uses": max_uses,
+            "expires_days": expires_days
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建注册令牌失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/registration-tokens/list" if PASSWORD else "/api/admin/registration-tokens/list")
+async def list_registration_tokens_api(request: Request):
+    """获取所有注册令牌列表(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        tokens = await registration_token_model.get_all_tokens()
+
+        return JSONResponse({
+            "status": "success",
+            "data": tokens
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取注册令牌列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/registration-tokens/{{token}}/toggle" if PASSWORD else "/api/admin/registration-tokens/{token}/toggle")
+async def toggle_registration_token_api(request: Request, token: str):
+    """启用/禁用注册令牌(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        token_info = await registration_token_model.get_token(token)
+        if not token_info:
+            raise HTTPException(status_code=404, detail="注册令牌不存在")
+
+        if token_info['is_active']:
+            success = await registration_token_model.deactivate_token(token)
+            message = "注册令牌已禁用"
+        else:
+            success = await registration_token_model.activate_token(token)
+            message = "注册令牌已启用"
+
+        if not success:
+            raise HTTPException(status_code=500, detail="操作失败")
+
+        return JSONResponse({
+            "status": "success",
+            "message": message
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"切换注册令牌状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete(f"/{PASSWORD}/api/admin/registration-tokens/{{token}}" if PASSWORD else "/api/admin/registration-tokens/{token}")
+async def delete_registration_token_api(request: Request, token: str):
+    """删除注册令牌(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        success = await registration_token_model.delete_token(token)
+
+        if not success:
+            raise HTTPException(status_code=500, detail="删除失败")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "注册令牌已删除"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除注册令牌失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/registration/validate-token")
+async def validate_registration_token_api(token: str):
+    """验证注册令牌是否有效(公开接口,用于注册页面检查)"""
+    try:
+        if not token:
+            raise HTTPException(status_code=400, detail="缺少令牌参数")
+
+        is_valid, message = await registration_token_model.validate_token(token)
+
+        if not is_valid:
+            return JSONResponse({
+                "status": "error",
+                "message": message
+            }, status_code=400)
+
+        return JSONResponse({
+            "status": "success",
+            "message": "令牌有效"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"验证注册令牌失败: {e}")
+        raise HTTPException(status_code=500, detail="验证失败")
+
+@app.get(f"/{PASSWORD}/api/admin/stats" if PASSWORD else "/api/admin/stats")
+async def get_admin_stats_api(request: Request):
+    """获取系统统计信息(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        # 用户统计
+        all_users = await user_model.get_all_users(limit=10000)
+        total_users = len(all_users)
+        admin_users = len([u for u in all_users if u['is_admin']])
+        total_pages_granted = sum([u['total_pages'] for u in all_users])
+        total_pages_used = sum([u['used_pages'] for u in all_users])
+
+        # 兑换码统计
+        all_codes = await redemption_code_model.get_all_codes(limit=10000)
+        total_codes = len(all_codes)
+        active_codes = len([c for c in all_codes if c['is_active']])
+
+        return JSONResponse({
+            "status": "success",
+            "data": {
+                "users": {
+                    "total": total_users,
+                    "admins": admin_users,
+                    "regular": total_users - admin_users
+                },
+                "pages": {
+                    "total_granted": total_pages_granted,
+                    "total_used": total_pages_used,
+                    "remaining": total_pages_granted - total_pages_used
+                },
+                "codes": {
+                    "total": total_codes,
+                    "active": active_codes,
+                    "inactive": total_codes - active_codes
+                }
+            }
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取统计信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== 管理员任务管理API ====================
+
+@app.get(f"/{PASSWORD}/api/admin/tasks/list" if PASSWORD else "/api/admin/tasks/list")
+async def list_all_tasks_api(request: Request, user_id: Optional[str] = Query(None), limit: int = Query(200), search: Optional[str] = Query(None)):
+    """获取所有任务列表（包含用户信息，仅管理员）"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+        from models.database import task_model
+
+        tasks = await task_model.get_all_tasks_with_users(limit=limit, user_id_filter=user_id, search_query=search)
+
+        return JSONResponse({
+            "status": "success",
+            "data": tasks,
+            "total": len(tasks)
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/tasks/stats" if PASSWORD else "/api/admin/tasks/stats")
+async def get_tasks_stats_api(request: Request, user_id: Optional[str] = Query(None)):
+    """获取任务统计信息（仅管理员）"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+        from models.database import task_model
+
+        stats = await task_model.get_task_stats_by_user(user_id=user_id)
+
+        return JSONResponse({
+            "status": "success",
+            "data": stats
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/tasks/{{task_id}}/content" if PASSWORD else "/api/admin/tasks/{task_id}/content")
+async def get_task_content_api(request: Request, task_id: str):
+    """获取任务的OCR内容（仅管理员）"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+        from models.database import task_model, page_result_model
+
+        # 获取任务信息
+        task = await task_model.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        # 获取所有页面结果
+        page_results = await page_result_model.get_task_page_results(task_id)
+
+        # 整理内容
+        content_data = {
+            "task_id": task_id,
+            "file_name": task.get("file_name"),
+            "status": task.get("status"),
+            "total_pages": task.get("total_pages", 0),
+            "processed_pages": task.get("processed_pages", 0),
+            "created_at": task.get("created_at"),
+            "pages": []
+        }
+
+        # 添加每页的内容
+        for page in page_results:
+            content_data["pages"].append({
+                "page_number": page.get("page_number"),
+                "status": page.get("status"),
+                "content": page.get("content", ""),
+                "error_message": page.get("error_message")
+            })
+
+        return JSONResponse({
+            "status": "success",
+            "data": content_data
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务内容失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Docker/k8s 专用健康检查端点（无密码保护，符合最佳实践）

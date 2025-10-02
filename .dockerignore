@@ -1,0 +1,68 @@
+# Python 缓存和编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 环境变量文件（敏感信息）
+.env
+.env.local
+.env.*.local
+
+# 数据库文件（应该通过卷挂载）
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+tmp/
+temp/
+.cache/
+
+# Git 文件
+.git/
+.gitignore
+.gitattributes
+
+# 文档和说明
+README.md
+*.md
+docs/
+
+# 测试文件
+tests/
+test_*.py
+*_test.py
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Claude 工具文件
+.claude/
+
+# 其他不需要的文件
+LICENSE
+.dockerignore
+docker-compose.yml
+Dockerfile

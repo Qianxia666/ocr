@@ -68,12 +68,16 @@ class TaskQueue:
                     return False
                 
                 # 将任务添加到数据库
+                # 从metadata中提取user_id
+                user_id = task_item.metadata.get('user_id') if task_item.metadata else None
+
                 success = await task_model.create_task(
                     task_id=task_item.task_id,
                     task_type=task_item.task_type,
                     file_name=task_item.file_name,
                     file_size=task_item.file_size,
                     total_pages=task_item.total_pages,
+                    user_id=user_id,
                     metadata=task_item.metadata
                 )
                 
