@@ -29,7 +29,7 @@
 
             <!-- 中间标题 -->
             <div class="flex items-center justify-center">
-                <h1 class="text-4xl font-bold">呱呱的oai图转文</h1>
+                <h1 class="text-4xl font-bold">{{ title }}</h1>
             </div>
 
             <!-- 底部 GitHub 链接 -->
@@ -128,7 +128,7 @@
 
     <script>
         const baseUrl = window.location.origin;
-        const registrationEnabled = {{ 'true' if registration_enabled else 'false' }};
+        const registrationEnabled = {% if registration_enabled %}true{% else %}false{% endif %};
         const loginTab = document.getElementById('login-tab');
         const registerTab = document.getElementById('register-tab');
         const loginForm = document.getElementById('login-form');
