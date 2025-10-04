@@ -239,12 +239,6 @@ curl http://localhost:54188/your-password/api/tasks/{task_id}/progress
 - OpenAI API 提供 OCR 能力
 - 所有贡献者和使用者
 
----
-
-## 📮 联系方式
-
-- 问题反馈：[GitHub Issues](https://github.com/Qianxia666/ocr/issues)
-- 功能建议：[GitHub Discussions](https://github.com/Qianxia666/ocr/discussions)
 
 
 
