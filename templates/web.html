@@ -921,10 +921,11 @@
     window.addEventListener('load', () => {
       loadTasks();
       loadUserInfo();
+
       // 每30秒自动刷新任务列表
       setInterval(loadTasks, 30000);
-      // 每60秒自动刷新用户配额
-      setInterval(loadUserInfo, 60000);
+      // 每30秒自动刷新用户配额
+      setInterval(loadUserInfo, 30000);
     });
   </script>
   <!-- 引入 marked.js 和 KaTeX -->

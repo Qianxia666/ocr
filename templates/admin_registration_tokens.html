@@ -182,6 +182,9 @@
           <button onclick="applyFilters()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
             应用筛选
           </button>
+          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+            加载数据
+          </button>
         </div>
       </div>
 
@@ -202,7 +205,7 @@
             </thead>
             <tbody id="tokens-table" class="bg-white divide-y divide-gray-200">
               <tr>
-                <td colspan="7" class="px-6 py-4 text-center text-gray-500">加载中...</td>
+                <td colspan="7" class="px-6 py-4 text-center text-gray-500">请点击"加载数据"按钮加载令牌列表</td>
               </tr>
             </tbody>
           </table>
@@ -213,8 +216,12 @@
             <span class="text-sm text-gray-700">每页显示:</span>
             <select id="page-size" class="border border-gray-300 rounded px-2 py-1 text-sm" onchange="changePageSize()">
               <option value="20">20</option>
-              <option value="50" selected>50</option>
-              <option value="100">100</option>
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+              <option value="99999">全部</option>
             </select>
           </div>
           <div class="flex items-center gap-2">
@@ -268,22 +275,11 @@
 
     // 分页相关变量
     let currentPage = 1;
-    let pageSize = 50;
+    let pageSize = 100;
     let totalTokens = 0;
-    let allTokensData = [];
     let selectedTokens = new Set(); // 存储选中的令牌
     const tokenDetailState = new Map(); // 存储令牌详情展开状态
     let historyData = {}; // 存储令牌使用记录
-
-    function getTokenCreatedTimestamp(token) {
-      const createdAt = token.created_at || token.createdAt || token.created_time || token.createdTime || token.created;
-      const timestamp = createdAt ? new Date(createdAt).getTime() : NaN;
-      return Number.isFinite(timestamp) ? timestamp : 0;
-    }
-
-    function sortTokensByCreatedAtDesc(tokens) {
-      return [...tokens].sort((a, b) => getTokenCreatedTimestamp(b) - getTokenCreatedTimestamp(a));
-    }
 
     // 防抖函数
     function debounce(func, wait) {
@@ -300,36 +296,38 @@
 
     // 加载令牌列表
     async function loadTokens() {
+      const statusFilter = document.getElementById('status-filter').value;
+      const searchQuery = document.getElementById('search-input').value;
+
       try {
-        // 加载所有令牌
-        const tokensResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/list`);
+        // 加载令牌（后端分页）
+        let url = `${baseUrl}${passwordPrefix}/api/admin/registration-tokens/list?page=${currentPage}&page_size=${pageSize}`;
+        if (searchQuery) {
+          url += `&search=${encodeURIComponent(searchQuery)}`;
+        }
+        const tokensResponse = await fetch(url);
         const tokensData = await tokensResponse.json();
 
         // 加载使用记录
         const historyResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/history`);
         const histData = await historyResponse.json();
 
-        if (tokensData.status === 'success' && tokensData.data) {
-          allTokensData = sortTokensByCreatedAtDesc(tokensData.data);
+        if (tokensData.status === 'success') {
+          totalTokens = tokensData.total || 0;
 
           // 创建令牌使用记录映射
           historyData = {};
           if (histData.status === "success" && histData.data) {
-            console.log('加载到的使用记录:', histData.data);
             histData.data.forEach(record => {
               if (!historyData[record.token]) {
                 historyData[record.token] = [];
               }
               historyData[record.token].push(record);
             });
-            console.log('映射后的historyData:', historyData);
-          } else {
-            console.log('使用记录加载失败或无数据:', histData);
           }
 
-          currentPage = 1;
-          const status = document.getElementById('status-filter').value;
-          displayTokens(allTokensData, status);
+          displayTokens(tokensData.data || [], statusFilter);
+          updatePaginationUI();
         } else {
           document.getElementById('tokens-table').innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
         }
@@ -341,62 +339,43 @@
 
     // 应用筛选
     function applyFilters() {
-      const status = document.getElementById('status-filter').value;
       currentPage = 1;
-      displayTokens(allTokensData, status);
+      loadTokens(); // 重新加载
     }
 
     // 显示令牌列表
     function displayTokens(tokens, statusFilter = '') {
       const tbody = document.getElementById('tokens-table');
-      const searchQuery = document.getElementById('search-input').value.toLowerCase();
 
+      // 前端状态过滤（可选）
       let filteredTokens = tokens;
-
-      // 搜索过滤
-      if (searchQuery) {
-        filteredTokens = filteredTokens.filter(token =>
-          token.token.toLowerCase().includes(searchQuery) ||
-          (token.description && token.description.toLowerCase().includes(searchQuery))
-        );
-      }
-
-      // 状态过滤
       if (statusFilter === 'unused') {
-        filteredTokens = filteredTokens.filter(token => token.used_count === 0);
+        filteredTokens = tokens.filter(token => token.used_count === 0);
       } else if (statusFilter === 'used') {
-        filteredTokens = filteredTokens.filter(token => token.used_count > 0 && token.used_count < token.max_uses);
+        filteredTokens = tokens.filter(token => token.used_count > 0 && token.used_count < token.max_uses);
       } else if (statusFilter === 'exhausted') {
-        filteredTokens = filteredTokens.filter(token => token.used_count >= token.max_uses);
+        filteredTokens = tokens.filter(token => token.used_count >= token.max_uses);
       } else if (statusFilter === 'expired') {
-        filteredTokens = filteredTokens.filter(token =>
+        filteredTokens = tokens.filter(token =>
           token.expires_at && new Date(token.expires_at) < new Date()
         );
       }
 
-      totalTokens = filteredTokens.length;
-
       if (filteredTokens.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-gray-500">暂无令牌</td></tr>';
-        updatePaginationUI();
         updateSelectionUI();
         return;
       }
 
-      const startIndex = (currentPage - 1) * pageSize;
-      const endIndex = Math.min(startIndex + pageSize, filteredTokens.length);
-      const currentPageTokens = filteredTokens.slice(startIndex, endIndex);
-
       const fragment = document.createDocumentFragment();
 
-      currentPageTokens.forEach(token => {
+      filteredTokens.forEach(token => {
         fragment.appendChild(createTokenRow(token));
         fragment.appendChild(createTokenDetailRow(token));
       });
 
       tbody.innerHTML = '';
       tbody.appendChild(fragment);
-      updatePaginationUI();
       updateSelectionUI();
     }
 
@@ -419,8 +398,7 @@
 
       if (newPage >= 1 && newPage <= totalPages) {
         currentPage = newPage;
-        const status = document.getElementById('status-filter').value;
-        displayTokens(allTokensData, status);
+        loadTokens(); // 重新从后端加载
       }
     }
 
@@ -428,8 +406,7 @@
     function changePageSize() {
       pageSize = parseInt(document.getElementById('page-size').value);
       currentPage = 1;
-      const status = document.getElementById('status-filter').value;
-      displayTokens(allTokensData, status);
+      loadTokens(); // 重新从后端加载
     }
 
     // 创建令牌行元素
@@ -900,23 +877,39 @@
       }
     }
 
+    let autoRefreshInterval = null;
+    let hasLoadedData = false;
+
+    // 手动加载数据
+    function loadDataManually() {
+      if (!hasLoadedData) {
+        loadTokens();
+        hasLoadedData = true;
+
+        // 加载后启动自动刷新
+        autoRefreshInterval = setInterval(() => {
+          loadTokens();
+        }, 60000);
+
+        // 隐藏加载按钮
+        document.getElementById('load-data-btn').style.display = 'none';
+      }
+    }
+
     // 页面加载时初始化
     window.addEventListener('load', () => {
-      loadTokens();
+      // 不再自动加载数据，等待用户点击"加载数据"按钮
 
       // 搜索框输入时使用防抖
       const searchInput = document.getElementById('search-input');
       const debouncedFilter = debounce(() => {
-        const status = document.getElementById('status-filter').value;
-        currentPage = 1;
-        displayTokens(allTokensData, status);
+        if (hasLoadedData) {
+          const status = document.getElementById('status-filter').value;
+          currentPage = 1;
+          displayTokens(allTokensData, status);
+        }
       }, 500);
       searchInput.addEventListener('input', debouncedFilter);
-
-      // 每30秒自动刷新
-      setInterval(() => {
-        loadTokens();
-      }, 30000);
     });
 
     // 菜单控制

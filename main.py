@@ -51,6 +51,8 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com")
 API_KEY = os.getenv("OPENAI_API_KEY", "sk-111111111")
 MODEL = os.getenv("MODEL", "gpt-4o")
 PASSWORD = os.getenv("PASSWORD", "pwd")
+TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY", "")
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "")
 
 # 并发限制和重试机制
 CONCURRENCY = int(os.getenv("CONCURRENCY", 5))  # 保留用于向后兼容
@@ -69,6 +71,95 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", 8))  # 批处理大小
 MAX_IMAGE_SIZE_MB = int(os.getenv("MAX_IMAGE_SIZE_MB", 50))  # 图片文件最大大小(MB)
 MAX_PDF_SIZE_MB = int(os.getenv("MAX_PDF_SIZE_MB", 200))  # PDF文件最大大小(MB)
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 500))  # PDF最大页数限制
+
+# 运行时配置管理器
+class RuntimeConfig:
+    """运行时配置管理器 - 仅保存在内存中，重启后恢复默认值"""
+    def __init__(self):
+        # 从环境变量初始化默认值
+        self.concurrency = int(os.getenv("CONCURRENCY", 5))
+        self.max_retries = int(os.getenv("MAX_RETRIES", 5))
+        self.image_concurrency = int(os.getenv("IMAGE_CONCURRENCY", 5))
+        self.pdf_concurrency = int(os.getenv("PDF_CONCURRENCY", 5))
+        self.pdf_dpi = int(os.getenv("PDF_DPI", 200))
+        self.batch_size = int(os.getenv("BATCH_SIZE", 8))
+        self.max_image_size_mb = int(os.getenv("MAX_IMAGE_SIZE_MB", 50))
+        self.max_pdf_size_mb = int(os.getenv("MAX_PDF_SIZE_MB", 50))
+        self.max_pdf_pages = int(os.getenv("MAX_PDF_PAGES", 50))
+
+    def get_all(self) -> dict:
+        """获取所有配置"""
+        return {
+            "concurrency": self.concurrency,
+            "max_retries": self.max_retries,
+            "image_concurrency": self.image_concurrency,
+            "pdf_concurrency": self.pdf_concurrency,
+            "pdf_dpi": self.pdf_dpi,
+            "batch_size": self.batch_size,
+            "max_image_size_mb": self.max_image_size_mb,
+            "max_pdf_size_mb": self.max_pdf_size_mb,
+            "max_pdf_pages": self.max_pdf_pages
+        }
+
+    def update(self, config: dict):
+        """更新配置"""
+        if "concurrency" in config:
+            self.concurrency = int(config["concurrency"])
+        if "max_retries" in config:
+            self.max_retries = int(config["max_retries"])
+        if "image_concurrency" in config:
+            self.image_concurrency = int(config["image_concurrency"])
+        if "pdf_concurrency" in config:
+            self.pdf_concurrency = int(config["pdf_concurrency"])
+        if "pdf_dpi" in config:
+            self.pdf_dpi = int(config["pdf_dpi"])
+        if "batch_size" in config:
+            self.batch_size = int(config["batch_size"])
+        if "max_image_size_mb" in config:
+            self.max_image_size_mb = int(config["max_image_size_mb"])
+        if "max_pdf_size_mb" in config:
+            self.max_pdf_size_mb = int(config["max_pdf_size_mb"])
+        if "max_pdf_pages" in config:
+            self.max_pdf_pages = int(config["max_pdf_pages"])
+
+# 创建全局运行时配置实例
+runtime_config = RuntimeConfig()
+
+# Cloudflare Turnstile 验证函数
+async def verify_turnstile_token(token: str, remote_ip: str = None) -> tuple[bool, str]:
+    """
+    验证 Cloudflare Turnstile token
+    返回: (是否成功, 消息)
+    """
+    if not TURNSTILE_SECRET_KEY:
+        logger.warning("Turnstile Secret Key 未配置，跳过验证")
+        return True, "验证已跳过"
+
+    if not token:
+        return False, "缺少验证令牌"
+
+    url = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    data = {
+        "secret": TURNSTILE_SECRET_KEY,
+        "response": token
+    }
+    if remote_ip:
+        data["remoteip"] = remote_ip
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data) as response:
+                result = await response.json()
+
+                if result.get("success"):
+                    return True, "验证成功"
+                else:
+                    error_codes = result.get("error-codes", [])
+                    logger.warning(f"Turnstile 验证失败: {error_codes}")
+                    return False, "人机验证失败，请刷新页面重试"
+    except Exception as e:
+        logger.error(f"Turnstile 验证请求失败: {e}")
+        return False, "验证服务暂时不可用，请稍后重试"
 
 # 定义生命周期管理器
 @asynccontextmanager
@@ -101,12 +192,12 @@ async def lifespan(app: FastAPI):
             'api_base_url': API_BASE_URL,
             'api_key': API_KEY,
             'model': MODEL,
-            'concurrency': CONCURRENCY,
-            'image_concurrency': IMAGE_CONCURRENCY,
-            'pdf_concurrency': PDF_CONCURRENCY,
-            'max_retries': MAX_RETRIES,
+            'concurrency': runtime_config.concurrency,
+            'image_concurrency': runtime_config.image_concurrency,
+            'pdf_concurrency': runtime_config.pdf_concurrency,
+            'max_retries': runtime_config.max_retries,
             'retry_delay': RETRY_DELAY,
-            'pdf_dpi': PDF_DPI
+            'pdf_dpi': runtime_config.pdf_dpi
         }
 
         # 初始化页面处理器
@@ -206,6 +297,47 @@ async def lifespan(app: FastAPI):
             logger.critical("任务管理器初始化失败，API将返回503错误")
             task_manager = None
 
+        # 初始化IP跟踪模型并启动定时检测任务
+        from models.database import ip_tracking_model
+        global ip_tracking_model_instance, ip_abuse_detection_task
+        ip_tracking_model_instance = ip_tracking_model
+
+        # 重置IP滥用检测配置为ENV默认值
+        await ip_tracking_model_instance.reset_to_env_defaults()
+        logger.info("IP滥用检测配置已从ENV重置")
+
+        # 创建IP滥用检测定时任务（每5分钟执行一次）
+        async def ip_abuse_detection_loop():
+            """IP滥用检测定时任务"""
+            while True:
+                try:
+                    await asyncio.sleep(300)  # 5分钟
+                    logger.info("开始执行IP滥用检测...")
+
+                    # 使用超时保护，避免检测任务卡死
+                    try:
+                        result = await asyncio.wait_for(
+                            ip_tracking_model_instance.check_and_suspend_abuse(user_model),
+                            timeout=60.0  # 60秒超时
+                        )
+                        if result['status'] == 'success' and result['suspended_count'] > 0:
+                            logger.warning(f"IP滥用检测: 封停了 {result['suspended_count']} 个账户")
+                        elif result['status'] == 'success':
+                            logger.debug("IP滥用检测: 未发现滥用行为")
+                    except asyncio.TimeoutError:
+                        logger.error("IP滥用检测超时（60秒），已跳过本次检测")
+
+                except asyncio.CancelledError:
+                    logger.info("IP滥用检测任务已取消")
+                    break
+                except Exception as e:
+                    logger.error(f"IP滥用检测任务执行失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+        ip_abuse_detection_task = asyncio.create_task(ip_abuse_detection_loop())
+        logger.info("IP滥用检测定时任务已启动（每5分钟执行一次）")
+
         logger.info("应用启动完成")
 
     except Exception as e:
@@ -216,6 +348,15 @@ async def lifespan(app: FastAPI):
 
     # 关闭时执行
     try:
+        # 取消IP滥用检测任务
+        if 'ip_abuse_detection_task' in globals() and ip_abuse_detection_task:
+            ip_abuse_detection_task.cancel()
+            try:
+                await ip_abuse_detection_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("IP滥用检测任务已停止")
+
         # 关闭任务管理器
         await shutdown_task_manager()
 
@@ -240,6 +381,8 @@ task_manager = None
 user_model = None
 redemption_code_model = None
 auth_manager_instance = None
+ip_tracking_model_instance = None
+ip_abuse_detection_task = None
 
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -279,8 +422,11 @@ def get_client_ip(request: Request) -> str:
 
     return "unknown"
 
-async def process_image(session, image_data, semaphore, max_retries=MAX_RETRIES):
+async def process_image(session, image_data, semaphore, max_retries=None):
     """使用 OCR 识别图像并进行 Markdown 格式化"""
+    if max_retries is None:
+        max_retries = runtime_config.max_retries
+
     system_prompt = """
     OCR识别图片上的内容，给出markdown的katex的格式的内容。
     选择题的序号使用A. B.依次类推。
@@ -294,9 +440,9 @@ async def process_image(session, image_data, semaphore, max_retries=MAX_RETRIES)
     2. 极限使用：\\lim\\limits_x
     3. 参考以下例子格式：
     ### 35. 上3个无穷小量按照从低阶到高阶的排序是( )
-    A.$\\alpha_1,\\alpha_2,\\alpha_3$ 
-    B.$\\alpha_2,\\alpha_1,\\alpha_3$ 
-    C.$\\alpha_1,\\alpha_3,\\alpha_2$ 
+    A.$\\alpha_1,\\alpha_2,\\alpha_3$
+    B.$\\alpha_2,\\alpha_1,\\alpha_3$
+    C.$\\alpha_1,\\alpha_3,\\alpha_2$
     D. $\\alpha_2,\\alpha_3,\\alpha_1$
     36. (I) 求 $\\lim\\limits_{x \\to +\\infty} \\frac{\\arctan 2x - \\arctan x}{\\frac{\\pi}{2} - \\arctan x}$;
         (II) 若 $\\lim\\limits_{x \\to +\\infty} x[1-f(x)]$ 不存在, 而 $l = \\lim\\limits_{x \\to +\\infty} \\frac{\\arctan 2x + [b-1-bf(x)]\\arctan x}{\\frac{\\pi}{2} - \\arctan x}$ 存在,
@@ -368,13 +514,16 @@ def check_pdf_info(pdf_bytes: bytes) -> tuple[int, float]:
         logger.error(f"PDF 文件信息获取失败: {e}")
         raise e
 
-def pdf_to_images_generator(pdf_bytes: bytes, dpi: int = PDF_DPI):
+def pdf_to_images_generator(pdf_bytes: bytes, dpi: int = None):
     """
     使用生成器流式处理PDF转图片，减少内存占用
     :param pdf_bytes: PDF 文件的字节数据
     :param dpi: 图像分辨率 (默认200 DPI)
     :yield: (页码, 图片字节数据) 元组
     """
+    if dpi is None:
+        dpi = runtime_config.pdf_dpi
+
     pdf_document = None
     try:
         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -417,22 +566,22 @@ async def process_single_page_ocr(session: aiohttp.ClientSession, image_data: by
     """
     if image_data is None:
         return f"第 {page_number} 页: 图片转换失败，跳过处理"
-    
-    for attempt in range(MAX_RETRIES):
+
+    for attempt in range(runtime_config.max_retries):
         try:
             async with semaphore:
-                logger.info(f"开始OCR处理第 {page_number} 页 (尝试 {attempt + 1}/{MAX_RETRIES})")
+                logger.info(f"开始OCR处理第 {page_number} 页 (尝试 {attempt + 1}/{runtime_config.max_retries})")
                 result = await process_image(session, image_data, semaphore, max_retries=1)
-                
+
                 if result and "This is the content:" in result:
                     start_index = result.find("This is the content:") + len("This is the content:")
                     end_index = result.find("this is the end of the content")
                     if end_index == -1:
                         end_index = len(result)
-                    
+
                     content = result[start_index:end_index].strip()
                     content = content.replace("```markdown", "").replace("```", "").strip()
-                    
+
                     if content:
                         logger.info(f"第 {page_number} 页OCR处理成功")
                         return content
@@ -440,10 +589,10 @@ async def process_single_page_ocr(session: aiohttp.ClientSession, image_data: by
                         raise Exception("OCR返回内容为空")
                 else:
                     raise Exception("OCR返回格式不正确")
-                    
+
         except Exception as e:
-            logger.warning(f"第 {page_number} 页处理失败 (尝试 {attempt + 1}/{MAX_RETRIES}): {e}")
-            if attempt < MAX_RETRIES - 1:
+            logger.warning(f"第 {page_number} 页处理失败 (尝试 {attempt + 1}/{runtime_config.max_retries}): {e}")
+            if attempt < runtime_config.max_retries - 1:
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
             else:
                 logger.error(f"第 {page_number} 页最终处理失败: {e}")
@@ -604,10 +753,10 @@ async def process_pdf_endpoint(file: UploadFile, request: Request, response: Res
             raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
 
         # 页数限制检查（使用环境变量配置）
-        if page_count > MAX_PDF_PAGES:
+        if page_count > runtime_config.max_pdf_pages:
             if tmp_file_path and os.path.exists(tmp_file_path):
                 os.unlink(tmp_file_path)
-            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{MAX_PDF_PAGES}页")
+            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{runtime_config.max_pdf_pages}页")
 
         # 检查用户配额
         has_quota, quota_message = await auth_manager_instance.check_quota(user['id'], page_count)
@@ -700,9 +849,9 @@ async def root_page(request: Request, response: Response):
                 "title": TITLE,
                 "registration_enabled": registration_enabled,
                 "model": MODEL,
-                "max_image_size_mb": MAX_IMAGE_SIZE_MB,
-                "max_pdf_size_mb": MAX_PDF_SIZE_MB,
-                "max_pdf_pages": MAX_PDF_PAGES
+                "max_image_size_mb": runtime_config.max_image_size_mb,
+                "max_pdf_size_mb": runtime_config.max_pdf_size_mb,
+                "max_pdf_pages": runtime_config.max_pdf_pages
             }
         )
 
@@ -1016,8 +1165,8 @@ async def submit_pdf_task_api(file: UploadFile, request: Request):
             raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
 
         # 页数限制检查（使用环境变量配置）
-        if page_count > MAX_PDF_PAGES:
-            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{MAX_PDF_PAGES}页")
+        if page_count > runtime_config.max_pdf_pages:
+            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{runtime_config.max_pdf_pages}页")
 
         # 获取客户端IP
         client_ip = get_client_ip(request)
@@ -1172,7 +1321,8 @@ async def login_page(request: Request):
         "request": request,
         "favicon_url": FAVICON_URL,
         "title": TITLE,
-        "registration_enabled": registration_enabled
+        "registration_enabled": registration_enabled,
+        "turnstile_site_key": TURNSTILE_SITE_KEY
     })
 
 @app.get("/test-login", response_class=HTMLResponse)
@@ -1190,16 +1340,24 @@ async def register_page(request: Request, token: str = ""):
         "request": request,
         "token": token,
         "favicon_url": FAVICON_URL,
-        "title": TITLE
+        "title": TITLE,
+        "turnstile_site_key": TURNSTILE_SITE_KEY
     })
 
 @app.post("/api/auth/register")
-async def register_api(user_data: dict):
+async def register_api(user_data: dict, request: Request):
     """用户注册（支持开放注册和令牌注册）"""
     try:
         username = user_data.get('username', '').strip()
         password = user_data.get('password', '')
         token = user_data.get('token', '').strip()
+        turnstile_token = user_data.get('turnstile_token', '').strip()
+
+        # 验证 Turnstile
+        client_ip = request.client.host if request.client else None
+        is_valid, message = await verify_turnstile_token(turnstile_token, client_ip)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=message)
 
         # 验证必填字段
         if not username or not password:
@@ -1262,11 +1420,18 @@ async def register_api(user_data: dict):
         raise HTTPException(status_code=500, detail="注册失败")
 
 @app.post("/api/auth/login")
-async def login_api(user_data: dict):
+async def login_api(user_data: dict, request: Request):
     """用户登录"""
     try:
         username = user_data.get('username', '').strip()
         password = user_data.get('password', '')
+        turnstile_token = user_data.get('turnstile_token', '').strip()
+
+        # 验证 Turnstile
+        client_ip = request.client.host if request.client else None
+        is_valid, message = await verify_turnstile_token(turnstile_token, client_ip)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=message)
 
         if not username or not password:
             raise HTTPException(status_code=400, detail="用户名和密码不能为空")
@@ -1499,16 +1664,22 @@ async def generate_redemption_code_api(request: Request, code_config: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/admin/codes/list" if PASSWORD else "/api/admin/codes/list")
-async def list_redemption_codes_api(request: Request):
+async def list_redemption_codes_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000)):
     """查看所有兑换码(仅管理员)"""
     try:
         user = await auth_manager_instance.require_admin(request)
-        codes = await redemption_code_model.get_all_codes(limit=200)
+
+        offset = (page - 1) * page_size
+        codes = await redemption_code_model.get_all_codes(limit=page_size, offset=offset)
+        total = await redemption_code_model.count_codes()
 
         return JSONResponse({
             "status": "success",
             "data": codes,
-            "total": len(codes)
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size
         })
 
     except HTTPException:
@@ -1579,16 +1750,22 @@ async def get_redemption_history_api(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/admin/users/list" if PASSWORD else "/api/admin/users/list")
-async def list_users_api(request: Request):
+async def list_users_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000)):
     """查看所有用户(仅管理员)"""
     try:
         user = await auth_manager_instance.require_admin(request)
-        users = await user_model.get_all_users(limit=200)
+
+        offset = (page - 1) * page_size
+        users = await user_model.get_all_users(limit=page_size, offset=offset)
+        total = await user_model.count_users()
 
         return JSONResponse({
             "status": "success",
             "data": users,
-            "total": len(users)
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size
         })
 
     except HTTPException:
@@ -1736,6 +1913,103 @@ async def toggle_registration_api(request: Request, settings_data: dict):
         logger.error(f"切换注册状态失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get(f"/{PASSWORD}/api/admin/settings/ip-abuse" if PASSWORD else "/api/admin/settings/ip-abuse")
+async def get_ip_abuse_settings_api(request: Request):
+    """获取IP滥用检测配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        settings = await ip_tracking_model_instance.get_settings()
+
+        return JSONResponse({
+            "status": "success",
+            "enabled": settings.get('enabled', True),
+            "threshold": settings.get('threshold', 3),
+            "days": settings.get('days', 7)
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取IP滥用检测配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/settings/ip-abuse" if PASSWORD else "/api/admin/settings/ip-abuse")
+async def update_ip_abuse_settings_api(request: Request, settings_data: dict):
+    """更新IP滥用检测配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        enabled = settings_data.get('enabled')
+        threshold = settings_data.get('threshold')
+        days = settings_data.get('days')
+
+        # 验证参数
+        if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+            raise HTTPException(status_code=400, detail="账户数阈值必须是大于0的整数")
+        if days is not None and (not isinstance(days, int) or days < 1):
+            raise HTTPException(status_code=400, detail="天数窗口必须是大于0的整数")
+
+        success = await ip_tracking_model_instance.update_settings(
+            enabled=enabled,
+            threshold=threshold,
+            days=days
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="更新配置失败")
+
+        # 获取最新配置返回
+        updated_settings = await ip_tracking_model_instance.get_settings()
+
+        return JSONResponse({
+            "status": "success",
+            "message": "IP滥用检测配置已更新",
+            "enabled": updated_settings.get('enabled', True),
+            "threshold": updated_settings.get('threshold', 3),
+            "days": updated_settings.get('days', 7)
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新IP滥用检测配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/settings/config" if PASSWORD else "/api/admin/settings/config")
+async def get_runtime_config_api(request: Request):
+    """获取运行时配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        return JSONResponse({
+            "status": "success",
+            "config": runtime_config.get_all()
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取运行时配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/settings/config" if PASSWORD else "/api/admin/settings/config")
+async def update_runtime_config_api(request: Request, config_data: dict):
+    """更新运行时配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        # 更新配置
+        runtime_config.update(config_data)
+
+        return JSONResponse({
+            "status": "success",
+            "message": "配置已更新(仅在内存中,重启后恢复默认值)",
+            "config": runtime_config.get_all()
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新运行时配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ==================== 注册令牌管理API ====================
 
 @app.post(f"/{PASSWORD}/api/admin/registration-tokens/create" if PASSWORD else "/api/admin/registration-tokens/create")
@@ -1809,16 +2083,22 @@ async def create_registration_token_api(request: Request, token_data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/admin/registration-tokens/list" if PASSWORD else "/api/admin/registration-tokens/list")
-async def list_registration_tokens_api(request: Request):
+async def list_registration_tokens_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000)):
     """获取所有注册令牌列表(仅管理员)"""
     try:
         admin = await auth_manager_instance.require_admin(request)
 
-        tokens = await registration_token_model.get_all_tokens()
+        offset = (page - 1) * page_size
+        tokens = await registration_token_model.get_all_tokens(limit=page_size, offset=offset)
+        total = await registration_token_model.count_tokens()
 
         return JSONResponse({
             "status": "success",
-            "data": tokens
+            "data": tokens,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size
         })
 
     except HTTPException:
@@ -1973,18 +2253,32 @@ async def get_admin_stats_api(request: Request):
 # ==================== 管理员任务管理API ====================
 
 @app.get(f"/{PASSWORD}/api/admin/tasks/list" if PASSWORD else "/api/admin/tasks/list")
-async def list_all_tasks_api(request: Request, user_id: Optional[str] = Query(None), limit: int = Query(200), search: Optional[str] = Query(None)):
+async def list_all_tasks_api(request: Request,
+                             page: int = Query(1, ge=1),
+                             page_size: int = Query(100, ge=1, le=1000),
+                             user_id: Optional[str] = Query(None),
+                             search: Optional[str] = Query(None)):
     """获取所有任务列表（包含用户信息，仅管理员）"""
     try:
         admin = await auth_manager_instance.require_admin(request)
         from models.database import task_model
 
-        tasks = await task_model.get_all_tasks_with_users(limit=limit, user_id_filter=user_id, search_query=search)
+        offset = (page - 1) * page_size
+        tasks = await task_model.get_all_tasks_with_users(
+            limit=page_size,
+            offset=offset,
+            user_id_filter=user_id,
+            search_query=search
+        )
+        total = await task_model.count_tasks(user_id_filter=user_id, search_query=search)
 
         return JSONResponse({
             "status": "success",
             "data": tasks,
-            "total": len(tasks)
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size
         })
 
     except HTTPException:
@@ -2263,7 +2557,7 @@ async def submit_async_image_task(file: UploadFile, request: Request):
             # 分块写入临时文件,避免内存占用
             chunk_size = 1024 * 1024  # 1MB每块
             total_size = 0
-            max_file_size = MAX_IMAGE_SIZE_MB * 1024 * 1024
+            max_file_size = runtime_config.max_image_size_mb * 1024 * 1024
 
             while chunk := await file.read(chunk_size):
                 total_size += len(chunk)
@@ -2271,7 +2565,7 @@ async def submit_async_image_task(file: UploadFile, request: Request):
                 if total_size > max_file_size:
                     tmp_file.close()
                     os.unlink(tmp_file_path)
-                    raise HTTPException(status_code=400, detail=f"文件过大，最大支持{MAX_IMAGE_SIZE_MB}MB")
+                    raise HTTPException(status_code=400, detail=f"文件过大，最大支持{runtime_config.max_image_size_mb}MB")
                 tmp_file.write(chunk)
 
         logger.info(f"图片文件已写入临时文件: {tmp_file_path}")
@@ -2345,9 +2639,9 @@ async def submit_async_pdf_task(file: UploadFile, request: Request):
             raise HTTPException(status_code=400, detail="不支持的文件类型，请上传PDF文件")
 
         # 文件大小检查（使用环境变量配置）
-        max_file_size = MAX_PDF_SIZE_MB * 1024 * 1024
+        max_file_size = runtime_config.max_pdf_size_mb * 1024 * 1024
         if len(file_data) > max_file_size:
-            raise HTTPException(status_code=400, detail=f"文件过大，最大支持{MAX_PDF_SIZE_MB}MB")
+            raise HTTPException(status_code=400, detail=f"文件过大，最大支持{runtime_config.max_pdf_size_mb}MB")
 
         # 获取PDF文件信息
         try:
@@ -2358,8 +2652,8 @@ async def submit_async_pdf_task(file: UploadFile, request: Request):
             raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
 
         # 页数限制检查（使用环境变量配置）
-        if page_count > MAX_PDF_PAGES:
-            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{MAX_PDF_PAGES}页")
+        if page_count > runtime_config.max_pdf_pages:
+            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{runtime_config.max_pdf_pages}页")
 
         # 获取客户端IP
         client_ip = get_client_ip(request)
@@ -2432,14 +2726,14 @@ async def submit_batch_tasks(files: list[UploadFile], request: Request):
 
                         chunk_size = 1024 * 1024  # 1MB每块
                         total_size = 0
-                        max_file_size = MAX_IMAGE_SIZE_MB * 1024 * 1024
+                        max_file_size = runtime_config.max_image_size_mb * 1024 * 1024
 
                         while chunk := await file.read(chunk_size):
                             total_size += len(chunk)
                             if total_size > max_file_size:
                                 tmp_file.close()
                                 os.unlink(tmp_file_path)
-                                failed_files.append({"filename": file.filename, "error": f"图片文件过大(最大{MAX_IMAGE_SIZE_MB}MB)"})
+                                failed_files.append({"filename": file.filename, "error": f"图片文件过大(最大{runtime_config.max_image_size_mb}MB)"})
                                 tmp_file_path = None
                                 break
                             tmp_file.write(chunk)
@@ -2476,14 +2770,14 @@ async def submit_batch_tasks(files: list[UploadFile], request: Request):
 
                         chunk_size = 1024 * 1024  # 1MB每块
                         total_size = 0
-                        max_file_size = MAX_PDF_SIZE_MB * 1024 * 1024
+                        max_file_size = runtime_config.max_pdf_size_mb * 1024 * 1024
 
                         while chunk := await file.read(chunk_size):
                             total_size += len(chunk)
                             if total_size > max_file_size:
                                 tmp_file.close()
                                 os.unlink(tmp_file_path)
-                                failed_files.append({"filename": file.filename, "error": f"PDF文件过大(最大{MAX_PDF_SIZE_MB}MB)"})
+                                failed_files.append({"filename": file.filename, "error": f"PDF文件过大(最大{runtime_config.max_pdf_size_mb}MB)"})
                                 tmp_file_path = None
                                 break
                             tmp_file.write(chunk)
@@ -2496,9 +2790,9 @@ async def submit_batch_tasks(files: list[UploadFile], request: Request):
                                 page_count, file_size_mb = check_pdf_info(pdf_bytes)
                                 pdf_bytes = None  # 立即释放
 
-                            if page_count > MAX_PDF_PAGES:
+                            if page_count > runtime_config.max_pdf_pages:
                                 os.unlink(tmp_file_path)
-                                failed_files.append({"filename": file.filename, "error": f"PDF页数过多(最大{MAX_PDF_PAGES}页)"})
+                                failed_files.append({"filename": file.filename, "error": f"PDF页数过多(最大{runtime_config.max_pdf_pages}页)"})
                                 tmp_file_path = None
                             else:
                                 task_id = await task_manager.submit_pdf_task_from_file(

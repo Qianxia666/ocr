@@ -268,7 +268,7 @@ class UserModel:
             logger.error(f"设置配额失败 {user_id}: {e}")
             return False
 
-    async def get_all_users(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_all_users(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取所有用户列表"""
         try:
             async with self.db_manager.get_connection() as db:
@@ -277,8 +277,9 @@ class UserModel:
                     SELECT id, username, is_admin, is_disabled, total_pages, used_pages,
                            created_at, last_login
                     FROM users
-                    ORDER BY created_at DESC LIMIT ?
-                """, (limit,)) as cursor:
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                """, (limit, offset)) as cursor:
                     rows = await cursor.fetchall()
                     users = []
                     for row in rows:
@@ -495,7 +496,7 @@ class RedemptionCodeModel:
             logger.error(f"激活兑换码失败 {code}: {e}")
             return False
 
-    async def get_all_codes(self, created_by: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_all_codes(self, created_by: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取所有兑换码列表"""
         try:
             async with self.db_manager.get_connection() as db:
@@ -505,15 +506,17 @@ class RedemptionCodeModel:
                     query = """
                         SELECT * FROM redemption_codes
                         WHERE created_by = ?
-                        ORDER BY created_at DESC LIMIT ?
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
                     """
-                    params = (created_by, limit)
+                    params = (created_by, limit, offset)
                 else:
                     query = """
                         SELECT * FROM redemption_codes
-                        ORDER BY created_at DESC LIMIT ?
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
                     """
-                    params = (limit,)
+                    params = (limit, offset)
 
                 async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
@@ -527,6 +530,17 @@ class RedemptionCodeModel:
         except Exception as e:
             logger.error(f"获取兑换码列表失败: {e}")
             return []
+
+    async def count_codes(self) -> int:
+        """统计兑换码总数"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                async with db.execute("SELECT COUNT(*) FROM redemption_codes") as cursor:
+                    row = await cursor.fetchone()
+                    return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"统计兑换码数失败: {e}")
+            return 0
 
     async def get_redemption_history(self, user_id: Optional[str] = None, code: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         """获取兑换历史"""
@@ -753,7 +767,7 @@ class RegistrationTokenModel:
             logger.error(f"激活注册令牌失败: {e}")
             return False
 
-    async def get_all_tokens(self, created_by: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_all_tokens(self, created_by: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取所有注册令牌列表"""
         try:
             async with self.db_manager.get_connection() as db:
@@ -763,15 +777,17 @@ class RegistrationTokenModel:
                     query = """
                         SELECT * FROM registration_tokens
                         WHERE created_by = ?
-                        ORDER BY created_at DESC LIMIT ?
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
                     """
-                    params = (created_by, limit)
+                    params = (created_by, limit, offset)
                 else:
                     query = """
                         SELECT * FROM registration_tokens
-                        ORDER BY created_at DESC LIMIT ?
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
                     """
-                    params = (limit,)
+                    params = (limit, offset)
 
                 async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
@@ -785,6 +801,17 @@ class RegistrationTokenModel:
         except Exception as e:
             logger.error(f"获取注册令牌列表失败: {e}")
             return []
+
+    async def count_tokens(self) -> int:
+        """统计注册令牌总数"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                async with db.execute("SELECT COUNT(*) FROM registration_tokens") as cursor:
+                    row = await cursor.fetchone()
+                    return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"统计注册令牌数失败: {e}")
+            return 0
 
     async def delete_token(self, token: str) -> bool:
         """删除注册令牌"""

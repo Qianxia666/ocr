@@ -100,10 +100,10 @@
   </header>
 
   <!-- 主内容 -->
-  <div class="flex-1 overflow-hidden p-4">
-    <div class="max-w-7xl mx-auto h-full flex flex-col">
+  <div class="flex-1 overflow-y-auto p-4">
+    <div class="max-w-7xl mx-auto">
       <!-- 系统设置卡片 -->
-      <div class="bg-white rounded-xl shadow-md p-6">
+      <div class="bg-white rounded-xl shadow-md p-6 mb-6">
         <h2 class="text-2xl font-bold text-gray-800 mb-6">功能开关</h2>
 
         <div class="space-y-4">
@@ -120,6 +120,125 @@
               <span id="registration-status" class="text-sm font-semibold text-gray-600 min-w-[4rem]">-</span>
             </div>
           </div>
+
+          <!-- IP滥用检测功能 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <!-- 标题和开关 -->
+            <div class="flex items-center justify-between mb-6">
+              <div>
+                <h3 class="text-lg font-semibold text-gray-800">IP滥用检测</h3>
+                <p class="text-sm text-gray-600 mt-1">自动检测并封停同一IP的多账户滥用行为</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <button id="ip-abuse-toggle" onclick="toggleIpAbuseDetection()" class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                  <span id="ip-abuse-slider" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
+                </button>
+                <span id="ip-abuse-status" class="text-sm font-semibold text-gray-600 min-w-[4rem]">-</span>
+              </div>
+            </div>
+
+            <!-- 配置参数 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">账户数阈值 (M)</label>
+                <input id="ip-abuse-threshold" type="number" min="2" max="100" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                <p class="text-xs text-gray-500 mt-1">同一IP使用的账户数达到此值时触发封停</p>
+              </div>
+
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">天数窗口 (N)</label>
+                <input id="ip-abuse-days" type="number" min="1" max="365" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                <p class="text-xs text-gray-500 mt-1">在过去N天内的OCR活动会被计入检测</p>
+              </div>
+            </div>
+
+            <!-- 说明信息 -->
+            <div class="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+              <p class="text-xs text-blue-800 mb-1"><strong>检测机制：</strong>系统每5分钟自动检测一次，当发现同一IP在N天内被M个不同账户用于OCR时，将自动封停这M个账户。</p>
+              <p class="text-xs text-orange-700"><strong>注意：</strong>配置在运行时可修改，但应用重启后会恢复为.env文件中的默认值。</p>
+            </div>
+
+            <!-- 保存按钮 -->
+            <div class="flex justify-end">
+              <button onclick="saveIpAbuseSettings()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                保存设置
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 运行时配置卡片 -->
+      <div class="bg-white rounded-xl shadow-md p-6">
+        <div class="mb-6">
+          <h2 class="text-2xl font-bold text-gray-800">运行时配置</h2>
+          <p class="text-sm text-gray-500 mt-1">配置仅保存在内存中，重启后恢复默认值</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <!-- 并发配置 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">通用并发数</label>
+            <input id="concurrency" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">用于向后兼容</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">最大重试次数</label>
+            <input id="max_retries" type="number" min="1" max="20" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">OCR失败后的重试次数</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">图片OCR并发数</label>
+            <input id="image_concurrency" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">同时处理的图片数量</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">PDF OCR并发数</label>
+            <input id="pdf_concurrency" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">同时处理的PDF数量</p>
+          </div>
+
+          <!-- PDF配置 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">PDF DPI</label>
+            <input id="pdf_dpi" type="number" min="72" max="600" step="1" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">PDF转图片的分辨率</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">批处理大小</label>
+            <input id="batch_size" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">批量处理的数量</p>
+          </div>
+
+          <!-- 文件限制 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">图片最大大小(MB)</label>
+            <input id="max_image_size_mb" type="number" min="1" max="500" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">单个图片文件大小限制</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">PDF最大大小(MB)</label>
+            <input id="max_pdf_size_mb" type="number" min="1" max="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">单个PDF文件大小限制</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">PDF最大页数</label>
+            <input id="max_pdf_pages" type="number" min="1" max="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">单个PDF文件页数限制</p>
+          </div>
+        </div>
+
+        <!-- 保存按钮 -->
+        <div class="flex justify-end">
+          <button onclick="saveRuntimeConfig()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+            保存配置
+          </button>
         </div>
       </div>
     </div>
@@ -129,10 +248,14 @@
     const baseUrl = window.location.origin;
     const passwordPrefix = "{{ password_prefix }}";
 
+    // 获取当前路径的前缀部分（处理反向代理等情况）
+    const pathPrefix = window.location.pathname.split('/admin/settings')[0];
+    const apiBase = pathPrefix || passwordPrefix;
+
     // 加载注册开关状态
     async function loadRegistrationStatus() {
       try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/settings/registration`);
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/registration`);
         const data = await response.json();
 
         if (data.status === "success") {
@@ -172,12 +295,12 @@
     async function toggleRegistration() {
       try {
         // 获取当前状态
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/settings/registration`);
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/registration`);
         const data = await response.json();
         const currentStatus = data.registration_enabled;
 
         // 切换状态
-        const toggleResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/settings/registration`, {
+        const toggleResponse = await fetch(`${baseUrl}${apiBase}/api/admin/settings/registration`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
@@ -219,9 +342,180 @@
       e.stopPropagation();
     });
 
+    // 加载运行时配置
+    async function loadRuntimeConfig() {
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/config`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          const config = data.config;
+          document.getElementById('concurrency').value = config.concurrency;
+          document.getElementById('max_retries').value = config.max_retries;
+          document.getElementById('image_concurrency').value = config.image_concurrency;
+          document.getElementById('pdf_concurrency').value = config.pdf_concurrency;
+          document.getElementById('pdf_dpi').value = config.pdf_dpi;
+          document.getElementById('batch_size').value = config.batch_size;
+          document.getElementById('max_image_size_mb').value = config.max_image_size_mb;
+          document.getElementById('max_pdf_size_mb').value = config.max_pdf_size_mb;
+          document.getElementById('max_pdf_pages').value = config.max_pdf_pages;
+        }
+      } catch (err) {
+        console.error("加载运行时配置失败:", err);
+      }
+    }
+
+    // 保存运行时配置
+    async function saveRuntimeConfig() {
+      try {
+        const config = {
+          concurrency: parseInt(document.getElementById('concurrency').value),
+          max_retries: parseInt(document.getElementById('max_retries').value),
+          image_concurrency: parseInt(document.getElementById('image_concurrency').value),
+          pdf_concurrency: parseInt(document.getElementById('pdf_concurrency').value),
+          pdf_dpi: parseInt(document.getElementById('pdf_dpi').value),
+          batch_size: parseInt(document.getElementById('batch_size').value),
+          max_image_size_mb: parseInt(document.getElementById('max_image_size_mb').value),
+          max_pdf_size_mb: parseInt(document.getElementById('max_pdf_size_mb').value),
+          max_pdf_pages: parseInt(document.getElementById('max_pdf_pages').value)
+        };
+
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/config`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(config)
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+        } else {
+          alert("保存失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("保存运行时配置失败:", err);
+        alert("保存失败，请重试");
+      }
+    }
+
+    // 加载IP滥用检测配置
+    async function loadIpAbuseSettings() {
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/ip-abuse`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          updateIpAbuseToggle(data.enabled);
+          document.getElementById('ip-abuse-threshold').value = data.threshold;
+          document.getElementById('ip-abuse-days').value = data.days;
+        }
+      } catch (err) {
+        console.error("加载IP滥用检测配置失败:", err);
+      }
+    }
+
+    // 更新IP滥用检测开关UI
+    function updateIpAbuseToggle(enabled) {
+      const toggle = document.getElementById('ip-abuse-toggle');
+      const slider = document.getElementById('ip-abuse-slider');
+      const status = document.getElementById('ip-abuse-status');
+
+      if (enabled) {
+        toggle.classList.add('bg-blue-500');
+        toggle.classList.remove('bg-gray-300');
+        slider.classList.add('translate-x-5');
+        slider.classList.remove('translate-x-1');
+        status.textContent = '已启用';
+        status.classList.add('text-blue-600');
+        status.classList.remove('text-gray-600');
+      } else {
+        toggle.classList.add('bg-gray-300');
+        toggle.classList.remove('bg-blue-500');
+        slider.classList.add('translate-x-1');
+        slider.classList.remove('translate-x-5');
+        status.textContent = '已禁用';
+        status.classList.add('text-gray-600');
+        status.classList.remove('text-blue-600');
+      }
+    }
+
+    // 切换IP滥用检测开关
+    async function toggleIpAbuseDetection() {
+      try {
+        // 获取当前状态
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/ip-abuse`);
+        const data = await response.json();
+        const currentEnabled = data.enabled;
+
+        // 切换状态
+        const toggleResponse = await fetch(`${baseUrl}${apiBase}/api/admin/settings/ip-abuse`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            enabled: !currentEnabled
+          })
+        });
+
+        const toggleData = await toggleResponse.json();
+
+        if (toggleData.status === "success") {
+          updateIpAbuseToggle(toggleData.enabled);
+          alert(toggleData.message);
+        } else {
+          alert("操作失败: " + (toggleData.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("切换IP滥用检测状态失败:", err);
+        alert("操作失败，请重试");
+      }
+    }
+
+    // 保存IP滥用检测设置
+    async function saveIpAbuseSettings() {
+      try {
+        const threshold = parseInt(document.getElementById('ip-abuse-threshold').value);
+        const days = parseInt(document.getElementById('ip-abuse-days').value);
+
+        if (threshold < 2) {
+          alert("账户数阈值必须至少为2");
+          return;
+        }
+
+        if (days < 1) {
+          alert("天数窗口必须至少为1");
+          return;
+        }
+
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/ip-abuse`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            threshold: threshold,
+            days: days
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          // 重新加载配置
+          await loadIpAbuseSettings();
+        } else {
+          alert("保存失败: " + (data.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("保存IP滥用检测配置失败:", err);
+        alert("保存失败，请重试");
+      }
+    }
+
     // 页面加载时
     window.addEventListener('load', () => {
       loadRegistrationStatus();
+      loadRuntimeConfig();
+      loadIpAbuseSettings();
     });
   </script>
 </body>

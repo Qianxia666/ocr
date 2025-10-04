@@ -129,11 +129,43 @@ class DatabaseManager:
                 )
             """)
 
+            # 创建OCR IP跟踪表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS ocr_ip_tracking (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    client_ip TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+
             # 初始化系统设置（如果不存在）
             await db.execute("""
                 INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
                 VALUES ('registration_enabled', 'true', '是否允许新用户注册', ?)
             """, (datetime.now(timezone.utc).isoformat(),))
+
+            # 初始化IP滥用检测设置（从环境变量读取默认值）
+            import os
+            ip_abuse_enabled = os.getenv('IP_ABUSE_DETECTION_ENABLED', 'true')
+            ip_abuse_threshold = os.getenv('IP_ABUSE_ACCOUNTS_THRESHOLD', '3')
+            ip_abuse_days = os.getenv('IP_ABUSE_DAYS_WINDOW', '7')
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('ip_abuse_detection_enabled', ?, 'IP滥用检测开关', ?)
+            """, (ip_abuse_enabled, datetime.now(timezone.utc).isoformat()))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('ip_abuse_accounts_threshold', ?, '同一IP账户数阈值', ?)
+            """, (ip_abuse_threshold, datetime.now(timezone.utc).isoformat()))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('ip_abuse_days_window', ?, 'IP滥用检测天数窗口', ?)
+            """, (ip_abuse_days, datetime.now(timezone.utc).isoformat()))
 
             # 创建任务表
             await db.execute("""
@@ -251,6 +283,11 @@ class DatabaseManager:
             # 注册令牌使用记录表索引
             await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_token_history_user_id ON registration_token_history (user_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_token_history_token ON registration_token_history (token)")
+
+            # OCR IP跟踪表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_ip_tracking_user_id ON ocr_ip_tracking (user_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_ip_tracking_client_ip ON ocr_ip_tracking (client_ip)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_ip_tracking_created_at ON ocr_ip_tracking (created_at)")
 
             # 检查并迁移旧数据：如果tasks表存在但没有user_id列，则添加
             try:
@@ -507,7 +544,7 @@ class TaskModel:
             logger.error(f"获取最近任务列表失败: {e}")
             return []
 
-    async def get_all_tasks_with_users(self, limit: int = 200, user_id_filter: Optional[str] = None, search_query: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_all_tasks_with_users(self, limit: int = 100, offset: int = 0, user_id_filter: Optional[str] = None, search_query: Optional[str] = None) -> List[Dict[str, Any]]:
         """获取所有任务列表（包含用户信息），供管理员使用"""
         try:
             async with self.db_manager.get_connection() as db:
@@ -568,9 +605,10 @@ class TaskModel:
                     FROM tasks t
                     LEFT JOIN users u ON t.user_id = u.id
                     {where_clause}
-                    ORDER BY t.created_at DESC LIMIT ?
+                    ORDER BY t.created_at DESC
+                    LIMIT ? OFFSET ?
                 """
-                params.append(limit)
+                params.extend([limit, offset])
 
                 async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
@@ -578,6 +616,36 @@ class TaskModel:
         except Exception as e:
             logger.error(f"获取任务列表（含用户信息）失败: {e}")
             return []
+
+    async def count_tasks(self, user_id_filter: Optional[str] = None, search_query: Optional[str] = None) -> int:
+        """统计任务总数（支持筛选）"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                # 构建查询条件
+                query_parts = []
+                params = []
+
+                if user_id_filter:
+                    query_parts.append("user_id = ?")
+                    params.append(user_id_filter)
+
+                if search_query:
+                    search_pattern = f"%{search_query}%"
+                    query_parts.append("(file_name LIKE ? OR id LIKE ? OR user_id LIKE ?)")
+                    params.extend([search_pattern, search_pattern, search_pattern])
+
+                where_clause = ""
+                if query_parts:
+                    where_clause = "WHERE " + " AND ".join(query_parts)
+
+                query = f"SELECT COUNT(*) FROM tasks {where_clause}"
+
+                async with db.execute(query, params) as cursor:
+                    row = await cursor.fetchone()
+                    return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"统计任务数失败: {e}")
+            return 0
 
     async def get_task_stats_by_user(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         """获取任务统计信息，可选按用户筛选"""
@@ -929,12 +997,270 @@ class PageBatchModel:
             logger.error(f"获取批次信息失败 {batch_id}: {e}")
             return None
 
+class IPTrackingModel:
+    """IP跟踪模型，提供OCR IP滥用检测相关的数据库操作"""
+
+    def __init__(self, db_manager: DatabaseManager):
+        self.db_manager = db_manager
+
+    async def record_ocr_activity(self, user_id: str, client_ip: str) -> bool:
+        """记录用户OCR活动的IP地址"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                await db.execute("""
+                    INSERT INTO ocr_ip_tracking (user_id, client_ip, created_at)
+                    VALUES (?, ?, ?)
+                """, (user_id, client_ip, datetime.now(timezone.utc).isoformat()))
+                await db.commit()
+                logger.debug(f"记录OCR活动: 用户 {user_id}, IP {client_ip}")
+                return True
+        except Exception as e:
+            logger.error(f"记录OCR活动失败 {user_id}, {client_ip}: {e}")
+            return False
+
+    async def get_settings(self) -> Dict[str, Any]:
+        """获取IP滥用检测配置"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("""
+                    SELECT key, value FROM system_settings
+                    WHERE key IN ('ip_abuse_detection_enabled', 'ip_abuse_accounts_threshold', 'ip_abuse_days_window')
+                """) as cursor:
+                    rows = await cursor.fetchall()
+                    settings = {}
+                    for row in rows:
+                        key = row[0]
+                        value = row[1]
+                        if key == 'ip_abuse_detection_enabled':
+                            settings['enabled'] = value.lower() == 'true'
+                        elif key == 'ip_abuse_accounts_threshold':
+                            settings['threshold'] = int(value)
+                        elif key == 'ip_abuse_days_window':
+                            settings['days'] = int(value)
+                    return settings
+        except Exception as e:
+            logger.error(f"获取IP滥用检测配置失败: {e}")
+            return {'enabled': True, 'threshold': 3, 'days': 7}
+
+    async def update_settings(self, enabled: Optional[bool] = None,
+                            threshold: Optional[int] = None,
+                            days: Optional[int] = None) -> bool:
+        """更新IP滥用检测配置"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                now = datetime.now(timezone.utc).isoformat()
+
+                if enabled is not None:
+                    await db.execute("""
+                        UPDATE system_settings
+                        SET value = ?, updated_at = ?
+                        WHERE key = 'ip_abuse_detection_enabled'
+                    """, ('true' if enabled else 'false', now))
+
+                if threshold is not None:
+                    await db.execute("""
+                        UPDATE system_settings
+                        SET value = ?, updated_at = ?
+                        WHERE key = 'ip_abuse_accounts_threshold'
+                    """, (str(threshold), now))
+
+                if days is not None:
+                    await db.execute("""
+                        UPDATE system_settings
+                        SET value = ?, updated_at = ?
+                        WHERE key = 'ip_abuse_days_window'
+                    """, (str(days), now))
+
+                await db.commit()
+                logger.info(f"更新IP滥用检测配置: enabled={enabled}, threshold={threshold}, days={days}")
+                return True
+        except Exception as e:
+            logger.error(f"更新IP滥用检测配置失败: {e}")
+            return False
+
+    async def check_and_suspend_abuse(self, user_model) -> Dict[str, Any]:
+        """检测IP滥用并自动封停账户"""
+        try:
+            settings = await self.get_settings()
+
+            # 如果检测未启用，直接返回
+            if not settings.get('enabled', True):
+                logger.debug("IP滥用检测已禁用，跳过检查")
+                return {'status': 'disabled', 'suspended_count': 0}
+
+            threshold = settings.get('threshold', 3)
+            days = settings.get('days', 7)
+
+            # 计算时间窗口
+            from datetime import timedelta
+            time_window = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+
+                # 查询在时间窗口内，同一IP使用的不同用户数量（仅统计未被禁用的用户）
+                async with db.execute("""
+                    SELECT t.client_ip,
+                           COUNT(DISTINCT t.user_id) as user_count,
+                           GROUP_CONCAT(DISTINCT t.user_id) as user_ids
+                    FROM ocr_ip_tracking t
+                    INNER JOIN users u ON t.user_id = u.id
+                    WHERE t.created_at >= ?
+                      AND u.is_disabled = 0
+                    GROUP BY t.client_ip
+                    HAVING user_count >= ?
+                """, (time_window, threshold)) as cursor:
+                    abuse_ips = await cursor.fetchall()
+
+                suspended_users = []
+
+                for row in abuse_ips:
+                    client_ip = row[0]
+                    user_count = row[1]
+                    user_ids_str = row[2]
+                    user_ids = user_ids_str.split(',') if user_ids_str else []
+
+                    logger.warning(f"检测到IP滥用: IP {client_ip} 在 {days} 天内被 {user_count} 个账户使用")
+
+                    # 先检查该IP是否有管理员账户（直接查询，避免调用user_model）
+                    has_admin = False
+                    for user_id in user_ids:
+                        try:
+                            async with db.execute(
+                                "SELECT is_admin FROM users WHERE id = ?", (user_id,)
+                            ) as cursor:
+                                user_row = await cursor.fetchone()
+                                if user_row and user_row[0]:
+                                    has_admin = True
+                                    logger.info(f"IP {client_ip} 包含管理员账户 {user_id}，跳过该IP的所有检测")
+                                    break
+                        except Exception as e:
+                            logger.error(f"检查用户是否为管理员失败 {user_id}: {e}")
+
+                    # 如果该IP有管理员，跳过该IP的所有账户
+                    if has_admin:
+                        continue
+
+                    # 封停所有相关账户（直接操作数据库，避免调用user_model）
+                    for user_id in user_ids:
+                        try:
+                            # 检查用户是否存在且未被禁用
+                            async with db.execute(
+                                "SELECT username, is_disabled FROM users WHERE id = ?", (user_id,)
+                            ) as cursor:
+                                user_row = await cursor.fetchone()
+
+                                if not user_row:
+                                    continue
+
+                                username = user_row[0]
+                                is_disabled = user_row[1]
+
+                                # 跳过已禁用的账户
+                                if is_disabled:
+                                    continue
+
+                            # 封停账户
+                            await db.execute(
+                                "UPDATE users SET is_disabled = 1 WHERE id = ?", (user_id,)
+                            )
+
+                            suspended_users.append({
+                                'user_id': user_id,
+                                'username': username,
+                                'ip': client_ip,
+                                'reason': f'IP滥用检测: 同IP {user_count} 个账户'
+                            })
+                            logger.info(f"自动封停用户 {username} ({user_id}) (IP: {client_ip})")
+
+                        except Exception as e:
+                            logger.error(f"封停用户失败 {user_id}: {e}")
+
+                # 提交所有更改
+                await db.commit()
+
+                return {
+                    'status': 'success',
+                    'suspended_count': len(suspended_users),
+                    'suspended_users': suspended_users,
+                    'abuse_ips_count': len(abuse_ips)
+                }
+
+        except Exception as e:
+            logger.error(f"IP滥用检测失败: {e}")
+            return {'status': 'error', 'message': str(e), 'suspended_count': 0}
+
+    async def get_suspicious_ips(self, days: int = 7, threshold: int = 3) -> List[Dict[str, Any]]:
+        """获取可疑IP列表"""
+        try:
+            from datetime import timedelta
+            time_window = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("""
+                    SELECT
+                        client_ip,
+                        COUNT(DISTINCT user_id) as user_count,
+                        COUNT(*) as activity_count,
+                        MIN(created_at) as first_seen,
+                        MAX(created_at) as last_seen
+                    FROM ocr_ip_tracking
+                    WHERE created_at >= ?
+                    GROUP BY client_ip
+                    HAVING user_count >= ?
+                    ORDER BY user_count DESC, activity_count DESC
+                """, (time_window, threshold)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"获取可疑IP列表失败: {e}")
+            return []
+
+    async def reset_to_env_defaults(self) -> bool:
+        """重置配置为环境变量中的默认值（应用启动时调用）"""
+        try:
+            import os
+            ip_abuse_enabled = os.getenv('IP_ABUSE_DETECTION_ENABLED', 'true')
+            ip_abuse_threshold = os.getenv('IP_ABUSE_ACCOUNTS_THRESHOLD', '3')
+            ip_abuse_days = os.getenv('IP_ABUSE_DAYS_WINDOW', '7')
+
+            async with self.db_manager.get_connection() as db:
+                now = datetime.now(timezone.utc).isoformat()
+
+                await db.execute("""
+                    UPDATE system_settings
+                    SET value = ?, updated_at = ?
+                    WHERE key = 'ip_abuse_detection_enabled'
+                """, (ip_abuse_enabled, now))
+
+                await db.execute("""
+                    UPDATE system_settings
+                    SET value = ?, updated_at = ?
+                    WHERE key = 'ip_abuse_accounts_threshold'
+                """, (ip_abuse_threshold, now))
+
+                await db.execute("""
+                    UPDATE system_settings
+                    SET value = ?, updated_at = ?
+                    WHERE key = 'ip_abuse_days_window'
+                """, (ip_abuse_days, now))
+
+                await db.commit()
+                logger.info(f"IP滥用检测配置已重置为ENV默认值: enabled={ip_abuse_enabled}, threshold={ip_abuse_threshold}, days={ip_abuse_days}")
+                return True
+        except Exception as e:
+            logger.error(f"重置IP滥用检测配置失败: {e}")
+            return False
+
 # 全局数据库管理器实例
 db_manager = DatabaseManager()
 task_model = TaskModel(db_manager)
 page_result_model = PageResultModel(db_manager)
 task_progress_model = TaskProgressModel(db_manager)
 page_batch_model = PageBatchModel(db_manager)
+ip_tracking_model = IPTrackingModel(db_manager)
 
 async def init_database():
     """初始化数据库"""

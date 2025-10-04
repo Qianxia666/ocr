@@ -83,6 +83,19 @@
       height: 1.25rem;
       flex-shrink: 0;
     }
+
+    /* 复选框和选中样式 */
+    .user-row {
+      transition: all 0.2s;
+    }
+    .user-row.selected {
+      background-color: #dbeafe !important;
+    }
+    .user-checkbox {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body class="h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
@@ -136,6 +149,29 @@
         </div>
       </div>
 
+      <!-- 批量操作按钮 -->
+      <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+        <div class="flex gap-2 flex-wrap">
+          <button id="select-all-btn" onclick="selectAllUsers()" class="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors hidden">
+            全选
+          </button>
+          <div id="batch-actions" class="hidden flex gap-2 flex-wrap">
+            <button onclick="batchToggleUserStatus(false)" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+              批量启用 (<span id="selected-count">0</span>)
+            </button>
+            <button onclick="batchToggleUserStatus(true)" class="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
+              批量禁用 (<span id="selected-count-2">0</span>)
+            </button>
+            <button onclick="batchAdjustQuota()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+              批量调整配额 (<span id="selected-count-3">0</span>)
+            </button>
+            <button onclick="clearSelection()" class="px-6 py-2 bg-gray-400 hover:bg-gray-500 text-white rounded-lg transition-colors">
+              取消选择
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- 筛选器 -->
       <div class="bg-white rounded-lg shadow-md p-4 mb-4">
         <div class="flex flex-wrap gap-4 items-end">
@@ -155,6 +191,9 @@
           <button onclick="loadUsers()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
             应用筛选
           </button>
+          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+            加载数据
+          </button>
         </div>
       </div>
 
@@ -164,6 +203,7 @@
           <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50 sticky top-0 z-10">
               <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">选择</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">用户名</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">用户ID</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">配额</th>
@@ -174,7 +214,7 @@
             </thead>
             <tbody id="users-table" class="bg-white divide-y divide-gray-200">
               <tr>
-                <td colspan="6" class="px-6 py-4 text-center text-gray-500">加载中...</td>
+                <td colspan="7" class="px-6 py-4 text-center text-gray-500">请点击"加载数据"按钮加载用户列表</td>
               </tr>
             </tbody>
           </table>
@@ -185,8 +225,12 @@
             <span class="text-sm text-gray-700">每页显示:</span>
             <select id="page-size" class="border border-gray-300 rounded px-2 py-1 text-sm" onchange="changePageSize()">
               <option value="20">20</option>
-              <option value="50" selected>50</option>
-              <option value="100">100</option>
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+              <option value="99999">全部</option>
             </select>
           </div>
           <div class="flex items-center gap-2">
@@ -204,20 +248,10 @@
 
     // 分页相关变量
     let currentPage = 1;
-    let pageSize = 50;
+    let pageSize = 100;
     let totalUsers = 0;
-    let allUsersData = [];
     const userDetailState = new Map();
-
-    function getUserCreatedTimestamp(user) {
-      const createdAt = user.created_at || user.createdAt || user.created_time || user.createdTime || user.created;
-      const timestamp = createdAt ? new Date(createdAt).getTime() : NaN;
-      return Number.isFinite(timestamp) ? timestamp : 0;
-    }
-
-    function sortUsersByCreatedAtDesc(users) {
-      return [...users].sort((a, b) => getUserCreatedTimestamp(b) - getUserCreatedTimestamp(a));
-    }
+    let selectedUsers = new Set(); // 存储选中的用户ID
 
     // 加载统计信息
     async function loadStats() {
@@ -252,23 +286,21 @@
     // 加载用户列表
     async function loadUsers() {
       const statusFilter = document.getElementById('status-filter').value;
+      const searchQuery = document.getElementById('search-input').value;
 
       try {
-        let url = `${passwordPrefix}/api/admin/users/list?limit=1000`;
+        let url = `${passwordPrefix}/api/admin/users/list?page=${currentPage}&page_size=${pageSize}`;
+        if (searchQuery) {
+          url += `&search=${encodeURIComponent(searchQuery)}`;
+        }
 
         const response = await fetch(url);
         const data = await response.json();
 
-        if (data.status === 'success' && data.data) {
-          allUsersData = sortUsersByCreatedAtDesc(data.data);
-          const existingIds = new Set(allUsersData.map(user => user.id));
-          Array.from(userDetailState.keys()).forEach(id => {
-            if (!existingIds.has(id)) {
-              userDetailState.delete(id);
-            }
-          });
-          currentPage = 1;
-          displayUsers(allUsersData, statusFilter);
+        if (data.status === 'success') {
+          totalUsers = data.total || 0;
+          displayUsers(data.data || [], statusFilter);
+          updatePaginationUI();
           loadStats();
         } else {
           document.getElementById('users-table').innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
@@ -282,49 +314,33 @@
     // 显示用户列表
     function displayUsers(users, statusFilter = '') {
       const tbody = document.getElementById('users-table');
-      const searchQuery = document.getElementById('search-input').value.toLowerCase();
 
+      // 前端状态过滤（可选，也可以移到后端）
       let filteredUsers = users;
-
-      // 搜索过滤
-      if (searchQuery) {
-        filteredUsers = filteredUsers.filter(user =>
-          user.username.toLowerCase().includes(searchQuery) ||
-          user.id.toLowerCase().includes(searchQuery)
-        );
-      }
-
-      // 状态过滤
       if (statusFilter === 'active') {
-        filteredUsers = filteredUsers.filter(user => !user.is_disabled && !user.is_admin);
+        filteredUsers = users.filter(user => !user.is_disabled && !user.is_admin);
       } else if (statusFilter === 'disabled') {
-        filteredUsers = filteredUsers.filter(user => user.is_disabled);
+        filteredUsers = users.filter(user => user.is_disabled);
       } else if (statusFilter === 'admin') {
-        filteredUsers = filteredUsers.filter(user => user.is_admin);
+        filteredUsers = users.filter(user => user.is_admin);
       }
-
-      totalUsers = filteredUsers.length;
 
       if (filteredUsers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-gray-500">暂无用户</td></tr>';
-        updatePaginationUI();
+        tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-gray-500">暂无用户</td></tr>';
+        updateSelectionUI();
         return;
       }
 
-      const startIndex = (currentPage - 1) * pageSize;
-      const endIndex = Math.min(startIndex + pageSize, filteredUsers.length);
-      const currentPageUsers = filteredUsers.slice(startIndex, endIndex);
-
       const fragment = document.createDocumentFragment();
 
-      currentPageUsers.forEach(user => {
+      filteredUsers.forEach(user => {
         fragment.appendChild(createUserRow(user));
         fragment.appendChild(createUserDetailRow(user));
       });
 
       tbody.innerHTML = '';
       tbody.appendChild(fragment);
-      updatePaginationUI();
+      updateSelectionUI();
     }
 
     // 更新分页UI
@@ -346,8 +362,7 @@
 
       if (newPage >= 1 && newPage <= totalPages) {
         currentPage = newPage;
-        const status = document.getElementById('status-filter').value;
-        displayUsers(allUsersData, status);
+        loadUsers(); // 重新从后端加载
       }
     }
 
@@ -355,16 +370,23 @@
     function changePageSize() {
       pageSize = parseInt(document.getElementById('page-size').value);
       currentPage = 1;
-      const status = document.getElementById('status-filter').value;
-      displayUsers(allUsersData, status);
+      loadUsers(); // 重新从后端加载
     }
 
     // 创建用户行元素
     function createUserRow(user) {
       const tr = document.createElement('tr');
-      tr.className = 'hover:bg-blue-50 cursor-pointer';
+      tr.className = 'user-row hover:bg-blue-50 cursor-pointer';
+      if (selectedUsers.has(user.id)) {
+        tr.classList.add('selected');
+      }
       tr.setAttribute('data-user-id', user.id);
-      tr.onclick = () => toggleUserDetails(user.id);
+      tr.onclick = (e) => {
+        // 如果点击的是复选框，不触发行点击
+        if (e.target.type !== 'checkbox') {
+          toggleUserDetails(user.id);
+        }
+      };
 
       tr.innerHTML = createUserRowHtml(user);
       return tr;
@@ -374,6 +396,7 @@
     function createUserRowHtml(user) {
       const createdAt = formatDateTime(user.created_at);
       const detailLabel = userDetailState.get(user.id) ? '收起详情' : '展开详情';
+      const isChecked = selectedUsers.has(user.id);
 
       let statusBadges = '';
       if (user.is_admin) {
@@ -387,6 +410,9 @@
       }
 
       return `
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+          <input type="checkbox" class="user-checkbox" ${isChecked ? 'checked' : ''} onchange="toggleUserSelection('${user.id}', this)" onclick="event.stopPropagation()">
+        </td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${user.username}</td>
         <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600" title="${user.id}">${user.id.substring(0, 8)}...</td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${user.remaining_pages.toLocaleString()}/${user.total_pages.toLocaleString()}</td>
@@ -410,7 +436,7 @@
       detailRow.className = isExpanded ? 'bg-gray-50' : 'bg-gray-50 hidden';
 
       const detailCell = document.createElement("td");
-      detailCell.colSpan = 6;
+      detailCell.colSpan = 7;
       detailCell.className = 'px-6 py-4 text-sm text-gray-600';
 
       detailCell.innerHTML = `
@@ -543,24 +569,184 @@
       }
     }
 
+    // 更新选择状态UI
+    function updateSelectionUI() {
+      const count = selectedUsers.size;
+      document.getElementById('selected-count').textContent = count;
+      document.getElementById('selected-count-2').textContent = count;
+      document.getElementById('selected-count-3').textContent = count;
+      document.getElementById('batch-actions').classList.toggle('hidden', count === 0);
+
+      // 更新全选按钮显示
+      const checkboxes = document.querySelectorAll('.user-checkbox');
+      const selectAllBtn = document.getElementById('select-all-btn');
+      selectAllBtn.classList.toggle('hidden', checkboxes.length === 0);
+    }
+
+    // 切换用户选择状态
+    function toggleUserSelection(userId, checkbox) {
+      const userRow = checkbox.closest('tr');
+      if (checkbox.checked) {
+        selectedUsers.add(userId);
+        userRow.classList.add('selected');
+      } else {
+        selectedUsers.delete(userId);
+        userRow.classList.remove('selected');
+      }
+      updateSelectionUI();
+    }
+
+    // 全选当前页的所有用户
+    function selectAllUsers() {
+      const checkboxes = document.querySelectorAll('.user-checkbox');
+      checkboxes.forEach(cb => {
+        if (!cb.checked) {
+          cb.checked = true;
+          const userRow = cb.closest('tr');
+          const userId = userRow.getAttribute('data-user-id');
+          selectedUsers.add(userId);
+          userRow.classList.add('selected');
+        }
+      });
+      updateSelectionUI();
+    }
+
+    // 清除选择
+    function clearSelection() {
+      selectedUsers.clear();
+      document.querySelectorAll('.user-checkbox').forEach(cb => {
+        cb.checked = false;
+      });
+      document.querySelectorAll('.user-row').forEach(row => {
+        row.classList.remove('selected');
+      });
+      updateSelectionUI();
+    }
+
+    // 批量切换用户状态（启用/禁用）
+    async function batchToggleUserStatus(disable) {
+      if (selectedUsers.size === 0) {
+        alert('请先选择要操作的用户');
+        return;
+      }
+
+      const action = disable ? "禁用" : "启用";
+      if (!confirm(`确定要${action}选中的 ${selectedUsers.size} 个用户吗？`)) {
+        return;
+      }
+
+      const users = Array.from(selectedUsers);
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const userId of users) {
+        try {
+          const endpoint = disable ? 'disable' : 'enable';
+          const response = await fetch(`${passwordPrefix}/api/admin/users/${userId}/${endpoint}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+          });
+
+          const data = await response.json();
+          if (data.status === 'success') {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (err) {
+          console.error(`${action}用户 ${userId} 失败:`, err);
+          failCount++;
+        }
+      }
+
+      alert(`${action}完成！\n成功: ${successCount}\n失败: ${failCount}`);
+      clearSelection();
+      loadUsers();
+    }
+
+    // 批量调整配额
+    async function batchAdjustQuota() {
+      if (selectedUsers.size === 0) {
+        alert('请先选择要调整配额的用户');
+        return;
+      }
+
+      const pages = prompt(`输入新的总配额页数（将应用到选中的 ${selectedUsers.size} 个用户）:`);
+      if (!pages || isNaN(pages) || parseInt(pages) < 0) {
+        alert("请输入有效的页数");
+        return;
+      }
+
+      if (!confirm(`确定要将选中的 ${selectedUsers.size} 个用户的总配额设置为 ${pages} 页吗？`)) {
+        return;
+      }
+
+      const users = Array.from(selectedUsers);
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const userId of users) {
+        try {
+          const response = await fetch(`${passwordPrefix}/api/admin/users/${userId}/quota`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              action: 'set',
+              pages: parseInt(pages)
+            })
+          });
+
+          const data = await response.json();
+          if (data.status === "success") {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (err) {
+          console.error(`调整用户 ${userId} 配额失败:`, err);
+          failCount++;
+        }
+      }
+
+      alert(`批量调整配额完成！\n成功: ${successCount}\n失败: ${failCount}`);
+      clearSelection();
+      loadUsers();
+    }
+
+    let autoRefreshInterval = null;
+    let hasLoadedData = false;
+
+    // 手动加载数据
+    function loadDataManually() {
+      if (!hasLoadedData) {
+        loadUsers();
+        loadStats();
+        hasLoadedData = true;
+
+        // 加载后启动自动刷新
+        autoRefreshInterval = setInterval(() => {
+          loadUsers();
+          loadStats();
+        }, 60000);
+
+        // 隐藏加载按钮
+        document.getElementById('load-data-btn').style.display = 'none';
+      }
+    }
+
     // 页面加载时初始化
     window.addEventListener('load', () => {
-      loadUsers();
-      loadStats();
+      // 不再自动加载数据，等待用户点击"加载数据"按钮
 
-      // 搜索框输入时实时过滤（使用较短的防抖时间）
+      // 搜索框输入时实时搜索（使用防抖）
       const searchInput = document.getElementById('search-input');
-      const debouncedFilter = debounce(() => {
-        const status = document.getElementById('status-filter').value;
-        currentPage = 1;
-        displayUsers(allUsersData, status);
-      }, 200);
-      searchInput.addEventListener('input', debouncedFilter);
-
-      // 每30秒自动刷新
-      setInterval(() => {
-        loadUsers();
-      }, 30000);
+      const debouncedSearch = debounce(() => {
+        if (hasLoadedData) {
+          currentPage = 1;
+          loadUsers(); // 重新从后端加载
+        }
+      }, 500);
+      searchInput.addEventListener('input', debouncedSearch);
     });
 
     // 菜单控制

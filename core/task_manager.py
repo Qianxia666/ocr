@@ -1217,6 +1217,19 @@ class TaskManager:
                 )
                 log.info(f"任务完成消息已发送 {task_item.task_id}")
 
+            # 7. 记录OCR活动用于IP滥用检测
+            try:
+                task_data = await task_model.get_task(task_item.task_id)
+                if task_data and task_data.get('user_id') and task_data.get('client_ip'):
+                    from models.database import ip_tracking_model
+                    await ip_tracking_model.record_ocr_activity(
+                        task_data['user_id'],
+                        task_data['client_ip']
+                    )
+                    log.debug(f"已记录OCR活动: 用户={task_data['user_id']}, IP={task_data['client_ip']}")
+            except Exception as ip_error:
+                log.error(f"记录OCR活动失败 {task_item.task_id}: {ip_error}")
+
             log.info(f"=== PDF任务处理完成 {task_item.task_id} (耗时: {processing_time:.2f}s): {result_summary} ===")
             return result_summary
 
@@ -1351,6 +1364,19 @@ class TaskManager:
                         task_item.task_id, completed_message.to_dict()
                     )
                     log.info(f"备用PDF任务完成消息已发送 {task_item.task_id}")
+
+                # 6. 记录OCR活动用于IP滥用检测
+                try:
+                    task_data = await task_model.get_task(task_item.task_id)
+                    if task_data and task_data.get('user_id') and task_data.get('client_ip'):
+                        from models.database import ip_tracking_model
+                        await ip_tracking_model.record_ocr_activity(
+                            task_data['user_id'],
+                            task_data['client_ip']
+                        )
+                        log.debug(f"已记录OCR活动(备用): 用户={task_data['user_id']}, IP={task_data['client_ip']}")
+                except Exception as ip_error:
+                    log.error(f"记录OCR活动失败(备用) {task_item.task_id}: {ip_error}")
 
                 log.info(f"=== 备用PDF处理完成 {task_item.task_id}: {result_summary} (耗时: {total_time:.2f}s) ===")
                 return result_summary
