@@ -220,7 +220,7 @@ class ProgressTracker:
                 message=f"Processing: {processed_pages}/{total_pages} pages"
             )
             
-            # 发送WebSocket进度消息
+            # 发送WebSocket进度消息（静默更新，不触发前端跳转）
             if self.websocket_manager:
                 progress_message = MessageFactory.create_task_progress(
                     task_id=task_id,
@@ -232,7 +232,8 @@ class ProgressTracker:
                     processed_pages=processed_pages,
                     failed_pages=failed_pages,
                     estimated_time_remaining=estimated_time_remaining,
-                    processing_rate=processing_rate
+                    processing_rate=processing_rate,
+                    silent=True  # 轮询更新标记为静默，避免跳转
                 )
                 await self.websocket_manager.send_to_task_subscribers(
                     task_id, progress_message.to_dict()

@@ -3,7 +3,7 @@ version: '3.8'
 services:
   web-oai-ocr:
     build: .
-    container_name: web-oai-ocr
+    container_name: ocr
     restart: unless-stopped
 
     # 端口映射 - 使用环境变量配置

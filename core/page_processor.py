@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from PIL import Image
 import aiohttp
+import json
 import base64
 from enum import Enum
 
@@ -37,9 +38,25 @@ class PageProcessor:
         self.default_batch_size = self.api_config.get('batch_size', 4)
         self.max_retries = self.api_config.get('max_retries', 3)
         self.retry_delay = self.api_config.get('retry_delay', 0.5)
+        self.api_timeout = self.api_config.get('api_timeout', 120)
+        self.health_check_interval = self.api_config.get('health_check_interval', 300)
+        self._session = None  # 延迟创建 aiohttp.ClientSession
+        self._session_lock = asyncio.Lock()
+        self._last_health_check_ts = 0.0
+        self._last_health_check_ok = True
         
         logger.info(f"分页处理器初始化完成 - 并发: {self.max_concurrent_pages}, 批次: {self.default_batch_size}")
-    
+
+    async def _get_log_prefix_for_task(self, task_id: str) -> str:
+        """获取任务的日志前缀（包含文件名）"""
+        try:
+            task_data = await task_model.get_task(task_id)
+            if task_data and task_data.get('file_name'):
+                return f"[{task_data['file_name']}] "
+        except:
+            pass
+        return ''
+
     def calculate_page_strategy(self, task_id: str, total_pages: int, file_size: int) -> Dict[str, Any]:
         """
         计算最优分页策略
@@ -154,17 +171,20 @@ class PageProcessor:
                                     task_id: str,
                                     file_path: str,
                                     total_pages: int,
-                                    websocket_manager=None) -> Dict[str, Any]:
+                                    websocket_manager=None,
+                                    file_name: str = None) -> Dict[str, Any]:
         """
         从临时文件分页处理PDF文档 - 节省内存
         :param task_id: 任务ID
         :param file_path: PDF临时文件路径
         :param total_pages: 总页数
         :param websocket_manager: WebSocket管理器
+        :param file_name: 文件名（用于日志前缀）
         :return: 处理结果摘要
         """
         import os
         start_time = time.time()
+        log_prefix = f"[{file_name}] " if file_name else ""
 
         try:
             # 获取文件大小
@@ -172,7 +192,7 @@ class PageProcessor:
 
             # 计算分页策略
             strategy = self.calculate_page_strategy(task_id, total_pages, file_size)
-            logger.info(f"任务 {task_id} 分页策略(临时文件模式): {strategy}")
+            logger.info(f"{log_prefix}任务 {task_id} 分页策略(临时文件模式): {strategy}")
 
             # 创建页面批次
             batch_ids = await self.create_page_batches(task_id, total_pages, strategy)
@@ -240,32 +260,35 @@ class PageProcessor:
                 'file_size_mb': file_size_mb
             }
 
-            logger.info(f"分页处理完成(临时文件模式) {task_id}: {result_summary}")
+            logger.info(f"{log_prefix}分页处理完成(临时文件模式) {task_id}: {result_summary}")
             return result_summary
 
         except Exception as e:
-            logger.error(f"分页处理失败(临时文件模式) {task_id}: {e}")
+            logger.error(f"{log_prefix}分页处理失败(临时文件模式) {task_id}: {e}")
             raise
 
     async def process_pdf_with_pagination(self,
                                         task_id: str,
                                         file_data: bytes,
                                         total_pages: int,
-                                        websocket_manager=None) -> Dict[str, Any]:
+                                        websocket_manager=None,
+                                        file_name: str = None) -> Dict[str, Any]:
         """
         分页处理PDF文档(内存模式-兼容旧代码)
         :param task_id: 任务ID
         :param file_data: PDF文件数据
         :param total_pages: 总页数
         :param websocket_manager: WebSocket管理器
+        :param file_name: 文件名（用于日志前缀）
         :return: 处理结果摘要
         """
         start_time = time.time()
+        log_prefix = f"[{file_name}] " if file_name else ""
 
         try:
             # 计算分页策略
             strategy = self.calculate_page_strategy(task_id, total_pages, len(file_data))
-            logger.info(f"任务 {task_id} 分页策略: {strategy}")
+            logger.info(f"{log_prefix}任务 {task_id} 分页策略: {strategy}")
 
             # 创建页面批次
             batch_ids = await self.create_page_batches(task_id, total_pages, strategy)
@@ -332,11 +355,11 @@ class PageProcessor:
                 'file_size_mb': file_size_mb
             }
             
-            logger.info(f"分页处理完成 {task_id}: {result_summary}")
+            logger.info(f"{log_prefix}分页处理完成 {task_id}: {result_summary}")
             return result_summary
-            
+
         except Exception as e:
-            logger.error(f"分页处理失败 {task_id}: {e}")
+            logger.error(f"{log_prefix}分页处理失败 {task_id}: {e}")
             raise
     
     async def _initialize_page_results(self, task_id: str, total_pages: int):
@@ -385,19 +408,18 @@ class PageProcessor:
                 # 更新批次状态为处理中
                 await page_batch_model.update_batch_status(batch_id, "processing")
                 
-                # 顺序处理批次内的页面（改为一个接一个处理，不并发）
-                page_results = []
+                # 并发处理批次内的页面（根据CONCURRENCY环境变量）
+                page_tasks = []
                 for page_number in range(page_start, page_end + 1):
-                    try:
-                        result = await self._process_single_page(
-                            task_id, page_number, pdf_document,
-                            page_semaphore, batch_id, strategy,
-                            websocket_manager
-                        )
-                        page_results.append(result)
-                    except Exception as e:
-                        logger.error(f"页面处理异常 {task_id}-{page_number}: {e}")
-                        page_results.append(e)
+                    task = self._process_single_page(
+                        task_id, page_number, pdf_document,
+                        page_semaphore, batch_id, strategy,
+                        websocket_manager
+                    )
+                    page_tasks.append(task)
+
+                # 并发执行所有页面任务
+                page_results = await asyncio.gather(*page_tasks, return_exceptions=True)
                 
                 # 统计批次结果
                 successful_pages = 0
@@ -431,7 +453,10 @@ class PageProcessor:
                     processing_time=batch_time
                 )
                 
-                logger.info(f"批次处理完成 {batch_id}: 成功 {successful_pages}, 失败 {failed_pages}, 耗时 {batch_time:.2f}s")
+                # 从batch_id中提取task_id获取文件名
+                task_id_from_batch = batch_id.rsplit('_batch_', 1)[0] if '_batch_' in batch_id else task_id
+                batch_log_prefix = await self._get_log_prefix_for_task(task_id_from_batch)
+                logger.info(f"{batch_log_prefix}批次处理完成 {batch_id}: 成功 {successful_pages}, 失败 {failed_pages}, 耗时 {batch_time:.2f}s")
                 
                 return {
                     'batch_id': batch_id,
@@ -555,53 +580,54 @@ class PageProcessor:
             return base_dpi
     
     async def _call_ocr_api_with_retry(self, image_data: bytes, semaphore: asyncio.Semaphore) -> str:
-        """调用OCR API，支持增强的重试机制和错误处理"""
-        last_exception = None
+        """调用OCR API，包含增强的重试与诊断信息"""
+        last_exception: Optional[Exception] = None
         retry_count = 0
+        attempt_errors = []
 
         for attempt in range(self.max_retries):
             retry_count = attempt + 1
             try:
-                
-                # 检查是否应该继续重试
                 if attempt > 0:
                     should_continue = await self._should_continue_retry(last_exception, attempt)
                     if not should_continue:
-                        logger.info(f"根据错误类型，停止重试")
+                        logger.info('根据错误类型停止继续重试')
                         break
-                
+
                 async with semaphore:
                     content = await self._make_ocr_request(image_data)
-                    # 静默成功,不输出日志
                     return content
-                    
-            except Exception as e:
-                last_exception = e
-                logger.warning(f"OCR API调用失败 (尝试 {retry_count}/{self.max_retries}): {e}")
-                
-                # 记录详细的错误信息
-                await self._log_error_details(e, attempt, image_data)
-                
+            except Exception as exc:
+                last_exception = exc
+                attempt_errors.append({
+                    'attempt': retry_count,
+                    'error': str(exc),
+                    'type': type(exc).__name__
+                })
+                logger.warning(f'OCR API调用失败 (尝试 {retry_count}/{self.max_retries}): {exc}')
+                await self._log_error_details(exc, attempt, image_data)
+
                 if attempt < self.max_retries - 1:
-                    # 计算延迟时间（指数退避 + 随机抖动）
-                    delay = await self._calculate_retry_delay(attempt, e)
-                    logger.info(f"等待 {delay:.2f} 秒后重试...")
+                    delay = await self._calculate_retry_delay(attempt, exc)
+                    logger.info(f'等待 {delay:.2f} 秒后重试...')
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"已达到最大重试次数 {self.max_retries}")
-        
-        # 所有重试都失败
-        error_msg = f"OCR API调用最终失败，已尝试 {retry_count} 次: {str(last_exception)}"
-        logger.error(error_msg)
-        
-        # 尝试生成备用内容
-        fallback_content = await self._generate_fallback_content()
+                    logger.warning(f'已达到最大重试次数 {self.max_retries}')
+
+        error_message = f'OCR API调用最终失败，已尝试 {retry_count} 次: {last_exception}'
+        logger.warning(error_message)
+
+        fallback_context = {
+            'retries': retry_count,
+            'last_error': str(last_exception) if last_exception else None,
+            'attempt_errors': attempt_errors
+        }
+        fallback_content = await self._generate_fallback_content(fallback_context)
         if fallback_content:
-            logger.info("使用备用内容继续处理")
+            logger.info('使用备用内容继续处理')
             return fallback_content
-        
-        raise Exception(error_msg)
-    
+
+        raise Exception(error_message)
     async def _should_continue_retry(self, exception: Exception, attempt: int) -> bool:
         """根据错误类型决定是否应该继续重试"""
         error_str = str(exception).lower()
@@ -681,342 +707,270 @@ class PageProcessor:
                 "retry_delay": self.retry_delay
             }
             
-            logger.error(f"OCR API调用错误详情: {error_details}")
+            logger.warning(f"OCR API调用错误详情: {error_details}")
             
         except Exception as log_error:
-            logger.error(f"记录错误详情失败: {log_error}")
+            logger.debug(f"记录错误详情失败: {log_error}")
     
-    async def _generate_fallback_content(self) -> Optional[str]:
+    async def _generate_fallback_content(self, context: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """生成备用内容，在API完全失败时使用"""
         logger.info("尝试生成备用内容...")
-        
+
         try:
-            # 这里可以添加简单的本地OCR逻辑
-            # 或者返回一个标记内容，表明API处理失败
-            
-            fallback_text = """
-            [系统通知] OCR API处理失败
-            
-            由于API服务暂时不可用，无法完成OCR识别。请稍后重试或联系系统管理员。
-            
-            错误信息：API调用失败，已达到最大重试次数
-            """
-            
+            diagnostics = "无更多诊断信息"
+            if context:
+                try:
+                    diagnostics = json.dumps(context, ensure_ascii=False, indent=2)
+                except Exception:
+                    diagnostics = str(context)
+            fallback_text = (
+                "[系统通知] OCR 服务暂时不可用。\n\n"
+                "由于外部识别服务暂时无法返回有效结果，当前页面未能完成识别，请稍后重试或联系系统管理员协助排查。\n\n"
+                "诊断信息:\n"
+                f"{diagnostics}"
+            )
             logger.warning("使用备用内容")
             return fallback_text
-            
         except Exception as e:
             logger.error(f"生成备用内容失败: {e}")
             return None
-    
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """获取或创建共享的 aiohttp 会话"""
+        if self._session and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session and not self._session.closed:
+                return self._session
+            timeout = aiohttp.ClientTimeout(total=self.api_timeout)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+            return self._session
+
     async def _make_ocr_request(self, image_data: bytes) -> str:
-        """发起OCR请求 - 增强版，包含连接测试和响应验证"""
+        """Send OCR request with shared session and response validation"""
         api_base_url = self.api_config.get('api_base_url', 'https://api.openai.com')
         api_key = self.api_config.get('api_key')
         model = self.api_config.get('model', 'gpt-4o')
 
-        # 1. 验证API配置
         if not api_key:
-            raise Exception("API密钥未配置")
+            raise Exception('API密钥未配置')
 
         if not api_base_url:
-            raise Exception("API基础URL未配置")
+            raise Exception('API基础URL未配置')
 
         if not model:
-            raise Exception("API模型未配置")
+            raise Exception('API模型未配置')
 
-        # 2. 验证图片数据
         if not image_data:
-            raise Exception("图片数据为空")
+            raise Exception('图片数据为空')
 
-        # 3. 预检查API连接
-        if not await self._precheck_api_connection(api_base_url, api_key):
-            logger.warning("API连接预检查失败，但将继续尝试请求")
+        precheck_ok = await self._precheck_api_connection(api_base_url, api_key)
+        if not precheck_ok:
+            logger.warning('API precheck did not succeed; continuing with request')
 
-        # 4. 准备请求内容
-        system_prompt = """
-       You are an expert OCR assistant. Your job is to extract all text from the provided image and convert it into a well-structured, easy-to-read Markdown document that mirrors the intended structure of the original. Follow these precise guidelines:
+        system_prompt = (
+            'You are an expert OCR assistant. Extract all textual information from the image and '
+            'return it as clean Markdown. The final answer MUST be valid JSON with the structure '
+            '{"content": "..."}. Do not wrap the JSON in code fences.'
+        )
 
-- Use Markdown headings, paragraphs, lists, and tables to match the document's hierarchy and flow.
-- For tables, use standard Markdown table syntax and merge cells if needed. If a table has a title, include it as plain text above the table.
-- Render mathematical formulas with LaTeX syntax: use $...$ for inline and $$...$$ for display equations.
-- For images, use the syntax ![descriptive alt text](link) with a clear, descriptive alt text.
-- Remove unnecessary line breaks so that the text flows naturally without awkward breaks.
-- Your final Markdown output must be direct text (do not wrap it in code blocks).
+        user_prompt = (
+            'Analyze the provided image and output a JSON object with a single string field named "content". '
+            'The value should contain the recognized Markdown-formatted text. Avoid any additional commentary.'
+        )
 
-Ensure your output is clear, accurate, and faithfully reflects the original image's content and structure.
-        """
+        encoded_image = base64.b64encode(image_data).decode("utf-8")
 
-        user_prompt = "Analyze the image and extract all text content in the specified format. Start your response with 'This is the content:' followed by the extracted text, and end with 'this is the end of the content'."
+        payload = {
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {
+                    'role': 'user',
+                    'content': [
+                        {'type': 'text', 'text': user_prompt},
+                        {'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{encoded_image}'}}
+                    ],
+                },
+            ],
+            'stream': False,
+            'model': model,
+            'temperature': 0.0,
+            'top_p': 1,
+        }
 
-        encoded_image = base64.b64encode(image_data).decode('utf-8')
-
-        # 5. 发起API请求
-        timeout = aiohttp.ClientTimeout(total=120)  # 2分钟超时
+        session = await self._get_session()
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                response = await session.post(
-                    f"{api_base_url}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json={
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": user_prompt
-                                    },
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:image/png;base64,{encoded_image}"}
-                                    }
-                                ]
-                            }
-                        ],
-                        "stream": False,
-                        "model": model,
-                        "temperature": 0.5,
-                        "top_p": 1
-                    }
-                )
-                
-                # 6. 处理响应
-                if response.status == 200:
-                    result = await response.json()
+            response = await session.post(
+                f"{api_base_url}/v1/chat/completions",
+                headers={'Authorization': f'Bearer {api_key}'},
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=self.api_timeout)
+            )
 
-                    # 验证响应格式
-                    if not self._validate_api_response(result):
-                        raise Exception("API响应格式验证失败")
+            if response.status == 200:
+                result = await response.json()
 
-                    content = result['choices'][0]['message']['content']
+                if not self._validate_api_response(result):
+                    raise Exception('API响应格式验证失败')
 
-                    # 解析返回内容
-                    parsed_content = self._parse_api_response(content)
+                content = result['choices'][0]['message']['content']
+                parsed_content = self._parse_api_response(content)
 
-                    if not parsed_content:
-                        logger.error("OCR返回内容为空 - 这可能是问题的根源！")
-                        raise Exception("OCR返回内容为空")
+                if not parsed_content:
+                    logger.warning('OCR返回内容为空')
+                    raise Exception('OCR返回内容为空')
 
-                    return parsed_content
-                    
-                else:
-                    error_text = await response.text()
-                    logger.error(f"API请求失败: 状态码={response.status}, 错误={error_text}")
-                    raise Exception(f"API请求失败, 状态码: {response.status}, 错误: {error_text}")
-                    
-        except aiohttp.ClientError as e:
-            logger.error(f"API请求网络错误: {e}")
-            raise Exception(f"API请求网络错误: {e}")
-        except asyncio.TimeoutError:
-            logger.error("API请求超时")
-            raise Exception("API请求超时")
-        except Exception as e:
-            logger.error(f"API请求未知错误: {e}")
-            logger.exception("API请求详细错误信息:")
-            raise
+                return parsed_content
+
+            error_text = (await response.text())[:500]
+            if response.status in (401, 403):
+                raise Exception(f'认证失败, 状态码: {response.status}, 响应: {error_text}')
+            raise Exception(f'API请求失败, 状态码: {response.status}, 响应: {error_text}')
+        except asyncio.TimeoutError as exc:
+            logger.warning('API请求超时: %s', exc)
+            raise Exception('API请求超时') from exc
+        except aiohttp.ClientError as exc:
+            logger.warning('API请求网络错误: %s', exc)
+            raise Exception(f'API请求网络错误: {exc}') from exc
+
+    async def close(self) -> None:
+        """关闭内部持有的 HTTP 会话"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+
     
-    async def _precheck_api_connection(self, api_base_url: str, api_key: str) -> bool:
-        """预检查API连接"""
-        try:
-            timeout = aiohttp.ClientTimeout(total=10)  # 10秒超时
-
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                # 使用模型列表API作为连接测试
-                test_url = f"{api_base_url}/v1/models"
-                headers = {"Authorization": f"Bearer {api_key}"}
-
-                async with session.get(test_url, headers=headers) as response:
-                    if response.status == 200:
-                        return True
-                    else:
-                        logger.warning(f"API连接预检查失败，状态码: {response.status}")
-                        return False
-
-        except Exception as e:
-            logger.warning(f"API连接预检查异常: {e}")
+    async def _precheck_api_connection(self, api_base_url: str, api_key: str, force: bool = False) -> bool:
+        """Run a cached health check against the OCR API"""
+        if not api_key:
+            self._last_health_check_ok = False
             return False
-    
+
+        now = time.time()
+        if not force and (now - self._last_health_check_ts) < self.health_check_interval:
+            return self._last_health_check_ok
+
+        self._last_health_check_ts = now
+
+        test_url = f"{api_base_url}/v1/models"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        timeout = aiohttp.ClientTimeout(total=10)
+
+        try:
+            session = await self._get_session()
+            async with session.get(test_url, headers=headers, timeout=timeout) as response:
+                self._last_health_check_ok = response.status == 200
+                if not self._last_health_check_ok:
+                    logger.warning(f'API预检查失败: 状态码={response.status}')
+                return self._last_health_check_ok
+        except Exception as exc:
+            self._last_health_check_ok = False
+            logger.debug('API预检查异常: %s', exc)
+            return False
+
     def _validate_api_response(self, response: Dict[str, Any]) -> bool:
         """验证API响应格式"""
         try:
-            # 检查必要字段
             if 'choices' not in response:
-                logger.error("API响应缺少choices字段")
+                logger.error('API响应缺少choices字段')
                 return False
-                
+
             choices = response['choices']
             if not isinstance(choices, list) or len(choices) == 0:
-                logger.error("API响应choices字段格式错误")
+                logger.error('API响应choices字段格式错误')
                 return False
-                
+
             choice = choices[0]
             if 'message' not in choice:
-                logger.error("API响应缺少message字段")
+                logger.error('API响应缺少message字段')
                 return False
-                
+
             message = choice['message']
             if 'content' not in message:
-                logger.error("API响应缺少content字段")
+                logger.error('API响应缺少content字段')
                 return False
-                
+
             content = message['content']
             if not isinstance(content, str):
-                logger.error("API响应content字段格式错误")
+                logger.error('API响应content字段格式错误')
                 return False
 
             return True
-            
         except Exception as e:
-            logger.error(f"API响应验证异常: {e}")
+            logger.error(f'API响应验证异常: {e}')
             return False
-    
+
     def _parse_api_response(self, content: str) -> str:
-        """解析API响应内容"""
+        """Parse LLM response, preferring JSON payloads"""
+        if not content:
+            logger.warning('API响应内容为空字符串')
+            return ''
+
+        cleaned = content.strip()
+
+        if cleaned.startswith('```') and cleaned.endswith('```'):
+            cleaned = cleaned.strip('`')
+            if cleaned.lower().startswith('json'):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.strip()
+
         try:
-            # 检查内容格式
-            if "This is the content:" not in content:
-                logger.error("API响应格式不正确，缺少开始标记 'This is the content:'")
-                # 添加诊断：尝试使用备用解析策略
-                return self._parse_api_response_fallback(content)
+            data = json.loads(cleaned)
+            if isinstance(data, dict):
+                text_value = data.get('content') or data.get('text')
+                if isinstance(text_value, str) and text_value.strip():
+                    return text_value.strip()
+            elif isinstance(data, str) and data.strip():
+                return data.strip()
+        except json.JSONDecodeError as exc:
+            logger.debug('API响应JSON解析失败: %s', exc)
 
-            # 提取内容
-            start_index = content.find("This is the content:") + len("This is the content:")
-            end_index = content.find("this is the end of the content")
-
-            if end_index == -1:
-                end_index = len(content)
-
-            parsed_content = content[start_index:end_index].strip()
-
-            # 清理内容
-            parsed_content = parsed_content.replace("```markdown", "").replace("```", "").strip()
-
-            # 验证内容
-            if not parsed_content:
-                logger.error("解析后的内容为空")
-                return self._parse_api_response_fallback(content)
-
-            return parsed_content
-
-        except Exception as e:
-            logger.error(f"API响应内容解析异常: {e}")
-            # 添加诊断：尝试使用备用解析策略
-            return self._parse_api_response_fallback(content)
-    
+        return self._parse_api_response_fallback(cleaned)
     def _parse_api_response_fallback(self, content: str) -> str:
-        """备用API响应解析策略 - 当标准解析失败时使用"""
-        logger.info("===  开始备用API响应解析 ===")
-        
+        """Fallback parsing strategy when structured formats fail"""
+        logger.info('Fallback OCR response parsing engaged')
+
         try:
-            # 策略1: 查找任何可能的内容标记
-            logger.info("策略1: 查找可能的内容标记...")
-            possible_markers = [
-                "This is the content:",
-                "this is the content:",
-                "Content:",
-                "content:",
-                "OCR结果:",
-                "识别结果:",
-                "识别内容:",
-                "Text:",
-                "text:",
-                "Result:",
-                "result:",
-                "Output:",
-                "output:"
-            ]
-            
+            possible_markers = ['This is the content:', 'this is the content:', 'Content:', 'content:', 'OCR result:', 'Recognized text:', 'Text:', 'text:', 'Result:', 'result:', 'Output:', 'output:']
             for marker in possible_markers:
                 if marker in content:
-                    logger.info(f"找到备用标记: {marker}")
                     start_index = content.find(marker) + len(marker)
-                    extracted_content = content[start_index:].strip()
-                    
-                    # 尝试找到结束标记
-                    end_markers = ["this is the end of the content", "end of content", "结束", "End"]
-                    end_index = -1
-                    for end_marker in end_markers:
-                        if end_marker in extracted_content:
-                            end_index = extracted_content.find(end_marker)
-                            break
-                    
-                    if end_index != -1:
-                        extracted_content = extracted_content[:end_index].strip()
-                        logger.info(f"找到结束标记，截取内容到位置: {end_index}")
-                    
-                    if extracted_content:
-                        logger.info(f"使用备用标记解析成功，长度: {len(extracted_content)}字符")
-                        logger.info(f"备用解析内容预览: {extracted_content[:200]}...")
-                        return extracted_content
-            
-            # 策略2: 如果没有找到任何标记，尝试去除常见的前后缀
-            logger.info("策略2: 清理原始内容，去除系统消息...")
-            
-            # 移除可能的系统消息
-            lines = content.split('\n')
-            content_lines = []
-            
-            skip_patterns = [
-                "I'm sorry",
-                "抱歉",
-                "I cannot",
-                "我无法",
-                "As an AI",
-                "作为一个AI",
-                "Here is",
-                "以下是",
-                "The content",
-                "内容",
-                "I understand",
-                "我理解",
-                "I can see",
-                "我可以看到"
-            ]
-            
-            for line in lines:
-                line = line.strip()
-                if line and not any(pattern in line for pattern in skip_patterns):
-                    content_lines.append(line)
-            
-            fallback_content = '\n'.join(content_lines).strip()
-            
-            if fallback_content:
-                logger.info(f"使用内容清理策略成功，长度: {len(fallback_content)}字符")
-                logger.info(f"清理后内容预览: {fallback_content[:200]}...")
-                return fallback_content
-            
-            # 策略3: 如果所有策略都失败，返回原始内容（但要进行基本清理）
-            logger.info("策略3: 使用原始内容进行基本清理...")
-            
-            # 移除markdown代码块标记
-            cleaned_content = content.replace("```markdown", "").replace("```", "").strip()
-            
-            # 移除多余的空行
-            cleaned_lines = [line.strip() for line in cleaned_content.split('\n') if line.strip()]
-            final_content = '\n'.join(cleaned_lines)
-            
-            if final_content:
-                logger.info(f"使用基本清理策略成功，长度: {len(final_content)}字符")
-                logger.info(f"基本清理内容预览: {final_content[:200]}...")
-                return final_content
-            else:
-                logger.error("所有备用解析策略都失败")
-                logger.error(f"最终处理的原始内容: {content[:500]}...")
-                return ""
-                
-        except Exception as e:
-            logger.error(f"备用API响应解析异常: {e}")
-            logger.exception("备用解析详细异常信息:")
-            # 在异常情况下，尝试返回原始内容的基本清理版本
-            try:
-                return content.replace("```markdown", "").replace("```", "").strip()
-            except:
-                return ""
+                    extracted = content[start_index:].strip()
 
-# 创建全局页面处理器实例
+                    end_markers = ['this is the end of the content', 'end of content', 'End']
+                    for end_marker in end_markers:
+                        if end_marker in extracted:
+                            extracted = extracted[:extracted.find(end_marker)].strip()
+                            break
+
+                    if extracted:
+                        return extracted
+
+            lines = [line.strip() for line in content.split('\n') if line.strip()]
+            skip_patterns = ["I'm sorry", 'I cannot', 'As an AI', 'Here is', 'The content', 'I understand', 'I can see']
+            filtered_lines = [line for line in lines if not any(pat in line for pat in skip_patterns)]
+            fallback_content = '\n'.join(filtered_lines).strip()
+            if fallback_content:
+                return fallback_content
+
+            cleaned = content.replace('```markdown', '').replace('```', '').strip()
+            cleaned_lines = [line.strip() for line in cleaned.split('\n') if line.strip()]
+            if cleaned_lines:
+                return '\n'.join(cleaned_lines)
+
+            logger.warning('Fallback解析失败，返回空字符串')
+            logger.debug('响应内容片段: %s', content[:300])
+            return ''
+        except Exception as exc:
+            logger.error('Fallback解析异常: %s', exc)
+            logger.debug('异常响应内容: %s', content[:300])
+            try:
+                return content.replace('```markdown', '').replace('```', '').strip()
+            except Exception:
+                return ''
 def create_page_processor(api_config: Dict[str, Any]) -> PageProcessor:
     """创建页面处理器实例"""
     return PageProcessor(api_config)
@@ -1164,7 +1118,7 @@ async def _test_api_connection(api_config: Dict[str, Any]) -> bool:
     """测试API连接"""
     try:
         import aiohttp
-        
+                
         api_key = api_config.get('api_key')
         if not api_key:
             logger.warning("API密钥未配置，跳过连接测试")
@@ -1194,12 +1148,17 @@ async def _test_api_connection(api_config: Dict[str, Any]) -> bool:
         return False
 
 async def shutdown_page_processor():
-    """关闭全局页面处理器"""
+    """关闭全局页面处理器并清理资源"""
     global page_processor, _page_processor_initialized
     if page_processor:
+        try:
+            await page_processor.close()
+        except Exception as exc:
+            logger.warning(f'关闭页面处理器会话失败: {exc}')
         page_processor = None
         _page_processor_initialized = False
-        logger.info("全局页面处理器已关闭")
+        logger.info('全局页面处理器已关闭')
+
 
 def is_page_processor_ready() -> bool:
     """检查页面处理器是否已就绪"""

@@ -82,38 +82,37 @@
 
     /* 桌面端滚动条样式 */
     #task-list {
-      scrollbar-width: auto;
-      scrollbar-color: #3b82f6 #e0f2fe;
+      scrollbar-width: thin;
+      scrollbar-color: #93c5fd #dbeafe;
     }
 
     #task-list::-webkit-scrollbar {
-      width: 10px;
+      width: 8px;
     }
 
     #task-list::-webkit-scrollbar-track {
-      background: #e0f2fe;
-      border-radius: 5px;
-      margin: 4px 0;
+      background: #dbeafe;
+      border-radius: 4px;
     }
 
     #task-list::-webkit-scrollbar-thumb {
-      background: #3b82f6;
-      border-radius: 5px;
-      border: 2px solid #e0f2fe;
+      background: #93c5fd;
+      border-radius: 4px;
     }
 
     #task-list::-webkit-scrollbar-thumb:hover {
-      background: #2563eb;
+      background: #60a5fa;
     }
 
-    #task-list::-webkit-scrollbar-thumb:active {
-      background: #1d4ed8;
-    }
-
-    /* Markdown预览和文本框滚动条 */
+    /* Markdown预览和文本框滚动条及文字换行 */
     #markdown-preview, #raw-text {
       scrollbar-width: thin;
       scrollbar-color: #93c5fd #dbeafe;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      white-space: pre-wrap;
+      overflow-x: hidden;
     }
 
     #markdown-preview::-webkit-scrollbar,
@@ -218,8 +217,8 @@
   </header>
 
   <!-- 主内容区 -->
-  <div class="flex-1 p-2 sm:p-4 md:p-6 overflow-x-auto overflow-y-auto">
-    <div class="w-full max-w-5xl h-full flex flex-row gap-3 md:gap-4 min-w-max md:mx-auto">
+  <div class="flex-1 p-2 sm:p-4 md:p-6 overflow-y-auto">
+    <div class="w-full max-w-5xl h-full flex flex-row gap-3 md:gap-4 md:mx-auto">
     <!-- 左侧列：上传框和任务列表 -->
     <div class="w-[250px] md:w-[25%] flex flex-col gap-3 md:gap-4 flex-shrink-0">
       <!-- 上传图片/文件框 -->
@@ -468,7 +467,10 @@
           // 每次轮询都刷新任务列表，以显示最新状态
           loadTasks();
 
-          await loadTaskResult(taskId);
+          // 只有当轮询的任务是当前选中的任务时，才更新内容显示
+          if (currentTaskId === taskId) {
+            await loadTaskResult(taskId);
+          }
 
           // 检查任务状态
           const backurl = "{{ backurl }}";
@@ -482,6 +484,10 @@
             if (taskStatus === 'completed' || taskStatus === 'failed') {
               // 任务完成，停止轮询
               loadTasks(); // 最后刷新一次任务列表
+              // 如果这是当前选中的任务，刷新结果显示
+              if (currentTaskId === taskId) {
+                await loadTaskResult(taskId);
+              }
               return;
             }
           }
@@ -549,13 +555,9 @@
 
     // 切换复制按钮显示/隐藏
     function toggleCopyButton() {
-      if (rawText.value.trim() !== "") {
-        copyBtn.classList.remove("hidden");
-        copyBtn.classList.add("flex");
-      } else {
-        copyBtn.classList.add("hidden");
-        copyBtn.classList.remove("flex");
-      }
+      // 复制按钮始终显示，不需要隐藏
+      copyBtn.classList.remove("hidden");
+      copyBtn.classList.add("flex");
     }
 
     // 实时更新 Markdown 预览
@@ -582,10 +584,46 @@
 
     // 复制按钮功能
     copyBtn.addEventListener("click", () => {
-      navigator.clipboard.writeText(rawText.value).then(() => {
-        alert("复制成功！");
-      });
+      const text = rawText.value;
+
+      // 优先使用现代 Clipboard API
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          alert("复制成功！");
+        }).catch(err => {
+          console.error("复制失败:", err);
+          fallbackCopy(text);
+        });
+      } else {
+        // 降级方案：使用传统方法
+        fallbackCopy(text);
+      }
     });
+
+    // 降级复制方法（兼容旧版浏览器和移动端）
+    function fallbackCopy(text) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+
+      try {
+        const successful = document.execCommand('copy');
+        if (successful) {
+          alert("复制成功！");
+        } else {
+          alert("复制失败，请手动复制");
+        }
+      } catch (err) {
+        console.error("复制失败:", err);
+        alert("复制失败，请手动复制");
+      }
+
+      document.body.removeChild(textarea);
+    }
 
     // 加载任务列表
     async function loadTasks() {
@@ -614,51 +652,69 @@
       }
     }
 
-    // 显示任务列表
+    // 显示任务列表（按创建时间排序）
     function displayTasks(tasks) {
       console.log("显示任务列表，任务数:", tasks ? tasks.length : 0);
-
       if (!tasks || tasks.length === 0) {
         taskList.innerHTML = '<div class="text-center text-blue-600 text-sm py-8">暂无任务</div>';
         return;
       }
-
       console.log("任务详情:", tasks);
+      const sortedTasks = [...tasks].sort((a, b) => {
+        const aTime = new Date(a.created_at || 0).getTime();
+        const bTime = new Date(b.created_at || 0).getTime();
+        return bTime - aTime;
+      });
+      const fragment = document.createDocumentFragment();
+      sortedTasks.forEach(task => {
+        fragment.appendChild(createTaskElement(task));
+      });
+      const previousScrollTop = taskList.scrollTop;
+      taskList.innerHTML = '';
+      taskList.appendChild(fragment);
+      taskList.scrollTop = previousScrollTop;
+    }
 
-      taskList.innerHTML = tasks.map(task => {
-        const statusColors = {
-          'pending': 'bg-yellow-100 text-yellow-700',
-          'processing': 'bg-blue-100 text-blue-700',
-          'completed': 'bg-green-100 text-green-700',
-          'failed': 'bg-red-100 text-red-700'
-        };
-        const statusText = {
-          'pending': '等待中',
-          'processing': '处理中',
-          'completed': '已完成',
-          'failed': '失败'
-        };
+    // 创建任务元素
+    function createTaskElement(task) {
+      const statusColors = {
+        'pending': 'bg-yellow-100 text-yellow-700',
+        'processing': 'bg-blue-100 text-blue-700',
+        'completed': 'bg-green-100 text-green-700',
+        'failed': 'bg-red-100 text-red-700',
+        'cancelled': 'bg-gray-100 text-gray-700'
+      };
+      const statusText = {
+        'pending': '等待中',
+        'processing': '处理中',
+        'completed': '已完成',
+        'failed': '失败',
+        'cancelled': '已取消'
+      };
 
-        const statusClass = statusColors[task.status] || 'bg-gray-100 text-gray-700';
-        const statusLabel = statusText[task.status] || task.status;
-        const progress = task.progress || 0;
-        const isActive = currentTaskId === task.id;
+      const statusClass = statusColors[task.status] || 'bg-gray-100 text-gray-700';
+      const statusLabel = statusText[task.status] || task.status;
+      const isActive = currentTaskId === task.id;
 
-        return `
-          <div class="task-item border border-blue-200 rounded-lg p-2.5 hover:shadow-md active:shadow-lg transition-all cursor-pointer ${isActive ? 'bg-blue-50 border-blue-400' : 'bg-white'}"
-               data-task-id="${task.id}"
-               onclick="loadTaskResult('${task.id}')">
-            <div class="flex items-center justify-between mb-1">
-              <div class="flex-1 truncate font-medium text-blue-800 text-sm">${task.file_name || '未命名文件'}</div>
-              <span class="px-2 py-0.5 rounded-full text-xs font-semibold ${statusClass} ml-2 flex-shrink-0">${statusLabel}</span>
-            </div>
-            <div class="flex items-center justify-between text-xs text-blue-600">
-              <span>${task.task_type === 'pdf_ocr' ? 'PDF' : '图片'} · ${task.total_pages || 1}页</span>
-              <span class="text-xs">${new Date(task.created_at).toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}</span>
-            </div>
-          </div>
-        `;
-      }).join('');
+      const div = document.createElement('div');
+      div.className = `task-item border border-blue-200 rounded-lg p-2.5 hover:shadow-md active:shadow-lg transition-all cursor-pointer ${isActive ? 'bg-blue-50 border-blue-400' : 'bg-white'}`;
+      div.setAttribute('data-task-id', task.id);
+      div.setAttribute('data-status', task.status);
+      div.setAttribute('data-progress', task.progress || 0);
+      div.onclick = () => loadTaskResult(task.id);
+
+      div.innerHTML = `
+        <div class="flex items-center justify-between mb-1">
+          <div class="flex-1 truncate font-medium text-blue-800 text-sm">${task.file_name || '未命名文件'}</div>
+          <span class="px-2 py-0.5 rounded-full text-xs font-semibold ${statusClass} ml-2 flex-shrink-0">${statusLabel}</span>
+        </div>
+        <div class="flex items-center justify-between text-xs text-blue-600">
+          <span>${task.task_type === 'pdf_ocr' ? 'PDF' : '图片'} · ${task.total_pages || 1}页</span>
+          <span class="text-xs">${new Date(task.created_at).toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}</span>
+        </div>
+      `;
+
+      return div;
     }
 
     // 加载任务结果

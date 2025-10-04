@@ -212,6 +212,28 @@ class UserModel:
             logger.error(f"扣除页数失败 {user_id}: {e}")
             return False
 
+
+    async def refund_pages(self, user_id: str, pages: int) -> bool:
+        """返还用户已扣除的页数"""
+        if pages <= 0:
+            return True
+        try:
+            async with self.db_manager.get_connection() as db:
+                await db.execute("""
+                    UPDATE users
+                    SET used_pages = CASE
+                        WHEN used_pages >= ? THEN used_pages - ?
+                        ELSE 0
+                    END
+                    WHERE id = ?
+                """, (pages, pages, user_id))
+                await db.commit()
+                logger.info(f"用户 {user_id} 返还 {pages} 页配额")
+                return True
+        except Exception as e:
+            logger.error(f"返还页数失败 {user_id}: {e}")
+            return False
+
     async def get_quota(self, user_id: str) -> Optional[Dict[str, int]]:
         """获取用户配额信息"""
         try:
@@ -405,6 +427,17 @@ class RedemptionCodeModel:
             return False, message, 0
 
         try:
+            # 检查用户是否已经兑换过该兑换码
+            async with self.db_manager.get_connection() as db:
+                async with db.execute("""
+                    SELECT COUNT(*) FROM redemption_history
+                    WHERE user_id = ? AND code = ?
+                """, (user_id, code)) as cursor:
+                    row = await cursor.fetchone()
+                    if row and row[0] > 0:
+                        logger.warning(f"用户 {user_id} 尝试重复兑换 {code}")
+                        return False, "您不能重复兑换该兑换码", 0
+
             code_info = await self.get_code(code)
             pages = code_info['pages']
 
@@ -650,20 +683,28 @@ class RegistrationTokenModel:
 
         return True, "有效"
 
-    async def use_token(self, token: str) -> tuple[bool, str]:
-        """使用注册令牌"""
+    async def use_token(self, token: str, user_id: str, username: str, user_uuid: str) -> tuple[bool, str]:
+        """使用注册令牌并记录使用者信息"""
         # 验证令牌
         is_valid, message = await self.validate_token(token)
         if not is_valid:
             return False, message
 
         try:
+            from datetime import datetime, timezone
             async with self.db_manager.get_connection() as db:
                 # 增加使用次数
                 await db.execute("""
                     UPDATE registration_tokens SET used_count = used_count + 1
                     WHERE token = ?
                 """, (token,))
+
+                # 记录使用历史
+                await db.execute("""
+                    INSERT INTO registration_token_history (
+                        user_id, token, username, user_uuid, registered_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                """, (user_id, token, username, user_uuid, datetime.now(timezone.utc).isoformat()))
 
                 # 检查是否达到最大使用次数,如果达到则自动关闭
                 async with db.execute("""
@@ -672,13 +713,13 @@ class RegistrationTokenModel:
                     row = await cursor.fetchone()
                     if row:
                         used_count, max_uses = row
-                        if used_count + 1 >= max_uses:
+                        if used_count >= max_uses:
                             await db.execute("""
                                 UPDATE registration_tokens SET is_active = 0 WHERE token = ?
                             """, (token,))
 
                 await db.commit()
-                logger.info(f"注册令牌使用成功")
+                logger.info(f"注册令牌使用成功: user={username}, token={token}")
                 return True, "使用成功"
         except Exception as e:
             logger.error(f"使用注册令牌失败: {e}")
@@ -758,3 +799,18 @@ class RegistrationTokenModel:
         except Exception as e:
             logger.error(f"删除注册令牌失败: {e}")
             return False
+
+    async def get_token_history(self) -> list:
+        """获取所有令牌使用历史记录"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("""
+                    SELECT * FROM registration_token_history
+                    ORDER BY registered_at DESC
+                """) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"获取令牌使用历史失败: {e}")
+            return []

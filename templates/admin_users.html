@@ -7,18 +7,36 @@
   <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    /* 文字对比度增强 */
-    body .text-gray-800 {
-      color: #1e293b !important;
+    /* 移除所有按钮的聚焦外框 */
+    * {
+      outline: none !important;
     }
-    body .text-gray-700 {
-      color: #334155 !important;
+
+    *:focus,
+    *:focus-visible,
+    *:active {
+      outline: none !important;
+      box-shadow: none !important;
+      border: none !important;
     }
-    body .text-gray-600 {
-      color: #475569 !important;
+
+    button,
+    button:focus,
+    button:focus-visible,
+    button:active {
+      outline: none !important;
+      box-shadow: none !important;
     }
-    body .text-gray-500 {
-      color: #64748b !important;
+
+    /* 移除按钮周围的所有边框和线条 */
+    td button {
+      outline: none !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+
+    td {
+      border: none !important;
     }
 
     /* 菜单样式 */
@@ -82,14 +100,14 @@
 
       <!-- 下拉菜单 -->
       <div id="menu-dropdown">
-        <div class="menu-item" onclick="window.location.href='/admin'">
+        <div class="menu-item" onclick="window.location.href='{{ password_prefix }}/admin'">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
           </svg>
           返回管理后台
         </div>
-        <div class="menu-item" onclick="window.location.href='/'">
+        <div class="menu-item" onclick="window.location.href='{{ password_prefix }}/'">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
           </svg>
@@ -103,93 +121,78 @@
   <div class="flex-1 overflow-auto p-4">
     <div class="max-w-7xl mx-auto">
       <!-- 统计卡片 -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <div class="rounded-xl p-4 shadow-lg" style="background: linear-gradient(to bottom right, #3b82f6, #2563eb);">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm opacity-90" style="color: white;">总用户数</p>
-              <p class="text-3xl font-bold mt-1" id="total-users" style="color: white;">-</p>
-            </div>
-            <svg class="w-12 h-12 opacity-50" fill="none" stroke="white" viewBox="0 0 24 24" style="color: white;">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
-            </svg>
-          </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div class="bg-white rounded-lg shadow-md p-4">
+          <div class="text-sm text-gray-600 mb-1">总用户数</div>
+          <div class="text-2xl font-bold text-blue-600" id="total-users">0</div>
         </div>
-
-        <div class="rounded-xl p-4 shadow-lg" style="background: linear-gradient(to bottom right, #22c55e, #16a34a);">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm opacity-90" style="color: white;">总页数配额</p>
-              <p class="text-3xl font-bold mt-1" id="total-pages-granted" style="color: white;">-</p>
-            </div>
-            <svg class="w-12 h-12 opacity-50" fill="none" stroke="white" viewBox="0 0 24 24" style="color: white;">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
-          </div>
+        <div class="bg-white rounded-lg shadow-md p-4">
+          <div class="text-sm text-gray-600 mb-1">总页数配额</div>
+          <div class="text-2xl font-bold text-green-600" id="total-pages-granted">0</div>
         </div>
-
-        <div class="rounded-xl p-4 shadow-lg" style="background: linear-gradient(to bottom right, #0ea5e9, #0284c7);">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm opacity-90" style="color: white;">已使用页数</p>
-              <p class="text-3xl font-bold mt-1" id="total-pages-used" style="color: white;">-</p>
-            </div>
-            <svg class="w-12 h-12 opacity-50" fill="none" stroke="white" viewBox="0 0 24 24" style="color: white;">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-            </svg>
-          </div>
+        <div class="bg-white rounded-lg shadow-md p-4">
+          <div class="text-sm text-gray-600 mb-1">已使用页数</div>
+          <div class="text-2xl font-bold text-orange-600" id="total-pages-used">0</div>
         </div>
       </div>
 
-      <!-- 标签页卡片 -->
-      <div class="bg-white rounded-xl shadow-md">
-        <!-- 标签头部 -->
-        <div class="border-b border-gray-200">
-          <div class="flex">
-            <button id="tab-users" onclick="switchTab('users')" class="px-6 py-3 font-medium border-b-2 border-blue-500 text-blue-600">
-              用户管理
-            </button>
-            <button id="tab-tokens" onclick="switchTab('tokens')" class="px-6 py-3 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
-              注册令牌
-            </button>
+      <!-- 筛选器 -->
+      <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+        <div class="flex flex-wrap gap-4 items-end">
+          <div class="flex-1 min-w-[200px]">
+            <label class="block text-sm font-medium text-gray-700 mb-1">搜索</label>
+            <input type="text" id="search-input" placeholder="搜索用户名或UUID..." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
           </div>
+          <div class="flex-1 min-w-[200px]">
+            <label class="block text-sm font-medium text-gray-700 mb-1">状态筛选</label>
+            <select id="status-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">所有用户</option>
+              <option value="active">正常</option>
+              <option value="disabled">已禁用</option>
+              <option value="admin">管理员</option>
+            </select>
+          </div>
+          <button onclick="loadUsers()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+            应用筛选
+          </button>
         </div>
+      </div>
 
-        <!-- 用户管理内容 -->
-        <div id="content-users">
-          <div class="p-4 border-b border-gray-200 flex gap-2">
-            <input
-              type="text"
-              id="search-input"
-              placeholder="搜索用户名..."
-              class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              oninput="filterUsers()"
-            >
-            <button onclick="loadUsers()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
-              刷新列表
-            </button>
-          </div>
-          <div class="p-4">
-            <div id="users-list" class="space-y-2">
-              <p class="text-center py-8 text-gray-500">加载中...</p>
-            </div>
-          </div>
+      <!-- 用户列表表格 -->
+      <div class="bg-white rounded-lg shadow-md overflow-hidden">
+        <div class="overflow-x-auto" style="max-height: 600px; overflow-y: auto;">
+          <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50 sticky top-0 z-10">
+              <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">用户名</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">用户ID</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">配额</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">状态</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">注册时间</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">操作</th>
+              </tr>
+            </thead>
+            <tbody id="users-table" class="bg-white divide-y divide-gray-200">
+              <tr>
+                <td colspan="6" class="px-6 py-4 text-center text-gray-500">加载中...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-
-        <!-- 注册令牌内容 -->
-        <div id="content-tokens" class="hidden">
-          <div class="p-4 border-b border-gray-200 flex gap-2">
-            <button onclick="createToken()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
-              创建注册令牌
-            </button>
-            <button onclick="loadTokens()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
-              刷新列表
-            </button>
+        <!-- 分页控件 -->
+        <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-700">每页显示:</span>
+            <select id="page-size" class="border border-gray-300 rounded px-2 py-1 text-sm" onchange="changePageSize()">
+              <option value="20">20</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
           </div>
-          <div class="p-4">
-            <div id="tokens-list" class="space-y-2">
-              <p class="text-center py-8 text-gray-500">点击"刷新列表"加载令牌</p>
-            </div>
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-700" id="page-info">第 1 页 / 共 1 页</span>
+            <button onclick="changePage(-1)" id="prev-page" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">上一页</button>
+            <button onclick="changePage(1)" id="next-page" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">下一页</button>
           </div>
         </div>
       </div>
@@ -197,100 +200,276 @@
   </div>
 
   <script>
-    const baseUrl = window.location.origin;
     const passwordPrefix = "{{ password_prefix }}";
-    let allUsers = []; // 存储所有用户数据
+
+    // 分页相关变量
+    let currentPage = 1;
+    let pageSize = 50;
+    let totalUsers = 0;
+    let allUsersData = [];
+    const userDetailState = new Map();
+
+    function getUserCreatedTimestamp(user) {
+      const createdAt = user.created_at || user.createdAt || user.created_time || user.createdTime || user.created;
+      const timestamp = createdAt ? new Date(createdAt).getTime() : NaN;
+      return Number.isFinite(timestamp) ? timestamp : 0;
+    }
+
+    function sortUsersByCreatedAtDesc(users) {
+      return [...users].sort((a, b) => getUserCreatedTimestamp(b) - getUserCreatedTimestamp(a));
+    }
 
     // 加载统计信息
     async function loadStats() {
       try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/stats`);
+        const response = await fetch(`${passwordPrefix}/api/admin/stats`);
         const data = await response.json();
 
-        if (data.status === "success") {
+        if (data.status === 'success' && data.data) {
           const stats = data.data;
-          document.getElementById('total-users').textContent = stats.users.total.toLocaleString();
-          document.getElementById('total-pages-granted').textContent = stats.pages.total_granted.toLocaleString();
-          document.getElementById('total-pages-used').textContent = stats.pages.total_used.toLocaleString();
+          document.getElementById('total-users').textContent = (stats.users?.total || 0).toLocaleString();
+          document.getElementById('total-pages-granted').textContent = (stats.pages?.total_granted || 0).toLocaleString();
+          document.getElementById('total-pages-used').textContent = (stats.pages?.total_used || 0).toLocaleString();
         }
       } catch (err) {
-        console.error("加载统计失败:", err);
+        console.error('加载统计信息失败:', err);
       }
     }
 
-    // 渲染用户列表
-    function renderUsers(users) {
-      const container = document.getElementById('users-list');
-
-      if (users && users.length > 0) {
-        container.innerHTML = users.map(user => `
-          <div class="bg-gray-50 rounded-lg p-4 border border-gray-200 ${user.is_disabled ? 'opacity-60' : ''}" data-username="${user.username.toLowerCase()}">
-            <div class="flex justify-between items-start">
-              <div class="flex-1">
-                <div class="flex items-center gap-2 mb-2">
-                  <span class="font-bold text-gray-800">${user.username}</span>
-                  ${user.is_admin ? '<span class="bg-blue-500 text-white text-xs px-2 py-0.5 rounded">管理员</span>' : ''}
-                  ${user.is_disabled ? '<span class="bg-red-500 text-white text-xs px-2 py-0.5 rounded">已禁用</span>' : ''}
-                </div>
-                <div class="text-xs text-gray-500 mb-2 font-mono">UUID: ${user.id}</div>
-                <div class="text-sm text-gray-600 space-y-1">
-                  <p>配额: <span class="font-semibold text-gray-800">${user.remaining_pages.toLocaleString()}/${user.total_pages.toLocaleString()}</span> 页</p>
-                  <p>已使用: <span class="font-semibold text-gray-800">${user.used_pages.toLocaleString()}</span> 页</p>
-                  <p>注册时间: ${new Date(user.created_at).toLocaleString('zh-CN')}</p>
-                </div>
-              </div>
-              <div class="flex gap-2">
-                <button onclick="adjustQuota('${user.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm">
-                  调整配额
-                </button>
-                ${user.is_disabled
-                  ? `<button onclick="toggleUserStatus('${user.id}', false)" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">启用</button>`
-                  : `<button onclick="toggleUserStatus('${user.id}', true)" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">禁用</button>`
-                }
-              </div>
-            </div>
-          </div>
-        `).join('');
-      } else {
-        container.innerHTML = '<p class="text-center py-8 text-gray-500">暂无用户</p>';
-      }
+    // 防抖函数
+    function debounce(func, wait) {
+      let timeout;
+      return function executedFunction(...args) {
+        const later = () => {
+          clearTimeout(timeout);
+          func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+      };
     }
 
     // 加载用户列表
     async function loadUsers() {
+      const statusFilter = document.getElementById('status-filter').value;
+
       try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/users/list`);
+        let url = `${passwordPrefix}/api/admin/users/list?limit=1000`;
+
+        const response = await fetch(url);
         const data = await response.json();
 
-        if (data.status === "success" && data.data) {
-          allUsers = data.data;
-          renderUsers(allUsers);
-          // 清空搜索框
-          document.getElementById('search-input').value = '';
+        if (data.status === 'success' && data.data) {
+          allUsersData = sortUsersByCreatedAtDesc(data.data);
+          const existingIds = new Set(allUsersData.map(user => user.id));
+          Array.from(userDetailState.keys()).forEach(id => {
+            if (!existingIds.has(id)) {
+              userDetailState.delete(id);
+            }
+          });
+          currentPage = 1;
+          displayUsers(allUsersData, statusFilter);
+          loadStats();
         } else {
-          allUsers = [];
-          renderUsers([]);
+          document.getElementById('users-table').innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
         }
       } catch (err) {
-        console.error("加载用户失败:", err);
-        document.getElementById('users-list').innerHTML = '<p class="text-center py-8 text-red-500">加载失败</p>';
+        console.error('加载用户列表失败:', err);
+        document.getElementById('users-table').innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
       }
     }
 
-    // 搜索过滤用户
-    function filterUsers() {
-      const searchTerm = document.getElementById('search-input').value.toLowerCase().trim();
+    // 显示用户列表
+    function displayUsers(users, statusFilter = '') {
+      const tbody = document.getElementById('users-table');
+      const searchQuery = document.getElementById('search-input').value.toLowerCase();
 
-      if (!searchTerm) {
-        renderUsers(allUsers);
+      let filteredUsers = users;
+
+      // 搜索过滤
+      if (searchQuery) {
+        filteredUsers = filteredUsers.filter(user =>
+          user.username.toLowerCase().includes(searchQuery) ||
+          user.id.toLowerCase().includes(searchQuery)
+        );
+      }
+
+      // 状态过滤
+      if (statusFilter === 'active') {
+        filteredUsers = filteredUsers.filter(user => !user.is_disabled && !user.is_admin);
+      } else if (statusFilter === 'disabled') {
+        filteredUsers = filteredUsers.filter(user => user.is_disabled);
+      } else if (statusFilter === 'admin') {
+        filteredUsers = filteredUsers.filter(user => user.is_admin);
+      }
+
+      totalUsers = filteredUsers.length;
+
+      if (filteredUsers.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-gray-500">暂无用户</td></tr>';
+        updatePaginationUI();
         return;
       }
 
-      const filteredUsers = allUsers.filter(user =>
-        user.username.toLowerCase().includes(searchTerm)
-      );
+      const startIndex = (currentPage - 1) * pageSize;
+      const endIndex = Math.min(startIndex + pageSize, filteredUsers.length);
+      const currentPageUsers = filteredUsers.slice(startIndex, endIndex);
 
-      renderUsers(filteredUsers);
+      const fragment = document.createDocumentFragment();
+
+      currentPageUsers.forEach(user => {
+        fragment.appendChild(createUserRow(user));
+        fragment.appendChild(createUserDetailRow(user));
+      });
+
+      tbody.innerHTML = '';
+      tbody.appendChild(fragment);
+      updatePaginationUI();
+    }
+
+    // 更新分页UI
+    function updatePaginationUI() {
+      const totalPages = Math.ceil(totalUsers / pageSize);
+      document.getElementById('page-info').textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页 (总计 ${totalUsers} 条)`;
+
+      const prevBtn = document.getElementById('prev-page');
+      const nextBtn = document.getElementById('next-page');
+
+      prevBtn.disabled = currentPage <= 1;
+      nextBtn.disabled = currentPage >= totalPages;
+    }
+
+    // 改变页码
+    function changePage(delta) {
+      const totalPages = Math.ceil(totalUsers / pageSize);
+      const newPage = currentPage + delta;
+
+      if (newPage >= 1 && newPage <= totalPages) {
+        currentPage = newPage;
+        const status = document.getElementById('status-filter').value;
+        displayUsers(allUsersData, status);
+      }
+    }
+
+    // 改变每页显示数量
+    function changePageSize() {
+      pageSize = parseInt(document.getElementById('page-size').value);
+      currentPage = 1;
+      const status = document.getElementById('status-filter').value;
+      displayUsers(allUsersData, status);
+    }
+
+    // 创建用户行元素
+    function createUserRow(user) {
+      const tr = document.createElement('tr');
+      tr.className = 'hover:bg-blue-50 cursor-pointer';
+      tr.setAttribute('data-user-id', user.id);
+      tr.onclick = () => toggleUserDetails(user.id);
+
+      tr.innerHTML = createUserRowHtml(user);
+      return tr;
+    }
+
+    // 创建用户行HTML
+    function createUserRowHtml(user) {
+      const createdAt = formatDateTime(user.created_at);
+      const detailLabel = userDetailState.get(user.id) ? '收起详情' : '展开详情';
+
+      let statusBadges = '';
+      if (user.is_admin) {
+        statusBadges += '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-purple-100 text-purple-800">管理员</span> ';
+      }
+      if (user.is_disabled) {
+        statusBadges += '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">已禁用</span>';
+      }
+      if (!user.is_admin && !user.is_disabled) {
+        statusBadges = '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">正常</span>';
+      }
+
+      return `
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${user.username}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600" title="${user.id}">${user.id.substring(0, 8)}...</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${user.remaining_pages.toLocaleString()}/${user.total_pages.toLocaleString()}</td>
+        <td class="px-6 py-4 whitespace-nowrap">${statusBadges}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${createdAt}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 space-x-2">
+          <button type="button" class="text-sm text-gray-600 hover:underline" onclick="event.stopPropagation(); toggleUserDetails('${user.id}')">${detailLabel}</button>
+          <button type="button" class="text-sm text-blue-600 hover:underline" onclick="event.stopPropagation(); adjustQuota('${user.id}')">调整配额</button>
+          ${user.is_disabled
+            ? `<button type="button" class="text-sm text-green-600 hover:underline" onclick="event.stopPropagation(); toggleUserStatus('${user.id}', false)">启用</button>`
+            : `<button type="button" class="text-sm text-red-600 hover:underline" onclick="event.stopPropagation(); toggleUserStatus('${user.id}', true)">禁用</button>`
+          }
+        </td>
+      `;
+    }
+
+    function createUserDetailRow(user) {
+      const isExpanded = userDetailState.get(user.id) || false;
+      const detailRow = document.createElement("tr");
+      detailRow.setAttribute('data-detail-for', user.id);
+      detailRow.className = isExpanded ? 'bg-gray-50' : 'bg-gray-50 hidden';
+
+      const detailCell = document.createElement("td");
+      detailCell.colSpan = 6;
+      detailCell.className = 'px-6 py-4 text-sm text-gray-600';
+
+      detailCell.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">用户 ID</p>
+            <p class="font-mono text-sm text-gray-800 break-all">${user.id}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">用户名</p>
+            <p class="text-sm text-gray-800">${user.username}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">管理员</p>
+            <p class="text-sm text-gray-800">${user.is_admin ? '是' : '否'}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">总配额</p>
+            <p class="text-sm text-gray-800">${user.total_pages.toLocaleString()} 页</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">已使用</p>
+            <p class="text-sm text-gray-800">${user.used_pages.toLocaleString()} 页</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">剩余配额</p>
+            <p class="text-sm text-gray-800">${user.remaining_pages.toLocaleString()} 页</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">账号状态</p>
+            <p class="text-sm text-gray-800">${user.is_disabled ? '已禁用' : '正常'}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">注册时间</p>
+            <p class="text-sm text-gray-800">${formatDateTime(user.created_at)}</p>
+          </div>
+        </div>
+      `;
+      detailRow.appendChild(detailCell);
+      return detailRow;
+    }
+
+    function toggleUserDetails(userId) {
+      const currentState = userDetailState.get(userId) || false;
+      const newState = !currentState;
+      userDetailState.set(userId, newState);
+
+      const detailRow = document.querySelector(`tr[data-detail-for="${userId}"]`);
+      if (detailRow) {
+        detailRow.classList.toggle('hidden', !newState);
+      }
+
+      const summaryRow = document.querySelector(`tr[data-user-id="${userId}"]`);
+      if (summaryRow) {
+        const toggleButton = summaryRow.querySelector('button[onclick*="toggleUserDetails"]');
+        if (toggleButton) {
+          toggleButton.textContent = newState ? '收起详情' : '展开详情';
+        }
+      }
     }
 
     // 调整用户配额
@@ -302,7 +481,7 @@
       }
 
       try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/users/${userId}/quota`, {
+        const response = await fetch(`${passwordPrefix}/api/admin/users/${userId}/quota`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
@@ -316,7 +495,6 @@
         if (data.status === "success") {
           alert(data.message);
           loadUsers();
-          loadStats();
         } else {
           alert("操作失败: " + (data.message || "未知错误"));
         }
@@ -335,7 +513,7 @@
 
       try {
         const endpoint = disable ? 'disable' : 'enable';
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/users/${userId}/${endpoint}`, {
+        const response = await fetch(`${passwordPrefix}/api/admin/users/${userId}/${endpoint}`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'}
         });
@@ -354,214 +532,54 @@
       }
     }
 
-    // ========== 标签切换 ==========
-    function switchTab(tab) {
-      const tabUsers = document.getElementById('tab-users');
-      const tabTokens = document.getElementById('tab-tokens');
-      const contentUsers = document.getElementById('content-users');
-      const contentTokens = document.getElementById('content-tokens');
-
-      if (tab === 'users') {
-        tabUsers.className = 'px-6 py-3 font-medium border-b-2 border-blue-500 text-blue-600';
-        tabTokens.className = 'px-6 py-3 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700';
-        contentUsers.className = '';
-        contentTokens.className = 'hidden';
-      } else {
-        tabUsers.className = 'px-6 py-3 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700';
-        tabTokens.className = 'px-6 py-3 font-medium border-b-2 border-blue-500 text-blue-600';
-        contentUsers.className = 'hidden';
-        contentTokens.className = '';
+    function formatDateTime(value) {
+      if (!value) {
+        return '-';
       }
-    }
-
-    // ========== 注册令牌管理 ==========
-    async function loadTokens() {
       try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/list`);
-        const data = await response.json();
-
-        const container = document.getElementById('tokens-list');
-
-        if (data.status === "success" && data.data && data.data.length > 0) {
-          container.innerHTML = data.data.map(token => {
-            const registrationUrl = `${baseUrl}/register?token=${token.token}`;
-            const isExpired = token.expires_at && new Date(token.expires_at) < new Date();
-            const isExhausted = token.remaining_uses <= 0;
-
-            return `
-              <div class="bg-gray-50 rounded-lg p-4 border border-gray-200 ${!token.is_active || isExpired || isExhausted ? 'opacity-60' : ''}">
-                <div class="flex justify-between items-start mb-3">
-                  <div class="flex-1">
-                    <div class="flex items-center gap-2 mb-2">
-                      <span class="text-xs font-mono bg-gray-200 px-2 py-1 rounded">${token.token.substring(0, 16)}...</span>
-                      ${!token.is_active ? '<span class="bg-red-500 text-white text-xs px-2 py-0.5 rounded">已禁用</span>' : ''}
-                      ${isExpired ? '<span class="bg-orange-500 text-white text-xs px-2 py-0.5 rounded">已过期</span>' : ''}
-                      ${isExhausted ? '<span class="bg-yellow-500 text-white text-xs px-2 py-0.5 rounded">已用完</span>' : ''}
-                    </div>
-                    <div class="text-sm text-gray-600 space-y-1">
-                      <p>使用次数: <span class="font-semibold text-gray-800">${token.used_count}/${token.max_uses}</span> (剩余: ${token.remaining_uses})</p>
-                      ${token.expires_at ? `<p>过期时间: ${new Date(token.expires_at).toLocaleString('zh-CN')}</p>` : '<p>永不过期</p>'}
-                      <p>创建时间: ${new Date(token.created_at).toLocaleString('zh-CN')}</p>
-                      ${token.description ? `<p>描述: ${token.description}</p>` : ''}
-                    </div>
-                  </div>
-                </div>
-                <div class="flex gap-2 flex-wrap">
-                  <button onclick="copyUrl('${registrationUrl}')" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">
-                    复制注册链接
-                  </button>
-                  <button onclick="toggleToken('${token.token}')" class="bg-${token.is_active ? 'orange' : 'blue'}-500 hover:bg-${token.is_active ? 'orange' : 'blue'}-600 text-white px-3 py-1 rounded text-sm">
-                    ${token.is_active ? '禁用' : '启用'}
-                  </button>
-                  <button onclick="deleteToken('${token.token}')" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">
-                    删除
-                  </button>
-                </div>
-              </div>
-            `;
-          }).join('');
-        } else {
-          container.innerHTML = '<p class="text-center py-8 text-gray-500">暂无注册令牌</p>';
-        }
+        return new Date(value).toLocaleString('zh-CN');
       } catch (err) {
-        console.error("加载令牌失败:", err);
-        document.getElementById('tokens-list').innerHTML = '<p class="text-center py-8 text-red-500">加载失败</p>';
+        return value;
       }
     }
 
-    async function createToken() {
-      const maxUses = prompt("输入最大使用次数 (默认为1):");
-      if (maxUses === null) return;
+    // 页面加载时初始化
+    window.addEventListener('load', () => {
+      loadUsers();
+      loadStats();
 
-      const maxUsesNum = parseInt(maxUses) || 1;
-      if (maxUsesNum < 1) {
-        alert("最大使用次数必须大于0");
-        return;
-      }
+      // 搜索框输入时实时过滤（使用较短的防抖时间）
+      const searchInput = document.getElementById('search-input');
+      const debouncedFilter = debounce(() => {
+        const status = document.getElementById('status-filter').value;
+        currentPage = 1;
+        displayUsers(allUsersData, status);
+      }, 200);
+      searchInput.addEventListener('input', debouncedFilter);
 
-      const expiresDays = prompt("输入过期天数 (留空表示永不过期):");
-      const expiresDaysNum = expiresDays ? parseInt(expiresDays) : null;
-
-      const description = prompt("输入描述 (可选):");
-
-      try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/create`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            max_uses: maxUsesNum,
-            expires_days: expiresDaysNum,
-            description: description || null
-          })
-        });
-
-        const data = await response.json();
-
-        if (data.status === "success") {
-          alert(`注册令牌创建成功！\n\n注册链接:\n${data.registration_url}\n\n点击确定后自动复制链接到剪贴板`);
-          copyToClipboard(data.registration_url);
-          loadTokens();
-        } else {
-          alert("创建失败: " + (data.message || "未知错误"));
-        }
-      } catch (err) {
-        console.error("创建令牌失败:", err);
-        alert("操作失败,请重试");
-      }
-    }
-
-    async function toggleToken(token) {
-      try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/${token}/toggle`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'}
-        });
-
-        const data = await response.json();
-
-        if (data.status === "success") {
-          alert(data.message);
-          loadTokens();
-        } else {
-          alert("操作失败: " + (data.message || "未知错误"));
-        }
-      } catch (err) {
-        console.error("切换令牌状态失败:", err);
-        alert("操作失败,请重试");
-      }
-    }
-
-    async function deleteToken(token) {
-      if (!confirm("确定要删除此令牌吗？此操作不可撤销！")) {
-        return;
-      }
-
-      try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/${token}`, {
-          method: 'DELETE'
-        });
-
-        const data = await response.json();
-
-        if (data.status === "success") {
-          alert(data.message);
-          loadTokens();
-        } else {
-          alert("删除失败: " + (data.message || "未知错误"));
-        }
-      } catch (err) {
-        console.error("删除令牌失败:", err);
-        alert("操作失败,请重试");
-      }
-    }
-
-    function copyUrl(url) {
-      copyToClipboard(url);
-      alert("注册链接已复制到剪贴板！");
-    }
-
-    function copyToClipboard(text) {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text);
-      } else {
-        // 降级方案
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      }
-    }
+      // 每30秒自动刷新
+      setInterval(() => {
+        loadUsers();
+      }, 30000);
+    });
 
     // 菜单控制
-    const menuBtn = document.getElementById("menu-btn");
-    const menuDropdown = document.getElementById("menu-dropdown");
+    const menuBtn = document.getElementById('menu-btn');
+    const menuDropdown = document.getElementById('menu-dropdown');
 
-    // 切换菜单显示/隐藏
-    menuBtn.addEventListener("click", (e) => {
+    menuBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      menuDropdown.classList.toggle("show");
+      menuDropdown.classList.toggle('show');
     });
 
     // 点击页面其他地方关闭菜单
-    document.addEventListener("click", () => {
-      menuDropdown.classList.remove("show");
+    document.addEventListener('click', () => {
+      menuDropdown.classList.remove('show');
     });
 
-    // 防止菜单内点击关闭菜单
-    menuDropdown.addEventListener("click", (e) => {
+    // 阻止菜单内点击事件冒泡
+    menuDropdown.addEventListener('click', (e) => {
       e.stopPropagation();
-    });
-
-    // 页面加载时
-    window.addEventListener('load', () => {
-      loadStats();
-      loadUsers();
-      // 定时刷新
-      setInterval(loadStats, 30000);
     });
   </script>
 </body>

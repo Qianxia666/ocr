@@ -9,47 +9,116 @@ from io import BytesIO
 from PIL import Image
 import aiohttp
 import base64
+import json
 
 from models.database import (
     TaskStatus, TaskType, task_model, page_result_model,
     task_progress_model, page_batch_model,
     init_database, cleanup_database
 )
-from core.task_queue import TaskQueue, WorkerPool, TaskItem, task_queue, worker_pool
-from core.page_processor import PageProcessor, init_page_processor, shutdown_page_processor
+from core.task_queue import (
+    TaskQueue, WorkerPool, TaskItem,
+    image_task_queue, pdf_task_queue,
+    image_worker_pool, pdf_worker_pool
+)
+from core.page_processor import (
+    PageProcessor,
+    init_page_processor,
+    shutdown_page_processor,
+    is_page_processor_ready,
+    ensure_page_processor_ready
+)
 from core.progress_tracker import ProgressTracker, init_progress_tracker, shutdown_progress_tracker, progress_tracker
 from core.system_integration import SystemIntegration, init_system_integration, shutdown_system_integration, get_system_integration
 from core.timeout_manager import TimeoutLevel
 from core.error_handler import RecoveryStrategy
+from core.auth import get_auth_manager
 from models.websocket_messages import MessageFactory
 
 logger = logging.getLogger(__name__)
 
+def _extract_markdown_from_response(raw: str) -> str:
+    """Parse OCR model response and extract Markdown content"""
+    if not raw:
+        return ''
+
+    cleaned = raw.strip()
+
+    if cleaned.startswith('```') and cleaned.endswith('```'):
+        cleaned = cleaned.strip('`')
+        if cleaned.lower().startswith('json'):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            text_value = data.get('content') or data.get('text')
+            if isinstance(text_value, str) and text_value.strip():
+                return text_value.strip()
+        elif isinstance(data, str) and data.strip():
+            return data.strip()
+    except json.JSONDecodeError as exc:
+        logger.debug('OCR响应JSON解析失败: %s', exc)
+
+    return ''
+
 class TaskManager:
+    """Task manager coordinating queues and OCR workers."""
+
+    def _get_task_log_prefix(self, task_item: TaskItem) -> str:
+        file_name = getattr(task_item, 'file_name', None)
+        return f"[{file_name}] " if file_name else ''
+
+    def _task_logger(self, task_item: TaskItem):
+        prefix = self._get_task_log_prefix(task_item)
+
+        class _TaskLogger:
+            def info(self_inner, message: str) -> None:
+                logger.info(prefix + message)
+
+            def warning(self_inner, message: str) -> None:
+                logger.warning(prefix + message)
+
+            def error(self_inner, message: str) -> None:
+                logger.error(prefix + message)
+
+            def exception(self_inner, message: str) -> None:
+                logger.exception(prefix + message)
+
+        return _TaskLogger()
+
     """任务管理器 - 提供任务创建、查询、控制的高级接口"""
-    
+
     def __init__(self,
-                 task_queue: TaskQueue,
-                 worker_pool: WorkerPool,
+                 image_task_queue: TaskQueue,
+                 pdf_task_queue: TaskQueue,
+                 image_worker_pool: WorkerPool,
+                 pdf_worker_pool: WorkerPool,
                  api_config: Optional[Dict[str, Any]] = None,
                  websocket_manager=None):
         """
         初始化任务管理器
-        :param task_queue: 任务队列
-        :param worker_pool: 工作者池
+        :param image_task_queue: 图片任务队列
+        :param pdf_task_queue: PDF任务队列
+        :param image_worker_pool: 图片工作者池
+        :param pdf_worker_pool: PDF工作者池
         :param api_config: API配置
         :param websocket_manager: WebSocket管理器
         """
-        self.task_queue = task_queue
-        self.worker_pool = worker_pool
+        self.image_task_queue = image_task_queue
+        self.pdf_task_queue = pdf_task_queue
+        self.image_worker_pool = image_worker_pool
+        self.pdf_worker_pool = pdf_worker_pool
         self.api_config = api_config or {}
         self.websocket_manager = websocket_manager
         self._initialized = False
-        
+
         # 设置任务处理器
-        self.worker_pool.set_task_processor(self._process_task)
-        
-        logger.info("任务管理器初始化完成")
+        self.image_worker_pool.set_task_processor(self._process_task)
+        self.pdf_worker_pool.set_task_processor(self._process_task)
+
+        logger.info("任务管理器初始化完成（双队列模式）")
     
     async def initialize(self):
         """初始化任务管理器"""
@@ -110,16 +179,18 @@ class TaskManager:
             
             # 恢复未完成的任务
             try:
-                restored_count = await self.task_queue.restore_from_database()
-                logger.info(f"恢复了 {restored_count} 个未完成的任务")
+                image_restored = await self.image_task_queue.restore_from_database()
+                pdf_restored = await self.pdf_task_queue.restore_from_database()
+                logger.info(f"恢复了 {image_restored + pdf_restored} 个未完成的任务 (图片: {image_restored}, PDF: {pdf_restored})")
             except Exception as e:
                 logger.warning(f"恢复未完成任务失败: {e}")
                 # 继续执行
-            
-            # 启动工作者池
+
+            # 启动工作者池（图片和PDF分别启动）
             try:
-                await self.worker_pool.start()
-                logger.info("工作者池启动成功")
+                await self.image_worker_pool.start()
+                await self.pdf_worker_pool.start()
+                logger.info("图片和PDF工作者池启动成功")
             except Exception as e:
                 logger.error(f"工作者池启动失败: {e}")
                 # 工作者池是必需的，如果失败则抛出异常
@@ -136,26 +207,27 @@ class TaskManager:
         """关闭任务管理器"""
         if not self._initialized:
             return
-        
+
         try:
-            # 停止工作者池
-            await self.worker_pool.stop()
-            
+            # 停止工作者池（图片和PDF分别停止）
+            await self.image_worker_pool.stop()
+            await self.pdf_worker_pool.stop()
+
             # 关闭页面处理器
             await shutdown_page_processor()
-            
+
             # 关闭进度跟踪器
             await shutdown_progress_tracker()
-            
+
             # 关闭系统集成器
             await shutdown_system_integration()
-            
+
             # 清理数据库连接
             await cleanup_database()
-            
+
             self._initialized = False
             logger.info("任务管理器关闭完成")
-            
+
         except Exception as e:
             logger.error(f"任务管理器关闭失败: {e}")
     
@@ -185,7 +257,7 @@ class TaskManager:
             metadata=metadata or {}
         )
 
-        success = await self.task_queue.put(task_item)
+        success = await self.image_task_queue.put(task_item)
         if success:
             logger.info(f"图片OCR任务提交成功: {task_id}")
 
@@ -237,7 +309,7 @@ class TaskManager:
             }
         )
 
-        success = await self.task_queue.put(task_item)
+        success = await self.image_task_queue.put(task_item)
         if success:
             logger.info(f"图片OCR任务提交成功(临时文件模式): {task_id}")
 
@@ -290,7 +362,7 @@ class TaskManager:
             metadata=metadata or {}
         )
 
-        success = await self.task_queue.put(task_item)
+        success = await self.pdf_task_queue.put(task_item)
         if success:
             logger.info(f"PDF OCR任务提交成功: {task_id} ({total_pages}页)")
 
@@ -343,7 +415,7 @@ class TaskManager:
             }
         )
 
-        success = await self.task_queue.put(task_item)
+        success = await self.pdf_task_queue.put(task_item)
         if success:
             logger.info(f"PDF OCR任务提交成功(临时文件模式): {task_id} ({total_pages}页)")
 
@@ -366,17 +438,21 @@ class TaskManager:
         task_data = await task_model.get_task(task_id)
         if not task_data:
             return None
-        
-        # 获取队列状态
-        queue_status = await self.task_queue.get_task_status(task_id)
+
+        # 根据任务类型获取队列状态
+        if task_data['task_type'] == TaskType.IMAGE_OCR.value:
+            queue_status = await self.image_task_queue.get_task_status(task_id)
+        else:
+            queue_status = await self.pdf_task_queue.get_task_status(task_id)
+
         if queue_status:
             task_data['queue_status'] = queue_status
-        
+
         # 如果是PDF任务，获取页面结果
         if task_data['task_type'] == TaskType.PDF_OCR.value:
             page_results = await page_result_model.get_task_page_results(task_id)
             task_data['page_results'] = page_results
-        
+
         return task_data
     
     async def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -443,6 +519,43 @@ class TaskManager:
 
         return result
     
+
+    async def cancel_task(self, task_id: str, reason: str = "管理员手动停止") -> tuple[bool, str]:
+        """取消指定任务"""
+        task = await task_model.get_task(task_id)
+        if not task:
+            return False, "任务不存在"
+
+        status = task.get('status')
+        if status in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
+            return False, "任务已结束"
+
+        task_type_value = task.get('task_type')
+        if task_type_value == TaskType.IMAGE_OCR.value:
+            queue = self.image_task_queue
+            pool = self.image_worker_pool
+        else:
+            queue = self.pdf_task_queue
+            pool = self.pdf_worker_pool
+
+        cancelled_pending = await queue.cancel_task(task_id, reason)
+        if cancelled_pending:
+            await self._refund_task_quota(task)
+            await self._send_task_cancelled_message(task_id, reason)
+            return True, "已取消等待中的任务"
+
+        if not pool:
+            return False, "任务无法取消"
+
+        cancelled_processing = await pool.cancel_task(task_id, reason)
+        if cancelled_processing:
+            latest_task = await task_model.get_task(task_id)
+            await self._refund_task_quota(latest_task or task)
+            await self._send_task_cancelled_message(task_id, reason)
+            return True, "已停止任务处理"
+
+        return False, "任务可能已完成，请刷新列表"
+
     async def get_tasks_list(self, status: Optional[str] = None, limit: int = 100):
         """获取任务列表"""
         if status:
@@ -597,155 +710,160 @@ class TaskManager:
         return stats
     
     async def get_system_stats(self) -> Dict[str, Any]:
-        """获取系统统计信息"""
-        queue_stats = await self.task_queue.get_queue_stats()
-        worker_stats = await self.worker_pool.get_worker_stats()
-        
-        # 获取系统健康状态
+        """获取系统级统计信息"""
+        image_queue_stats = await self.image_task_queue.get_queue_stats()
+        pdf_queue_stats = await self.pdf_task_queue.get_queue_stats()
+
+        image_worker_stats = await self.image_worker_pool.get_worker_stats()
+        pdf_worker_stats = await self.pdf_worker_pool.get_worker_stats()
+
         system_health = {}
         system_integration = get_system_integration()
         if system_integration:
             system_health = await system_integration.get_system_health()
-        
+
         return {
-            'queue': queue_stats,
-            'workers': worker_stats,
+            'queues': {
+                'image': image_queue_stats,
+                'pdf': pdf_queue_stats
+            },
+            'workers': {
+                'image': image_worker_stats,
+                'pdf': pdf_worker_stats
+            },
             'system_health': system_health,
             'system': {
                 'initialized': self._initialized,
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
         }
-    
+
     async def auto_scale_workers(self):
-        """自动调整工作者数量"""
+        """根据队列压力自动调整工作者数量"""
         try:
-            queue_stats = await self.task_queue.get_queue_stats()
-            pending_count = queue_stats['pending_count']
-            processing_count = queue_stats['processing_count']
-            
-            # 简单的自动缩放策略
-            if pending_count > processing_count * 2:
-                # 待处理任务较多，增加工作者
-                current_workers = len(worker_pool._workers)
-                target_workers = min(current_workers + 1, worker_pool.max_workers)
-                await self.worker_pool.scale_workers(target_workers)
-                logger.info(f"自动扩容工作者到 {target_workers}")
-            elif pending_count == 0 and processing_count < worker_pool.min_workers:
-                # 没有待处理任务，减少工作者
-                current_workers = len(worker_pool._workers)
-                target_workers = max(current_workers - 1, worker_pool.min_workers)
-                await self.worker_pool.scale_workers(target_workers)
-                logger.info(f"自动缩容工作者到 {target_workers}")
-                
+            queue_pool_pairs = (
+                ('image', self.image_task_queue, self.image_worker_pool),
+                ('pdf', self.pdf_task_queue, self.pdf_worker_pool),
+            )
+
+            for label, queue, pool in queue_pool_pairs:
+                queue_stats = await queue.get_queue_stats()
+                pending_count = queue_stats['pending_count']
+                processing_count = queue_stats['processing_count']
+
+                worker_stats = await pool.get_worker_stats()
+                current_workers = worker_stats['total_workers']
+                target_workers = current_workers
+
+                if pending_count > max(1, processing_count) * 2:
+                    target_workers = min(current_workers + 1, pool.max_workers)
+                elif pending_count == 0 and processing_count == 0 and current_workers > pool.min_workers:
+                    target_workers = max(current_workers - 1, pool.min_workers)
+
+                if target_workers != current_workers:
+                    scaled = await pool.scale_workers(target_workers)
+                    if scaled:
+                        logger.info(f'自动调整{label}工作者数量到 {target_workers}')
         except Exception as e:
-            logger.error(f"自动缩放工作者失败: {e}")
-    
+            logger.error(f'自动调整工作者失败: {e}')
+
     async def _process_task(self, task_item: TaskItem) -> Dict[str, Any]:
-        """
-        处理任务的核心逻辑 - 集成超时和错误处理
-        :param task_item: 任务项
-        :return: 处理结果摘要
-        """
+        """Process a task with unified logging and monitoring."""
+        log = self._task_logger(task_item)
         task_id = task_item.task_id
         task_type = task_item.task_type.value
-        logger.info(f"=== 开始处理任务 {task_id} ({task_type}) ===")
-        
-        # 记录详细的任务信息
-        logger.info(f"任务详情: 文件名={task_item.file_name}, "
-                   f"文件大小={task_item.file_size}字节, "
-                   f"总页数={task_item.total_pages}, "
-                   f"优先级={task_item.priority}")
-        
+
+        log.info(f"=== start task {task_id} ({task_type}) ===")
+        log.info(
+            f"detail: file={task_item.file_name}, size={task_item.file_size} bytes, "
+            f"pages={task_item.total_pages}, priority={task_item.priority}"
+        )
+
         system_integration = get_system_integration()
         timeout_context = None
-        
+
         try:
-            # 1. 更新任务状态为处理中
-            logger.info(f"更新任务 {task_id} 状态为处理中...")
+            log.info(f"set task {task_id} status to processing")
             await task_model.update_task_status(task_id, TaskStatus.PROCESSING, progress=0.0)
-            logger.info(f"任务 {task_id} 状态已更新为处理中")
-            
-            # 2. 启动任务监控
-            logger.info(f"启动任务监控 {task_id}...")
+            log.info(f"task {task_id} status updated to processing")
+
+            log.info(f"begin monitoring {task_id}")
             if system_integration:
                 timeout_context = await system_integration.monitor_task_execution(
                     task_id, task_item.total_pages
                 )
-                logger.info(f"任务监控已启动 {task_id}")
+                log.info(f"monitoring enabled for {task_id}")
             else:
-                logger.warning(f"系统集成器不可用，跳过任务监控 {task_id}")
-            
-            # 3. 检查页面处理器状态（对于PDF任务）
+                log.warning(f"system integration unavailable, skip monitoring for {task_id}")
+
             if task_item.task_type == TaskType.PDF_OCR:
-                logger.info(f"检查页面处理器状态 {task_id}...")
-                from core.page_processor import is_page_processor_ready, ensure_page_processor_ready
-                
+                log.info(f"checking page processor for {task_id}")
                 if not is_page_processor_ready():
-                    logger.warning(f"页面处理器未就绪 {task_id}，尝试重新初始化...")
+                    log.warning(f"page processor not ready for {task_id}, reinitializing")
                     processor_ready = await ensure_page_processor_ready(self.api_config)
                     if not processor_ready:
-                        logger.error(f"页面处理器初始化失败 {task_id}，将使用备用处理方式")
+                        log.error(f"page processor initialization failed for {task_id}; fallback will be used if needed")
                     else:
-                        logger.info(f"页面处理器重新初始化成功 {task_id}")
+                        log.info(f"page processor reinitialized for {task_id}")
                 else:
-                    logger.info(f"页面处理器已就绪 {task_id}")
-            
-            # 4. 执行任务处理
-            logger.info(f"开始执行任务处理逻辑 {task_id}...")
+                    log.info(f"page processor ready for {task_id}")
+
+            log.info(f"execute task pipeline for {task_id}")
             if task_item.task_type == TaskType.IMAGE_OCR:
-                logger.info(f"处理图片OCR任务 {task_id}")
+                log.info(f"dispatch image OCR for {task_id}")
                 result = await self._process_image_task_protected(task_item)
             elif task_item.task_type == TaskType.PDF_OCR:
-                logger.info(f"处理PDF OCR任务 {task_id}")
+                log.info(f"dispatch PDF OCR for {task_id}")
                 result = await self._process_pdf_task_protected(task_item)
             else:
-                error_msg = f"不支持的任务类型: {task_item.task_type}"
-                logger.error(f"{error_msg} {task_id}")
-                raise Exception(error_msg)
-            
-            logger.info(f"任务处理逻辑执行完成 {task_id}")
-            
-            # 5. 完成任务监控
+                msg = f"unsupported task type: {task_item.task_type}"
+                log.error(f"{msg} ({task_id})")
+                raise Exception(msg)
+
+            log.info(f"task pipeline finished for {task_id}")
+
             if system_integration and timeout_context:
-                logger.info(f"完成任务监控 {task_id} (成功)")
+                log.info(f"complete monitoring {task_id} (success)")
                 await system_integration.complete_task_monitoring(
                     task_id, timeout_context, success=True
                 )
-            
-            logger.info(f"=== 任务处理完成 {task_id} ===")
+
+            log.info(f"=== task finished {task_id} ===")
             return result
-                
-        except Exception as e:
-            # 完成任务监控（失败）
+
+        except Exception as exc:
             if system_integration and timeout_context:
-                logger.info(f"完成任务监控 {task_id} (失败)")
+                log.info(f"complete monitoring {task_id} (failure)")
                 await system_integration.complete_task_monitoring(
                     task_id, timeout_context, success=False
                 )
-            
-            logger.error(f"=== 任务处理失败 {task_id}: {e} ===")
-            logger.exception(f"任务处理失败详情 {task_id}:")
-            
-            # 更新任务状态为失败
+
+            log.error(f"=== task failed {task_id}: {exc} ===")
+            log.exception(f"task failure details {task_id}:")
+
             try:
                 await task_model.update_task_status(
                     task_id, TaskStatus.FAILED,
-                    error_message=str(e)
+                    error_message=str(exc)
                 )
-                logger.info(f"任务 {task_id} 状态已更新为失败")
+                log.info(f"task {task_id} status updated to failed")
             except Exception as update_error:
-                logger.error(f"更新任务状态失败 {task_id}: {update_error}")
-            
+                log.error(f"failed to update task status {task_id}: {update_error}")
+
             raise
-    
+        finally:
+            if system_integration and timeout_context:
+                try:
+                    await system_integration.finalize_task_monitoring(task_id, timeout_context)
+                except Exception as finalize_error:
+                    log.warning(f"finalize monitoring failed {task_id}: {finalize_error}")
     async def _process_image_task_protected(self, task_item: TaskItem) -> Dict[str, Any]:
         """处理图片OCR任务 - 带保护机制"""
         system_integration = get_system_integration()
-        
+
         async def _process_image_operation():
             return await self._process_image_task(task_item)
-        
+
         if system_integration:
             return await system_integration.execute_with_protection(
                 task_id=task_item.task_id,
@@ -755,58 +873,59 @@ class TaskManager:
             )
         else:
             return await self._process_image_task(task_item)
-    
+
     async def _process_image_task(self, task_item: TaskItem) -> Dict[str, Any]:
-        """处理图片OCR任务"""
+        """Process a single image OCR task."""
         import os
+    
+        log = self._task_logger(task_item)
         start_time = time.time()
         temp_file_path = task_item.metadata.get('temp_file_path')
-        image_data = None
-
+        image_data: Optional[bytes] = None
+    
         try:
-            # 读取图片数据
             if temp_file_path:
-                # 从临时文件读取
-                logger.info(f"从临时文件读取图片数据: {temp_file_path}")
-                with open(temp_file_path, 'rb') as f:
-                    image_data = f.read()
+                log.info(f"load image bytes from temp file {temp_file_path}")
+                with open(temp_file_path, 'rb') as handle:
+                    image_data = handle.read()
             else:
-                # 从内存读取(传统模式)
-                logger.info(f"从内存读取图片数据")
+                log.info("load inline image bytes from request payload")
                 image_data = task_item.file_data
 
             if not image_data:
-                raise Exception("图片数据为空")
+                raise Exception('image data is empty')
 
-            # 调用受保护的OCR API
             content = await self._call_ocr_api_protected(task_item.task_id, image_data)
             processing_time = time.time() - start_time
-
-            # 清理图片数据
             image_data = None
 
-            # 保存结果到数据库
-            await page_result_model.create_page_result(task_item.task_id, 1, "completed")
+            await page_result_model.create_page_result(task_item.task_id, 1, 'completed')
             await page_result_model.update_page_result(
-                task_item.task_id, 1, "completed",
-                content=content, processing_time=processing_time
+                task_item.task_id,
+                1,
+                'completed',
+                content=content,
+                processing_time=processing_time
             )
 
-            # 更新任务进度
             await task_model.update_task_status(
-                task_item.task_id, TaskStatus.PROCESSING,
-                progress=100.0, processed_pages=1
+                task_item.task_id,
+                TaskStatus.PROCESSING,
+                progress=100.0,
+                processed_pages=1
             )
 
-            # 发送页面完成消息
             if self.websocket_manager:
                 page_message = MessageFactory.create_page_completed(
-                    task_item.task_id, 1, "completed",
+                    task_item.task_id,
+                    1,
+                    'completed',
                     content_length=len(content) if content else 0,
                     processing_time=processing_time
                 )
                 await self.websocket_manager.send_to_task_subscribers(
-                    task_item.task_id, page_message.to_dict()
+                    task_item.task_id,
+                    page_message.to_dict()
                 )
 
             file_size_mb = round(task_item.file_size / (1024 * 1024), 2)
@@ -820,44 +939,46 @@ class TaskManager:
                 'file_size_mb': file_size_mb
             }
 
-            # 发送任务完成消息
             if self.websocket_manager:
                 completed_message = MessageFactory.create_task_completed(
-                    task_item.task_id, result_summary,
+                    task_item.task_id,
+                    result_summary,
                     content_preview=content[:500] if content else None
                 )
                 await self.websocket_manager.send_to_task_subscribers(
-                    task_item.task_id, completed_message.to_dict()
+                    task_item.task_id,
+                    completed_message.to_dict()
                 )
 
-            logger.info(f"图片任务处理完成 {task_item.task_id} (耗时: {processing_time:.2f}s)")
+            log.info(f"image task completed {task_item.task_id} in {processing_time:.2f}s")
             return result_summary
-
-        except Exception as e:
+    
+        except Exception as exc:
             processing_time = time.time() - start_time
-
-            # 保存错误结果
-            await page_result_model.create_page_result(task_item.task_id, 1, "failed")
+    
+            await page_result_model.create_page_result(task_item.task_id, 1, 'failed')
             await page_result_model.update_page_result(
-                task_item.task_id, 1, "failed",
-                error_message=str(e), processing_time=processing_time
+                task_item.task_id,
+                1,
+                'failed',
+                error_message=str(exc),
+                processing_time=processing_time
             )
-
-            # 发送任务失败消息
+    
             if self.websocket_manager:
                 failed_message = MessageFactory.create_task_failed(
-                    task_item.task_id, str(e), failed_page=1
+                    task_item.task_id,
+                    str(exc),
+                    failed_page=1
                 )
                 await self.websocket_manager.send_to_task_subscribers(
-                    task_item.task_id, failed_message.to_dict()
+                    task_item.task_id,
+                    failed_message.to_dict()
                 )
-
+    
             raise
         finally:
-            # 注意: 不在这里清理临时文件，因为任务可能会重试
-            # 临时文件将在任务队列的cleanup回调中清理
             pass
-    
     async def _process_pdf_task_protected(self, task_item: TaskItem) -> Dict[str, Any]:
         """处理PDF OCR任务 - 带保护机制"""
         system_integration = get_system_integration()
@@ -877,104 +998,104 @@ class TaskManager:
     
     async def _process_pdf_task(self, task_item: TaskItem) -> Dict[str, Any]:
         """处理PDF OCR任务 - 使用新的分页处理器"""
+        log = self._task_logger(task_item)
         import os
         start_time = time.time()
         temp_file_path = task_item.metadata.get('temp_file_path')
 
         try:
-            logger.info(f"=== 开始PDF任务处理 {task_item.task_id} ===")
-            logger.info(f"任务详情: 文件名={task_item.file_name}, 总页数={task_item.total_pages}, 文件大小={task_item.file_size}字节")
+            log.info(f"=== 开始PDF任务处理 {task_item.task_id} ===")
+            log.info(f"任务详情: 文件名={task_item.file_name}, 总页数={task_item.total_pages}, 文件大小={task_item.file_size}字节")
 
             # 检查是否使用临时文件模式
             if temp_file_path:
-                logger.info(f"使用临时文件模式处理PDF: {temp_file_path}")
-            
+                log.info(f"使用临时文件模式处理PDF: {temp_file_path}")
+
             # 1. 使用分页处理器处理PDF
-            logger.info(f"检查页面处理器状态 {task_item.task_id}...")
-            from core.page_processor import is_page_processor_ready, init_page_processor
-            
+            log.info(f"检查页面处理器状态 {task_item.task_id}...")
+
             if not is_page_processor_ready():
-                logger.warning(f"页面处理器未初始化 {task_item.task_id}，尝试重新初始化...")
+                log.warning(f"页面处理器未初始化 {task_item.task_id}，尝试重新初始化...")
                 try:
                     await init_page_processor(self.api_config)
                     if not is_page_processor_ready():
                         raise Exception("页面处理器重新初始化失败")
-                    logger.info(f"页面处理器重新初始化成功 {task_item.task_id}")
+                    log.info(f"页面处理器重新初始化成功 {task_item.task_id}")
                 except Exception as e:
-                    logger.error(f"页面处理器重新初始化失败 {task_item.task_id}: {e}")
+                    log.error(f"页面处理器重新初始化失败 {task_item.task_id}: {e}")
                     # 不要抛出异常，而是使用内置的PDF处理逻辑
-                    logger.warning(f" 将使用内置PDF处理逻辑继续处理任务 {task_item.task_id}")
+                    log.warning(f" 将使用内置PDF处理逻辑继续处理任务 {task_item.task_id}")
                     return await self._process_pdf_fallback(task_item)
             else:
-                logger.info(f"页面处理器已就绪 {task_item.task_id}")
-            
+                log.info(f"页面处理器已就绪 {task_item.task_id}")
+
             # 2. 更新任务状态为处理中
-            logger.info(f"更新PDF任务状态为处理中 {task_item.task_id}...")
+            log.info(f"更新PDF任务状态为处理中 {task_item.task_id}...")
             update_success = await task_model.update_task_status(
                 task_item.task_id, TaskStatus.PROCESSING,
                 progress=0.0, processed_pages=0
             )
             if not update_success:
-                logger.error(f"更新PDF任务状态为处理中失败 {task_item.task_id}")
+                log.error(f"更新PDF任务状态为处理中失败 {task_item.task_id}")
             else:
-                logger.info(f"PDF任务状态已更新为处理中 {task_item.task_id}")
-            
+                log.info(f"PDF任务状态已更新为处理中 {task_item.task_id}")
+
             # 3. 开始分页处理，包含实时进度跟踪
-            logger.info(f"开始分页处理PDF {task_item.task_id} (总页数: {task_item.total_pages})...")
-            
+            log.info(f"开始分页处理PDF {task_item.task_id} (总页数: {task_item.total_pages})...")
+
             # 添加保护机制：确保页面处理器可用
-            logger.warning(f"=== 页面处理器可用性检查 {task_item.task_id} ===")
+            log.warning(f"=== 页面处理器可用性检查 {task_item.task_id} ===")
             
             # 检查并确保页面处理器可用
             processor_available = False
             max_retries = 2
             
             for retry in range(max_retries):
-                logger.warning(f"尝试 {retry + 1}/{max_retries}: 检查页面处理器状态")
-                
+                log.warning(f"尝试 {retry + 1}/{max_retries}: 检查页面处理器状态")
+
                 # 重新导入以获取最新的页面处理器引用
-                from core.page_processor import page_processor as current_page_processor, is_page_processor_ready, ensure_page_processor_ready
-                
-                logger.warning(f"当前页面处理器: {current_page_processor}")
-                logger.warning(f"页面处理器就绪状态: {is_page_processor_ready()}")
-                
+                from core.page_processor import page_processor as current_page_processor
+
+                log.warning(f"当前页面处理器: {current_page_processor}")
+                log.warning(f"页面处理器就绪状态: {is_page_processor_ready()}")
+
                 if current_page_processor is not None and is_page_processor_ready():
                     # 检查必要方法
                     if hasattr(current_page_processor, 'process_pdf_with_pagination'):
-                        logger.info(f"页面处理器可用，包含必要方法")
+                        log.info(f"页面处理器可用，包含必要方法")
                         processor_available = True
                         break
                     else:
-                        logger.error(f"页面处理器缺少 process_pdf_with_pagination 方法")
+                        log.error(f"页面处理器缺少 process_pdf_with_pagination 方法")
                 else:
-                    logger.warning(f"页面处理器不可用，尝试重新初始化...")
-                    
+                    log.warning(f"页面处理器不可用，尝试重新初始化...")
+
                     try:
                         init_success = await ensure_page_processor_ready(self.api_config)
-                        logger.info(f"页面处理器重新初始化结果: {init_success}")
-                        
+                        log.info(f"页面处理器重新初始化结果: {init_success}")
+
                         if init_success:
                             # 等待短暂时间确保初始化完成
                             await asyncio.sleep(0.5)
                             # 重新导入获取更新后的引用
                             from core.page_processor import page_processor as updated_page_processor
                             if updated_page_processor is not None and hasattr(updated_page_processor, 'process_pdf_with_pagination'):
-                                logger.info(f"页面处理器重新初始化后可用")
+                                log.info(f"页面处理器重新初始化后可用")
                                 processor_available = True
                                 current_page_processor = updated_page_processor
                                 break
                     except Exception as init_error:
-                        logger.error(f"页面处理器重新初始化异常: {init_error}")
-                
+                        log.error(f"页面处理器重新初始化异常: {init_error}")
+
                 # 如果不是最后一次尝试，等待一下再重试
                 if retry < max_retries - 1:
                     await asyncio.sleep(1)
-            
+
             if not processor_available:
-                logger.error(f"页面处理器最终不可用，使用备用处理方式 {task_item.task_id}")
+                log.error(f"页面处理器最终不可用，使用备用处理方式 {task_item.task_id}")
                 return await self._process_pdf_fallback(task_item)
-            
-            logger.warning(f"=== 页面处理器检查通过 {task_item.task_id} ===")
+
+            log.warning(f"=== 页面处理器检查通过 {task_item.task_id} ===")
             
             # 使用确认可用的页面处理器
             if temp_file_path:
@@ -983,7 +1104,8 @@ class TaskManager:
                     task_id=task_item.task_id,
                     file_path=temp_file_path,
                     total_pages=task_item.total_pages,
-                    websocket_manager=self.websocket_manager
+                    websocket_manager=self.websocket_manager,
+                    file_name=task_item.file_name
                 )
             else:
                 # 传统内存模式
@@ -991,52 +1113,53 @@ class TaskManager:
                     task_id=task_item.task_id,
                     file_data=task_item.file_data,
                     total_pages=task_item.total_pages,
-                    websocket_manager=self.websocket_manager
+                    websocket_manager=self.websocket_manager,
+                    file_name=task_item.file_name
                 )
             
-            logger.info(f"分页处理结果摘要: {result_summary}")
-            
+            log.info(f"分页处理结果摘要: {result_summary}")
+
             # 4. 更新任务状态为完成
             processing_time = time.time() - start_time
-            logger.info(f"更新PDF任务状态为完成 {task_item.task_id}...")
+            log.info(f"更新PDF任务状态为完成 {task_item.task_id}...")
             update_success = await task_model.update_task_status(
                 task_item.task_id, TaskStatus.COMPLETED,
                 progress=100.0, processed_pages=result_summary.get('successful_pages', 0)
             )
             if not update_success:
-                logger.error(f"更新PDF任务状态为完成失败 {task_item.task_id}")
+                log.error(f"更新PDF任务状态为完成失败 {task_item.task_id}")
             else:
-                logger.info(f"PDF任务状态已更新为完成 {task_item.task_id}")
-            
+                log.info(f"PDF任务状态已更新为完成 {task_item.task_id}")
+
             # 5. 验证数据库中的页面结果
-            logger.info(f"验证数据库中的页面结果 {task_item.task_id}...")
+            log.info(f"验证数据库中的页面结果 {task_item.task_id}...")
             page_results = await page_result_model.get_task_page_results(task_item.task_id)
-            logger.info(f"数据库中找到 {len(page_results)} 个页面结果")
-            
+            log.info(f"数据库中找到 {len(page_results)} 个页面结果")
+
             successful_pages = 0
             failed_pages = 0
             total_content_length = 0
-            
+
             for page_result in page_results:
                 if page_result.get('status') == 'completed':
                     successful_pages += 1
                     content = page_result.get('content', '')
                     content_length = len(content) if content else 0
                     total_content_length += content_length
-                    logger.info(f"页面 {page_result['page_number']}: 内容长度={content_length}字符, 预览={content[:100] if content else '无内容'}...")
+                    log.info(f"页面 {page_result['page_number']}: 内容长度={content_length}字符, 预览={content[:100] if content else '无内容'}...")
                 else:
                     failed_pages += 1
-                    logger.error(f"页面 {page_result['page_number']}: 状态={page_result.get('status')}, 错误={page_result.get('error_message')}")
-            
-            logger.info(f" 页面统计: 成功={successful_pages}, 失败={failed_pages}, 总内容长度={total_content_length}字符")
-            
+                    log.error(f"页面 {page_result['page_number']}: 状态={page_result.get('status')}, 错误={page_result.get('error_message')}")
+
+            log.info(f" 页面统计: 成功={successful_pages}, 失败={failed_pages}, 总内容长度={total_content_length}字符")
+
             if total_content_length == 0 and successful_pages > 0:
-                logger.error(f" 检测到严重问题: 页面显示成功但内容为空！可能是OCR API响应解析失败。")
-                
+                log.error(f" 检测到严重问题: 页面显示成功但内容为空！可能是OCR API响应解析失败。")
+
                 # 尝试修复空内容页面
-                logger.info(f" 开始修复空内容页面 {task_item.task_id}...")
+                log.info(f" 开始修复空内容页面 {task_item.task_id}...")
                 pdf_document = fitz.open(stream=task_item.file_data, filetype="pdf")
-                
+
                 try:
                     fixed_pages = 0
                     for page_result in page_results:
@@ -1049,21 +1172,21 @@ class TaskManager:
                                     task_item.task_id, page_number, pdf_document, retry_page_processor
                                 )
                             except Exception as e:
-                                logger.error(f"获取页面处理器实例失败 {task_item.task_id}-{page_number}: {e}")
+                                log.error(f"获取页面处理器实例失败 {task_item.task_id}-{page_number}: {e}")
                                 retry_success = False
                             if retry_success:
                                 fixed_pages += 1
                     
                     if fixed_pages > 0:
-                        logger.info(f"成功修复 {fixed_pages} 个空内容页面")
+                        log.info(f"成功修复 {fixed_pages} 个空内容页面")
                         # 重新获取页面结果
                         page_results = await page_result_model.get_task_page_results(task_item.task_id)
-                        
+
                         # 重新计算统计信息
                         successful_pages = 0
                         failed_pages = 0
                         total_content_length = 0
-                        
+
                         for page_result in page_results:
                             if page_result.get('status') == 'completed':
                                 successful_pages += 1
@@ -1072,57 +1195,57 @@ class TaskManager:
                                 total_content_length += content_length
                             else:
                                 failed_pages += 1
-                        
-                        logger.info(f" 修复后页面统计: 成功={successful_pages}, 失败={failed_pages}, 总内容长度={total_content_length}字符")
+
+                        log.info(f" 修复后页面统计: 成功={successful_pages}, 失败={failed_pages}, 总内容长度={total_content_length}字符")
                     else:
-                        logger.warning(f"未能修复任何空内容页面")
-                        
+                        log.warning(f"未能修复任何空内容页面")
+
                 except Exception as fix_error:
-                    logger.error(f"修复空内容页面时出错 {task_item.task_id}: {fix_error}")
+                    log.error(f"修复空内容页面时出错 {task_item.task_id}: {fix_error}")
                 finally:
                     if pdf_document:
                         pdf_document.close()
-            
+
             # 6. 发送任务完成消息
             if self.websocket_manager:
-                logger.info(f"发送任务完成WebSocket消息 {task_item.task_id}...")
+                log.info(f"发送任务完成WebSocket消息 {task_item.task_id}...")
                 completed_message = MessageFactory.create_task_completed(
                     task_item.task_id, result_summary
                 )
                 await self.websocket_manager.send_to_task_subscribers(
                     task_item.task_id, completed_message.to_dict()
                 )
-                logger.info(f"任务完成消息已发送 {task_item.task_id}")
-            
-            logger.info(f"=== PDF任务处理完成 {task_item.task_id} (耗时: {processing_time:.2f}s): {result_summary} ===")
+                log.info(f"任务完成消息已发送 {task_item.task_id}")
+
+            log.info(f"=== PDF任务处理完成 {task_item.task_id} (耗时: {processing_time:.2f}s): {result_summary} ===")
             return result_summary
 
         except Exception as e:
             processing_time = time.time() - start_time
-            logger.error(f"=== PDF任务处理异常 {task_item.task_id} (耗时: {processing_time:.2f}s): {e} ===")
-            logger.exception(f"PDF任务处理异常详情 {task_item.task_id}:")
+            log.error(f"=== PDF任务处理异常 {task_item.task_id} (耗时: {processing_time:.2f}s): {e} ===")
+            log.exception(f"PDF任务处理异常详情 {task_item.task_id}:")
             
             # 更新任务状态为失败
             try:
-                logger.info(f"更新PDF任务状态为失败 {task_item.task_id}...")
+                log.info(f"更新PDF任务状态为失败 {task_item.task_id}...")
                 update_success = await task_model.update_task_status(
                     task_item.task_id, TaskStatus.FAILED,
                     error_message=str(e)
                 )
                 if not update_success:
-                    logger.error(f"更新PDF任务状态为失败失败 {task_item.task_id}")
+                    log.error(f"更新PDF任务状态为失败失败 {task_item.task_id}")
                 else:
-                    logger.info(f"PDF任务状态已更新为失败 {task_item.task_id}")
+                    log.info(f"PDF任务状态已更新为失败 {task_item.task_id}")
             except Exception as update_error:
-                logger.error(f"更新PDF任务状态失败 {task_item.task_id}: {update_error}")
-            
+                log.error(f"更新PDF任务状态失败 {task_item.task_id}: {update_error}")
+
             # 如果页面处理器处理失败，尝试使用备用处理方式
             if "页面处理器" in str(e) or "page_processor" in str(e):
-                logger.warning(f" 页面处理器处理失败 {task_item.task_id}，尝试使用备用处理方式")
+                log.warning(f" 页面处理器处理失败 {task_item.task_id}，尝试使用备用处理方式")
                 try:
                     return await self._process_pdf_fallback(task_item)
                 except Exception as fallback_error:
-                    logger.error(f"备用处理方式也失败 {task_item.task_id}: {fallback_error}")
+                    log.error(f"备用处理方式也失败 {task_item.task_id}: {fallback_error}")
                     raise fallback_error
             raise
         finally:
@@ -1132,55 +1255,56 @@ class TaskManager:
     
     async def _process_pdf_fallback(self, task_item: TaskItem) -> Dict[str, Any]:
         """PDF处理的备用方法 - 当页面处理器不可用时使用"""
+        log = self._task_logger(task_item)
         start_time = time.time()
-        
+
         try:
-            logger.info(f"=== 开始使用备用方法处理PDF任务 {task_item.task_id} ===")
-            
+            log.info(f"=== 开始使用备用方法处理PDF任务 {task_item.task_id} ===")
+
             # 1. 更新任务状态为处理中
-            logger.info(f"更新备用PDF任务状态为处理中 {task_item.task_id}...")
+            log.info(f"更新备用PDF任务状态为处理中 {task_item.task_id}...")
             await task_model.update_task_status(
                 task_item.task_id, TaskStatus.PROCESSING,
                 progress=0.0, processed_pages=0
             )
-            logger.info(f"备用PDF任务状态已更新为处理中 {task_item.task_id}")
-            
+            log.info(f"备用PDF任务状态已更新为处理中 {task_item.task_id}")
+
             # 2. 使用原有的PDF处理逻辑
             pdf_document = None
             try:
                 pdf_document = fitz.open(stream=task_item.file_data, filetype="pdf")
-                
+
                 successful_pages = 0
                 failed_pages = 0
-                
+
                 # 使用信号量控制并发
                 semaphore = asyncio.Semaphore(self.api_config.get('concurrency', 3))  # 降低并发数
-                
+
                 # 分批处理策略
                 batch_size = 2  # 备用方法使用更小的批次大小
-                logger.info(f"备用PDF处理批次大小: {batch_size}")
-                
+                log.info(f"备用PDF处理批次大小: {batch_size}")
+
                 batch_pages = []
                 for page_number in range(1, task_item.total_pages + 1):
                     batch_pages.append(page_number)
-                    
+
                     # 当达到批次大小或最后一页时，处理当前批次
                     if len(batch_pages) >= batch_size or page_number == task_item.total_pages:
-                        logger.info(f"处理批次 {task_item.task_id}: 页面 {batch_pages}")
+                        log.info(f"处理批次 {task_item.task_id}: 页面 {batch_pages}")
                         batch_results = await self._process_page_batch_fallback(
                             task_item.task_id, pdf_document, batch_pages, semaphore
                         )
-                        
+
                         # 统计批次结果
                         for result in batch_results:
                             if result.get('success', False):
                                 successful_pages += 1
                             else:
                                 failed_pages += 1
-                        
+
                         # 更新任务进度
                         progress = (successful_pages + failed_pages) / task_item.total_pages * 100
-                        logger.info(f"更新备用PDF任务进度 {task_item.task_id}: {progress:.1f}%")
+                        log.info(f"更新备用PDF任务进度 {task_item.task_id}: {progress:.1f}%")
                         await task_model.update_task_status(
                             task_item.task_id, TaskStatus.PROCESSING,
                             progress=progress, processed_pages=successful_pages + failed_pages
@@ -1198,18 +1322,18 @@ class TaskManager:
                 # 3. 计算最终结果
                 total_time = time.time() - start_time
                 success_rate = (successful_pages / task_item.total_pages * 100) if task_item.total_pages > 0 else 0
-                
+
                 # 4. 更新任务状态为完成
-                logger.info(f"更新备用PDF任务状态为完成 {task_item.task_id}...")
+                log.info(f"更新备用PDF任务状态为完成 {task_item.task_id}...")
                 await task_model.update_task_status(
                     task_item.task_id, TaskStatus.COMPLETED,
                     progress=100.0, processed_pages=successful_pages
                 )
-                logger.info(f"备用PDF任务状态已更新为完成 {task_item.task_id}")
-                
+                log.info(f"备用PDF任务状态已更新为完成 {task_item.task_id}")
+
                 # 5. 发送任务完成消息
                 if self.websocket_manager:
-                    logger.info(f"发送备用PDF任务完成WebSocket消息 {task_item.task_id}...")
+                    log.info(f"发送备用PDF任务完成WebSocket消息 {task_item.task_id}...")
                     result_summary = {
                         'total_pages': task_item.total_pages,
                         'successful_pages': successful_pages,
@@ -1219,38 +1343,38 @@ class TaskManager:
                         'strategy_used': 'fallback',
                         'avg_time_per_page': total_time / task_item.total_pages if task_item.total_pages > 0 else 0
                     }
-                    
+
                     completed_message = MessageFactory.create_task_completed(
                         task_item.task_id, result_summary
                     )
                     await self.websocket_manager.send_to_task_subscribers(
                         task_item.task_id, completed_message.to_dict()
                     )
-                    logger.info(f"备用PDF任务完成消息已发送 {task_item.task_id}")
-                
-                logger.info(f"=== 备用PDF处理完成 {task_item.task_id}: {result_summary} (耗时: {total_time:.2f}s) ===")
+                    log.info(f"备用PDF任务完成消息已发送 {task_item.task_id}")
+
+                log.info(f"=== 备用PDF处理完成 {task_item.task_id}: {result_summary} (耗时: {total_time:.2f}s) ===")
                 return result_summary
-                
+
             finally:
                 if pdf_document:
                     pdf_document.close()
-                    
+
         except Exception as e:
             total_time = time.time() - start_time
-            logger.error(f"=== 备用PDF处理失败 {task_item.task_id} (耗时: {total_time:.2f}s): {e} ===")
-            logger.exception(f"备用PDF处理失败详情 {task_item.task_id}:")
-            
+            log.error(f"=== 备用PDF处理失败 {task_item.task_id} (耗时: {total_time:.2f}s): {e} ===")
+            log.exception(f"备用PDF处理失败详情 {task_item.task_id}:")
+
             # 更新任务状态为失败
             try:
-                logger.info(f"更新备用PDF任务状态为失败 {task_item.task_id}...")
+                log.info(f"更新备用PDF任务状态为失败 {task_item.task_id}...")
                 await task_model.update_task_status(
                     task_item.task_id, TaskStatus.FAILED,
                     error_message=str(e)
                 )
-                logger.info(f"备用PDF任务状态已更新为失败 {task_item.task_id}")
+                log.info(f"备用PDF任务状态已更新为失败 {task_item.task_id}")
             except Exception as update_error:
-                logger.error(f"更新备用PDF任务状态失败 {task_item.task_id}: {update_error}")
-            
+                log.error(f"更新备用PDF任务状态失败 {task_item.task_id}: {update_error}")
+
             raise
     
     async def _process_page_batch_fallback(self, task_id: str, pdf_document, page_numbers: list, semaphore: asyncio.Semaphore):
@@ -1564,7 +1688,7 @@ class TaskManager:
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": "Analyze the image and provide the content in the specified format, you only need to return the content, before returning the content you need to say: 'This is the content:', add 'this is the end of the content' at the end of the returned content, do not have any additional text other than these two sentences and the returned content, don't reply to me before I upload the image!"
+                                    "text": "Analyze the provided image and output a JSON object with a single string field named \"content\". The value must contain the recognized Markdown-formatted text without additional commentary."
                                 },
                                 {
                                     "type": "image_url",
@@ -1577,7 +1701,7 @@ class TaskManager:
                     ],
                     "stream": False,
                     "model": model,
-                    "temperature": 0.5,
+                    "temperature": 0.0,
                     "presence_penalty": 0,
                     "frequency_penalty": 0,
                     "top_p": 1,
@@ -1589,24 +1713,63 @@ class TaskManager:
                 content = result['choices'][0]['message']['content']
                 
                 # 解析返回内容
-                if "This is the content:" in content:
-                    start_index = content.find("This is the content:") + len("This is the content:")
-                    end_index = content.find("this is the end of the content")
-                    if end_index == -1:
-                        end_index = len(content)
-                    
-                    parsed_content = content[start_index:end_index].strip()
-                    parsed_content = parsed_content.replace("```markdown", "").replace("```", "").strip()
-                    
-                    if parsed_content:
-                        return parsed_content
-                    else:
-                        raise Exception("OCR返回内容为空")
-                else:
-                    raise Exception("OCR返回格式不正确")
+                parsed_content = _extract_markdown_from_response(content)
+                if parsed_content:
+                    return parsed_content
+                raise Exception("OCR返回内容为空或格式不正确")
             else:
                 raise Exception(f"API请求失败, 状态码: {response.status}")
     
+    async def _refund_task_quota(self, task: Optional[Dict[str, Any]]):
+        """根据任务信息返还未消耗的配额"""
+        if not task:
+            return
+
+        user_id = task.get('user_id')
+        if not user_id:
+            return
+
+        pages_to_refund = 0
+        task_type_value = task.get('task_type')
+        if task_type_value == TaskType.IMAGE_OCR.value:
+            pages_to_refund = 1
+        elif task_type_value == TaskType.PDF_OCR.value:
+            total_pages = task.get('total_pages') or 0
+            processed_pages = task.get('processed_pages') or 0
+            if total_pages:
+                pages_to_refund = max(total_pages - processed_pages, 0)
+                if pages_to_refund == 0 and task.get('status') != TaskStatus.COMPLETED.value:
+                    pages_to_refund = total_pages
+
+        if pages_to_refund <= 0:
+            return
+
+        try:
+            auth_manager = get_auth_manager()
+        except Exception:
+            logger.warning("无法获取认证管理器，跳过配额返还")
+            return
+
+        try:
+            await auth_manager.user_model.refund_pages(user_id, pages_to_refund)
+            logger.info(f"任务 {task.get('id', task.get('task_id'))} 取消，已返还 {pages_to_refund} 页配额给用户 {user_id}")
+        except Exception as exc:
+            logger.error(f"返还用户配额失败 {user_id}: {exc}")
+
+    async def _send_task_cancelled_message(self, task_id: str, reason: str):
+        """通知订阅者任务已取消"""
+        if not self.websocket_manager:
+            return
+
+        try:
+            message = MessageFactory.create_task_cancelled(task_id, reason)
+            await self.websocket_manager.send_to_task_subscribers(
+                task_id, message.to_dict()
+            )
+            logger.info(f"发送任务取消消息: {task_id}")
+        except Exception as exc:
+            logger.error(f"发送任务取消消息失败 {task_id}: {exc}")
+
     async def _send_task_started_message(self, task_item: TaskItem):
         """发送任务开始消息"""
         try:
@@ -1650,7 +1813,36 @@ class TaskManager:
 # 创建全局任务管理器实例
 def create_task_manager(api_config: Dict[str, Any], websocket_manager=None) -> TaskManager:
     """创建任务管理器实例"""
-    return TaskManager(task_queue, worker_pool, api_config, websocket_manager)
+    global image_worker_pool, pdf_worker_pool
+
+    # 从配置中获取并发数
+    image_concurrency = api_config.get('image_concurrency', 2)
+    pdf_concurrency = api_config.get('pdf_concurrency', 2)
+
+    # 创建工作者池
+    image_worker_pool = WorkerPool(
+        image_task_queue,
+        min_workers=image_concurrency,
+        max_workers=image_concurrency,
+        worker_timeout=float('inf'),
+        name='image'
+    )
+
+    pdf_worker_pool = WorkerPool(
+        pdf_task_queue,
+        min_workers=pdf_concurrency,
+        max_workers=pdf_concurrency,
+        worker_timeout=float('inf'),
+        name='pdf'
+    )
+
+    logger.info(f"创建工作者池 - 图片并发数: {image_concurrency}, PDF并发数: {pdf_concurrency}")
+
+    return TaskManager(
+        image_task_queue, pdf_task_queue,
+        image_worker_pool, pdf_worker_pool,
+        api_config, websocket_manager
+    )
 
 # 全局任务管理器实例（需要在应用启动时初始化）
 task_manager: Optional[TaskManager] = None
@@ -1658,10 +1850,10 @@ task_manager: Optional[TaskManager] = None
 async def init_task_manager(api_config: Dict[str, Any], websocket_manager=None):
     """初始化全局任务管理器"""
     global task_manager
-    
+
     # 强制重新初始化，确保每次启动都能正确初始化
-    logger.info("开始初始化全局任务管理器...")
-    
+    logger.info("开始初始化全局任务管理器（双队列模式）...")
+
     # 如果已存在，先关闭旧的实例
     if task_manager is not None:
         try:
@@ -1669,21 +1861,16 @@ async def init_task_manager(api_config: Dict[str, Any], websocket_manager=None):
             await task_manager.shutdown()
         except Exception as e:
             logger.warning(f"关闭现有任务管理器失败: {e}")
-    
+
     # 创建新的任务管理器实例
     task_manager = create_task_manager(api_config, websocket_manager)
-    
-    # 确保工作者池设置了任务处理器
-    if task_manager.worker_pool and not task_manager.worker_pool._task_processor:
-        task_manager.worker_pool.set_task_processor(task_manager._process_task)
-        logger.info("任务处理器已设置到工作者池")
-    
+
     # 初始化任务管理器
     await task_manager.initialize()
-    
+
     # 验证初始化状态
     if task_manager and task_manager._initialized:
-        logger.info("全局任务管理器初始化完成")
+        logger.info("全局任务管理器初始化完成（双队列模式）")
     else:
         logger.error("全局任务管理器初始化失败")
         raise Exception("任务管理器初始化验证失败")

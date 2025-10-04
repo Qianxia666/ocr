@@ -144,6 +144,7 @@ class TaskProgressData:
     failed_pages: int = None
     estimated_time_remaining: int = None  # 秒
     processing_rate: float = None  # 页/秒
+    silent: bool = False  # 静默更新，不触发前端界面跳转
 
 @dataclass
 class TaskStartedMessage(BaseMessage):

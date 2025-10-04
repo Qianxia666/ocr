@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -14,10 +14,6 @@
     }
   </script>
   <style>
-    .status-pending { color: #f59e0b; }
-    .status-processing { color: #3b82f6; }
-    .status-completed { color: #10b981; }
-    .status-failed { color: #ef4444; }
 
     /* 移除所有按钮的聚焦外框 */
     * {
@@ -173,6 +169,7 @@
               <option value="processing">处理中</option>
               <option value="completed">已完成</option>
               <option value="failed">失败</option>
+              <option value="cancelled">已取消</option>
             </select>
           </div>
           <button onclick="loadTasks()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
@@ -183,18 +180,18 @@
 
       <!-- 任务列表 -->
       <div class="bg-white rounded-lg shadow-md overflow-hidden">
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto" style="max-height: 600px; overflow-y: auto;">
           <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
+            <thead class="bg-gray-50 sticky top-0 z-10">
               <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用户</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">任务ID</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">文件名</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">进度</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">创建时间</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">用户</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">任务ID</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">文件名</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">类型</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">状态</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">进度</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">创建时间</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">操作</th>
               </tr>
             </thead>
             <tbody id="tasks-table" class="bg-white divide-y divide-gray-200">
@@ -203,6 +200,22 @@
               </tr>
             </tbody>
           </table>
+        </div>
+        <!-- 分页控件 -->
+        <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-700">每页显示:</span>
+            <select id="page-size" class="border border-gray-300 rounded px-2 py-1 text-sm" onchange="changePageSize()">
+              <option value="20">20</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-700" id="page-info">第 1 页 / 共 1 页</span>
+            <button onclick="changePage(-1)" id="prev-page" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">上一页</button>
+            <button onclick="changePage(1)" id="next-page" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">下一页</button>
+          </div>
         </div>
       </div>
     </div>
@@ -256,6 +269,23 @@
 
   <script>
     const passwordPrefix = "{{ password_prefix }}";
+
+    // 分页相关变量
+    let currentPage = 1;
+    let pageSize = 50;
+    let totalTasks = 0;
+    let allTasksData = [];
+    function getTaskCreatedTimestamp(task) {
+      const createdAt = task.created_at || task.createdAt || task.created_time || task.createdTime || task.created;
+      const timestamp = createdAt ? new Date(createdAt).getTime() : NaN;
+      return Number.isFinite(timestamp) ? timestamp : 0;
+    }
+
+    function sortTasksByCreatedAtDesc(tasks) {
+      return [...tasks].sort((a, b) => getTaskCreatedTimestamp(b) - getTaskCreatedTimestamp(a));
+    }
+
+    const taskDetailState = new Map();
 
     // 加载用户列表到筛选器
     async function loadUsers() {
@@ -319,7 +349,7 @@
       const searchQuery = document.getElementById('search-input').value;
 
       try {
-        let url = `${passwordPrefix}/api/admin/tasks/list?limit=200`;
+        let url = `${passwordPrefix}/api/admin/tasks/list?limit=1000`;
         if (userId) {
           url += `&user_id=${userId}`;
         }
@@ -331,67 +361,284 @@
         const data = await response.json();
 
         if (data.status === 'success' && data.data) {
-          displayTasks(data.data, status);
+          allTasksData = sortTasksByCreatedAtDesc(data.data);
+          const existingIds = new Set(allTasksData.map(task => task.id));
+          Array.from(taskDetailState.keys()).forEach(id => {
+            if (!existingIds.has(id)) {
+              taskDetailState.delete(id);
+            }
+          });
+          currentPage = 1;
+          displayTasks(allTasksData, status);
           loadStats(userId); // 同时更新统计信息
         } else {
-          document.getElementById('tasks-table').innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
+          document.getElementById('tasks-table').innerHTML = '<tr><td colspan="8" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
         }
       } catch (err) {
         console.error('加载任务列表失败:', err);
-        document.getElementById('tasks-table').innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
+        document.getElementById('tasks-table').innerHTML = '<tr><td colspan="8" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
       }
     }
 
-    // 显示任务列表
+    // 显示任务列表（增量更新版本，避免重新渲染导致的跳转）
     function displayTasks(tasks, statusFilter = '') {
       const tbody = document.getElementById('tasks-table');
 
-      // 按状态筛选
-      let filteredTasks = tasks;
-      if (statusFilter) {
-        filteredTasks = tasks.filter(task => task.status === statusFilter);
-      }
+      const filteredTasks = statusFilter
+        ? tasks.filter(task => task.status === statusFilter)
+        : tasks;
+
+      totalTasks = filteredTasks.length;
 
       if (filteredTasks.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="px-6 py-4 text-center text-gray-500">暂无任务</td></tr>';
+        updatePaginationUI();
         return;
       }
 
-      tbody.innerHTML = filteredTasks.map(task => {
-        const statusText = {
-          'pending': '等待中',
-          'processing': '处理中',
-          'completed': '已完成',
-          'failed': '失败'
-        }[task.status] || task.status;
+      const startIndex = (currentPage - 1) * pageSize;
+      const endIndex = Math.min(startIndex + pageSize, filteredTasks.length);
+      const currentPageTasks = filteredTasks.slice(startIndex, endIndex);
 
-        const taskType = task.task_type === 'pdf_ocr' ? 'PDF' : '图片';
-        const progress = task.progress ? (task.progress * 100).toFixed(1) + '%' : '0%';
-        const createdAt = new Date(task.created_at).toLocaleString('zh-CN');
-        const username = task.username || '未知用户';
+      const fragment = document.createDocumentFragment();
 
-        const rowClick = task.status === 'completed' ? `onclick="viewContent('${task.id}')" style="cursor: pointer;"` : '';
-        const rowClass = task.status === 'completed' ? 'hover:bg-blue-50' : 'hover:bg-gray-50';
+      currentPageTasks.forEach(task => {
+        fragment.appendChild(createTaskRow(task));
+        fragment.appendChild(createTaskDetailRow(task));
+      });
 
-        return `
-          <tr class="${rowClass}" ${rowClick}>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${username}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600" title="${task.id}">${task.id.substring(0, 8)}...</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${task.file_name || '-'}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${taskType}</td>
-            <td class="px-6 py-4 whitespace-nowrap">
-              <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full status-${task.status}">
-                ${statusText}
-              </span>
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-              ${progress} (${task.processed_pages || 0}/${task.total_pages || 0})
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${createdAt}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${task.status === 'completed' ? '点击查看' : '-'}</td>
-          </tr>
-        `;
-      }).join('');
+      tbody.innerHTML = '';
+      tbody.appendChild(fragment);
+      updatePaginationUI();
+    }
+
+    // 更新分页UI
+    function updatePaginationUI() {
+      const totalPages = Math.ceil(totalTasks / pageSize);
+      document.getElementById('page-info').textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页 (总计 ${totalTasks} 条)`;
+
+      const prevBtn = document.getElementById('prev-page');
+      const nextBtn = document.getElementById('next-page');
+
+      prevBtn.disabled = currentPage <= 1;
+      nextBtn.disabled = currentPage >= totalPages;
+    }
+
+    // 改变页码
+    function changePage(delta) {
+      const totalPages = Math.ceil(totalTasks / pageSize);
+      const newPage = currentPage + delta;
+
+      if (newPage >= 1 && newPage <= totalPages) {
+        currentPage = newPage;
+        const status = document.getElementById('status-filter').value;
+        displayTasks(allTasksData, status);
+      }
+    }
+
+    // 改变每页显示数量
+    function changePageSize() {
+      pageSize = parseInt(document.getElementById('page-size').value);
+      currentPage = 1;
+      const status = document.getElementById('status-filter').value;
+      displayTasks(allTasksData, status);
+    }
+
+    // 创建任务行元素
+    function createTaskRow(task) {
+      const tr = document.createElement('tr');
+      const rowClass = task.status === 'completed' ? 'hover:bg-blue-50' : 'hover:bg-gray-50';
+      tr.className = rowClass;
+      tr.setAttribute('data-task-id', task.id);
+      tr.setAttribute('data-status', task.status);
+      tr.setAttribute('data-progress', task.progress);
+      tr.setAttribute('data-processed', task.processed_pages || 0);
+
+      if (task.status === 'completed') {
+        tr.style.cursor = 'pointer';
+        tr.onclick = () => viewContent(task.id);
+      }
+
+      tr.innerHTML = createTaskRowHtml(task);
+      return tr;
+    }
+
+    // 创建任务行HTML
+    function createTaskRowHtml(task) {
+      const statusLabels = {
+        'pending': '等待中',
+        'processing': '处理中',
+        'completed': '已完成',
+        'failed': '失败',
+        'cancelled': '已取消'
+      };
+      const statusText = statusLabels[task.status] || task.status;
+
+      // 状态徽章样式
+      let statusBadge = '';
+      if (task.status === 'completed') {
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">${statusText}</span>`;
+      } else if (task.status === 'processing') {
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">${statusText}</span>`;
+      } else if (task.status === 'failed') {
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">${statusText}</span>`;
+      } else if (task.status === 'pending') {
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">${statusText}</span>`;
+      } else if (task.status === 'cancelled') {
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">${statusText}</span>`;
+      } else {
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">${statusText}</span>`;
+      }
+
+      const taskType = task.task_type === 'pdf_ocr' ? 'PDF' : '图片';
+      const progressDetail = `${task.processed_pages || 0}/${task.total_pages || 0}`;
+      const createdAt = formatDateTime(task.created_at);
+      const username = task.username || '未知用户';
+      const detailLabel = taskDetailState.get(task.id) ? '收起详情' : '展开详情';
+      const viewButton = task.status === 'completed'
+        ? `<button type="button" class="text-sm text-blue-600 hover:underline" onclick="event.stopPropagation(); viewContent('${task.id}')">查看结果</button>`
+        : '';
+      const canCancel = task.status === 'pending' || task.status === 'processing';
+      const cancelButton = canCancel
+        ? `<button type="button" class="text-sm text-red-600 hover:underline" onclick="event.stopPropagation(); cancelTask('${task.id}')">停止任务</button>`
+        : '';
+
+      return `
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${username}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600" title="${task.id}">${task.id.substring(0, 8)}...</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${task.file_name || '-'} </td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${taskType}</td>
+        <td class="px-6 py-4 whitespace-nowrap">${statusBadge}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${progressDetail}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${createdAt}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 space-x-2">
+          <button type="button" class="text-sm text-gray-600 hover:underline" onclick="event.stopPropagation(); toggleTaskDetails('${task.id}')">${detailLabel}</button>
+          ${viewButton}
+          ${cancelButton}
+        </td>
+      `;
+    }
+    function createTaskDetailRow(task) {
+      const isExpanded = taskDetailState.get(task.id) || false;
+      const detailRow = document.createElement("tr");
+      detailRow.setAttribute('data-detail-for', task.id);
+      detailRow.className = isExpanded ? 'bg-gray-50' : 'bg-gray-50 hidden';
+
+      const detailCell = document.createElement("td");
+      detailCell.colSpan = 8;
+      detailCell.className = 'px-6 py-4 text-sm text-gray-600';
+
+      const statusLabels = {
+        "pending": "等待中",
+        "processing": "处理中",
+        "completed": "已完成",
+        "failed": "失败",
+        "cancelled": "已取消"
+      };
+      const statusText = statusLabels[task.status] || task.status;
+
+      detailCell.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">任务 ID</p>
+            <p class="font-mono text-sm text-gray-800 break-all">${task.id}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">任务状态</p>
+            <p class="text-sm text-gray-800">${statusText}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">队列状态</p>
+            <p class="text-sm text-gray-800">${task.queue_status || '-'}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">创建时间</p>
+            <p class="text-sm text-gray-800">${formatDateTime(task.created_at)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">开始时间</p>
+            <p class="text-sm text-gray-800">${formatDateTime(task.started_at)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">完成时间</p>
+            <p class="text-sm text-gray-800">${formatDateTime(task.completed_at)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">文件大小</p>
+            <p class="text-sm text-gray-800">${formatFileSize(task.file_size)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">处理进度</p>
+            <p class="text-sm text-gray-800">${task.processed_pages || 0} / ${task.total_pages || 0}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">用户IP</p>
+            <p class="text-sm text-gray-800">${task.client_ip || '-'}</p>
+          </div>
+        </div>
+        ${task.error_message ? `<p class="text-sm text-red-600 mt-3">错误信息: ${task.error_message}</p>` : ''}
+      `;
+      detailRow.appendChild(detailCell);
+      return detailRow;
+    }
+
+    function toggleTaskDetails(taskId) {
+      const currentState = taskDetailState.get(taskId) || false;
+      const newState = !currentState;
+      taskDetailState.set(taskId, newState);
+
+      const detailRow = document.querySelector(`tr[data-detail-for="${taskId}"]`);
+      if (detailRow) {
+        detailRow.classList.toggle('hidden', !newState);
+      }
+
+      const summaryRow = document.querySelector(`tr[data-task-id="${taskId}"]`);
+      if (summaryRow) {
+        const toggleButton = summaryRow.querySelector('button[onclick*="toggleTaskDetails"]');
+        if (toggleButton) {
+          toggleButton.textContent = newState ? '收起详情' : '展开详情';
+        }
+      }
+    }
+
+    async function cancelTask(taskId) {
+      if (!confirm('确定要停止该任务吗？')) {
+        return;
+      }
+      try {
+        const response = await fetch(`${passwordPrefix}/api/admin/tasks/${taskId}/cancel`, {
+          method: 'POST'
+        });
+        const data = await response.json();
+        if (data.status === 'success') {
+          alert(data.message || '任务已停止');
+          loadTasks();
+        } else {
+          alert(data.message || '操作失败');
+        }
+      } catch (err) {
+        console.error('取消任务失败:', err);
+        alert('操作失败，请重试');
+      }
+    }
+
+    function formatDateTime(value) {
+      if (!value) {
+        return '-';
+      }
+      try {
+        return new Date(value).toLocaleString('zh-CN');
+      } catch (err) {
+        return value;
+      }
+    }
+
+    function formatFileSize(bytes) {
+      if (!bytes) {
+        return '-';
+      }
+      const mb = bytes / (1024 * 1024);
+      return `${mb.toFixed(2)} MB`;
     }
 
     // 存储当前查看的内容数据（用于复制）
@@ -538,3 +785,5 @@
   </script>
 </body>
 </html>
+
+

@@ -53,9 +53,13 @@ MODEL = os.getenv("MODEL", "gpt-4o")
 PASSWORD = os.getenv("PASSWORD", "pwd")
 
 # 并发限制和重试机制
-CONCURRENCY = int(os.getenv("CONCURRENCY", 5))
+CONCURRENCY = int(os.getenv("CONCURRENCY", 5))  # 保留用于向后兼容
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", 5))
 RETRY_DELAY = 0.5  # 重试延迟时间（秒）
+
+# 图片和PDF独立并发配置
+IMAGE_CONCURRENCY = int(os.getenv("IMAGE_CONCURRENCY", 2))  # 图片OCR并发数
+PDF_CONCURRENCY = int(os.getenv("PDF_CONCURRENCY", 2))  # PDF OCR并发数
 
 # PDF处理优化配置
 PDF_DPI = int(os.getenv("PDF_DPI", 200))  # 降低DPI减少内存占用
@@ -98,6 +102,8 @@ async def lifespan(app: FastAPI):
             'api_key': API_KEY,
             'model': MODEL,
             'concurrency': CONCURRENCY,
+            'image_concurrency': IMAGE_CONCURRENCY,
+            'pdf_concurrency': PDF_CONCURRENCY,
             'max_retries': MAX_RETRIES,
             'retry_delay': RETRY_DELAY,
             'pdf_dpi': PDF_DPI
@@ -167,15 +173,19 @@ async def lifespan(app: FastAPI):
 
                 # 验证任务管理器状态
                 if task_manager and hasattr(task_manager, '_initialized') and task_manager._initialized:
-                    logger.info("任务管理器初始化成功")
+                    logger.info("任务管理器初始化成功（双队列模式）")
                     init_success = True
 
                     # 验证核心组件
-                    if not (task_manager.worker_pool and task_manager.worker_pool._running):
-                        logger.error("工作者池未正确启动")
+                    if not (task_manager.image_worker_pool and task_manager.image_worker_pool._running):
+                        logger.error("图片工作者池未正确启动")
+                    if not (task_manager.pdf_worker_pool and task_manager.pdf_worker_pool._running):
+                        logger.error("PDF工作者池未正确启动")
 
-                    if not task_manager.task_queue:
-                        logger.error("任务队列未正确初始化")
+                    if not task_manager.image_task_queue:
+                        logger.error("图片任务队列未正确初始化")
+                    if not task_manager.pdf_task_queue:
+                        logger.error("PDF任务队列未正确初始化")
 
                     break
                 else:
@@ -252,6 +262,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def get_client_ip(request: Request) -> str:
+    """获取客户端真实IP地址"""
+    # 优先从代理头获取真实IP
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+
+    # 否则从request.client获取
+    if request.client:
+        return request.client.host
+
+    return "unknown"
 
 async def process_image(session, image_data, semaphore, max_retries=MAX_RETRIES):
     """使用 OCR 识别图像并进行 Markdown 格式化"""
@@ -353,7 +379,7 @@ def pdf_to_images_generator(pdf_bytes: bytes, dpi: int = PDF_DPI):
     try:
         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
         logger.info(f"开始流式处理PDF，共 {len(pdf_document)} 页，DPI: {dpi}")
-        
+
         for page_number in range(len(pdf_document)):
             try:
                 page = pdf_document.load_page(page_number)
@@ -488,6 +514,9 @@ async def process_image_endpoint(file: UploadFile, request: Request, response: R
         # 获取文件大小
         file_size_mb = os.path.getsize(tmp_file_path) / (1024 * 1024)
 
+        # 获取客户端IP
+        client_ip = get_client_ip(request)
+
         # 提交异步任务(传递临时文件路径而非数据)
         task_id = await task_manager.submit_image_task_from_file(
             file_path=tmp_file_path,
@@ -496,7 +525,8 @@ async def process_image_endpoint(file: UploadFile, request: Request, response: R
                 "source": "sync_endpoint",
                 "sync_mode": True,
                 "file_size_mb": file_size_mb,
-                "user_id": user['id']  # 添加用户ID用于配额扣除
+                "user_id": user['id'],  # 添加用户ID用于配额扣除
+                "client_ip": client_ip  # 添加客户端IP
             }
         )
 
@@ -573,12 +603,21 @@ async def process_pdf_endpoint(file: UploadFile, request: Request, response: Res
                 os.unlink(tmp_file_path)
             raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
 
+        # 页数限制检查（使用环境变量配置）
+        if page_count > MAX_PDF_PAGES:
+            if tmp_file_path and os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{MAX_PDF_PAGES}页")
+
         # 检查用户配额
         has_quota, quota_message = await auth_manager_instance.check_quota(user['id'], page_count)
         if not has_quota:
             if tmp_file_path and os.path.exists(tmp_file_path):
                 os.unlink(tmp_file_path)
             raise HTTPException(status_code=403, detail=f"配额不足: {quota_message}")
+
+        # 获取客户端IP
+        client_ip = get_client_ip(request)
 
         # 提交异步任务(传递临时文件路径而非数据)
         task_id = await task_manager.submit_pdf_task_from_file(
@@ -589,7 +628,8 @@ async def process_pdf_endpoint(file: UploadFile, request: Request, response: Res
                 "sync_mode": True,
                 "file_size_mb": file_size_mb,
                 "total_pages": page_count,
-                "user_id": user['id']  # 添加用户ID用于配额扣除
+                "user_id": user['id'],  # 添加用户ID用于配额扣除
+                "client_ip": client_ip  # 添加客户端IP
             }
         )
 
@@ -857,6 +897,37 @@ async def admin_settings_page(request: Request, response: Response):
             return RedirectResponse(url="/login", status_code=302)
         raise
 
+# 令牌注册管理页面路由
+@app.get("/admin/registration-tokens", response_class=HTMLResponse)
+@app.get(f"/{PASSWORD}/admin/registration-tokens" if PASSWORD else "/admin/registration-tokens-disabled", response_class=HTMLResponse)
+async def admin_registration_tokens_page(request: Request, response: Response):
+    """令牌注册管理页面"""
+    try:
+        user = await auth_manager_instance.get_current_user(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=302)
+        if not user.get('is_admin'):
+            return HTMLResponse(
+                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
+                status_code=403
+            )
+        return templates.TemplateResponse(
+            "admin_registration_tokens.html",
+            {
+                "request": request,
+                "favicon_url": FAVICON_URL,
+                "title": f"{TITLE} - 令牌注册管理",
+                "password_prefix": f"/{PASSWORD}" if PASSWORD else "",
+                "password": PASSWORD
+            }
+        )
+    except HTTPException as e:
+        if e.status_code == 403:
+            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
+        elif e.status_code == 401:
+            return RedirectResponse(url="/login", status_code=302)
+        raise
+
 # WebSocket路由
 @app.websocket(f"/{PASSWORD}/ws" if PASSWORD else "/ws")
 async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
@@ -890,23 +961,26 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
 
 # 任务管理API路由
 @app.post(f"/{PASSWORD}/api/tasks/image" if PASSWORD else "/api/tasks/image")
-async def submit_image_task_api(file: UploadFile):
+async def submit_image_task_api(file: UploadFile, request: Request):
     """提交图片OCR任务API"""
     if not task_manager:
         raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
+
     if not file:
         raise HTTPException(status_code=400, detail="未收到文件")
-    
+
     try:
         file_data = await file.read()
         if not file_data:
             raise HTTPException(status_code=400, detail="文件内容为空")
-        
+
+        # 获取客户端IP
+        client_ip = get_client_ip(request)
+
         task_id = await task_manager.submit_image_task(
             file_data=file_data,
             file_name=file.filename or "image",
-            metadata={"source": "api"}
+            metadata={"source": "api", "client_ip": client_ip}
         )
         
         return JSONResponse({
@@ -920,23 +994,38 @@ async def submit_image_task_api(file: UploadFile):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post(f"/{PASSWORD}/api/tasks/pdf" if PASSWORD else "/api/tasks/pdf")
-async def submit_pdf_task_api(file: UploadFile):
+async def submit_pdf_task_api(file: UploadFile, request: Request):
     """提交PDF OCR任务API"""
     if not task_manager:
         raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
+
     if not file:
         raise HTTPException(status_code=400, detail="未收到文件")
-    
+
     try:
         file_data = await file.read()
         if not file_data:
             raise HTTPException(status_code=400, detail="文件内容为空")
-        
+
+        # 获取PDF文件信息
+        try:
+            page_count, file_size_mb = check_pdf_info(file_data)
+            logger.info(f"PDF文件信息: {page_count} 页, {file_size_mb:.2f} MB")
+        except Exception as e:
+            logger.error(f"PDF文件信息获取失败: {e}")
+            raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
+
+        # 页数限制检查（使用环境变量配置）
+        if page_count > MAX_PDF_PAGES:
+            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{MAX_PDF_PAGES}页")
+
+        # 获取客户端IP
+        client_ip = get_client_ip(request)
+
         task_id = await task_manager.submit_pdf_task(
             file_data=file_data,
             file_name=file.filename or "document.pdf",
-            metadata={"source": "api"}
+            metadata={"source": "api", "client_ip": client_ip}
         )
         
         return JSONResponse({
@@ -1094,6 +1183,7 @@ async def test_login_page(request: Request):
     })
 
 @app.get("/register", response_class=HTMLResponse)
+@app.get(f"/{PASSWORD}/register" if PASSWORD else "/register-disabled", response_class=HTMLResponse)
 async def register_page(request: Request, token: str = ""):
     """注册页面"""
     return templates.TemplateResponse("register.html", {
@@ -1149,9 +1239,14 @@ async def register_api(user_data: dict):
         if not success:
             raise HTTPException(status_code=400, detail=register_message)
 
-        # 如果使用了令牌，标记令牌为已使用
+        # 如果使用了令牌，标记令牌为已使用并记录使用者信息
         if token:
-            token_success, token_message = await registration_token_model.use_token(token)
+            token_success, token_message = await registration_token_model.use_token(
+                token=token,
+                user_id=user_id,
+                username=username,
+                user_uuid=user_id  # user_id就是UUID
+            )
             if not token_success:
                 logger.error(f"用户创建成功但令牌使用失败: {token_message}")
 
@@ -1343,6 +1438,7 @@ async def generate_redemption_code_api(request: Request, code_config: dict):
         max_uses = code_config.get('max_uses', 1)
         expires_days = code_config.get('expires_days')
         description = code_config.get('description')
+        batch_count = code_config.get('batch_count', 1)  # 批量生成数量,默认为1
 
         if pages <= 0:
             raise HTTPException(status_code=400, detail="页数必须大于0")
@@ -1350,28 +1446,51 @@ async def generate_redemption_code_api(request: Request, code_config: dict):
         if max_uses <= 0:
             raise HTTPException(status_code=400, detail="使用次数必须大于0")
 
-        logger.info(f"创建兑换码参数: pages={pages}, max_uses={max_uses}, expires_days={expires_days}, created_by={user.get('id')}")
+        if batch_count <= 0 or batch_count > 100:
+            raise HTTPException(status_code=400, detail="批量生成数量必须在1-100之间")
 
-        code = await redemption_code_model.create_code(
-            created_by=user['id'],
-            pages=pages,
-            max_uses=max_uses,
-            expires_days=expires_days,
-            description=description
-        )
+        logger.info(f"创建兑换码参数: pages={pages}, max_uses={max_uses}, expires_days={expires_days}, batch_count={batch_count}, created_by={user.get('id')}")
 
-        if not code:
-            logger.error(f"兑换码创建返回 None, user_id={user.get('id')}")
+        # 批量生成兑换码
+        codes = []
+        for i in range(batch_count):
+            code = await redemption_code_model.create_code(
+                created_by=user['id'],
+                pages=pages,
+                max_uses=max_uses,
+                expires_days=expires_days,
+                description=description
+            )
+            if code:
+                codes.append(code)
+            else:
+                logger.error(f"第{i+1}个兑换码创建失败, user_id={user.get('id')}")
+
+        if not codes:
+            logger.error(f"兑换码创建全部失败, user_id={user.get('id')}")
             raise HTTPException(status_code=500, detail="兑换码生成失败: 请检查日志获取详细错误信息")
 
-        return JSONResponse({
-            "status": "success",
-            "message": "兑换码生成成功",
-            "code": code,
-            "pages": pages,
-            "max_uses": max_uses,
-            "expires_days": expires_days
-        })
+        # 如果是批量生成,返回所有兑换码;如果是单个生成,保持原有格式
+        if batch_count == 1:
+            return JSONResponse({
+                "status": "success",
+                "message": "兑换码生成成功",
+                "code": codes[0],
+                "pages": pages,
+                "max_uses": max_uses,
+                "expires_days": expires_days
+            })
+        else:
+            return JSONResponse({
+                "status": "success",
+                "message": f"成功生成{len(codes)}个兑换码",
+                "codes": codes,
+                "pages": pages,
+                "max_uses": max_uses,
+                "expires_days": expires_days,
+                "total": len(codes),
+                "requested": batch_count
+            })
 
     except HTTPException:
         raise
@@ -1628,32 +1747,60 @@ async def create_registration_token_api(request: Request, token_data: dict):
         max_uses = token_data.get('max_uses', 1)
         expires_days = token_data.get('expires_days')
         description = token_data.get('description')
+        batch_count = token_data.get('batch_count', 1)  # 批量生成数量,默认为1
 
         if max_uses < 1:
             raise HTTPException(status_code=400, detail="最大使用次数必须大于0")
 
-        token = await registration_token_model.create_token(
-            created_by=admin['id'],
-            max_uses=max_uses,
-            expires_days=expires_days,
-            description=description
-        )
+        if batch_count <= 0 or batch_count > 100:
+            raise HTTPException(status_code=400, detail="批量生成数量必须在1-100之间")
 
-        if not token:
+        logger.info(f"创建注册令牌参数: max_uses={max_uses}, expires_days={expires_days}, batch_count={batch_count}, created_by={admin.get('id')}")
+
+        # 批量生成注册令牌
+        tokens = []
+        registration_urls = []
+        base_url = str(request.base_url).rstrip('/')
+        password_prefix = f"/{PASSWORD}" if PASSWORD else ""
+
+        for i in range(batch_count):
+            token = await registration_token_model.create_token(
+                created_by=admin['id'],
+                max_uses=max_uses,
+                expires_days=expires_days,
+                description=description
+            )
+            if token:
+                tokens.append(token)
+                registration_urls.append(f"{base_url}{password_prefix}/register?token={token}")
+            else:
+                logger.error(f"第{i+1}个注册令牌创建失败, admin_id={admin.get('id')}")
+
+        if not tokens:
+            logger.error(f"注册令牌创建全部失败, admin_id={admin.get('id')}")
             raise HTTPException(status_code=500, detail="创建注册令牌失败")
 
-        # 构建完整的注册链接
-        base_url = str(request.base_url).rstrip('/')
-        registration_url = f"{base_url}/register?token={token}"
-
-        return JSONResponse({
-            "status": "success",
-            "message": "注册令牌创建成功",
-            "token": token,
-            "registration_url": registration_url,
-            "max_uses": max_uses,
-            "expires_days": expires_days
-        })
+        # 如果是批量生成,返回所有令牌;如果是单个生成,保持原有格式
+        if batch_count == 1:
+            return JSONResponse({
+                "status": "success",
+                "message": "注册令牌创建成功",
+                "token": tokens[0],
+                "registration_url": registration_urls[0],
+                "max_uses": max_uses,
+                "expires_days": expires_days
+            })
+        else:
+            return JSONResponse({
+                "status": "success",
+                "message": f"成功创建{len(tokens)}个注册令牌",
+                "tokens": tokens,
+                "registration_urls": registration_urls,
+                "max_uses": max_uses,
+                "expires_days": expires_days,
+                "total": len(tokens),
+                "requested": batch_count
+            })
 
     except HTTPException:
         raise
@@ -1731,6 +1878,25 @@ async def delete_registration_token_api(request: Request, token: str):
         raise
     except Exception as e:
         logger.error(f"删除注册令牌失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/admin/registration-tokens/history" if PASSWORD else "/api/admin/registration-tokens/history")
+async def get_registration_token_history_api(request: Request):
+    """获取所有注册令牌使用历史(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        history = await registration_token_model.get_token_history()
+
+        return JSONResponse({
+            "status": "success",
+            "data": history
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取令牌使用历史失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/registration/validate-token")
@@ -1846,6 +2012,28 @@ async def get_tasks_stats_api(request: Request, user_id: Optional[str] = Query(N
     except Exception as e:
         logger.error(f"获取任务统计失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/tasks/{{task_id}}/cancel" if PASSWORD else "/api/admin/tasks/{task_id}/cancel")
+async def cancel_task_api(request: Request, task_id: str):
+    """管理员取消任务"""
+    try:
+        await auth_manager_instance.require_admin(request)
+        if not task_manager:
+            raise HTTPException(status_code=503, detail="任务管理器未初始化")
+
+        success, message = await task_manager.cancel_task(task_id, reason="管理员手动停止")
+        status = "success" if success else "error"
+        return JSONResponse({
+            "status": status,
+            "message": message
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"管理员取消任务失败 {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get(f"/{PASSWORD}/api/admin/tasks/{{task_id}}/content" if PASSWORD else "/api/admin/tasks/{task_id}/content")
 async def get_task_content_api(request: Request, task_id: str):
@@ -2052,7 +2240,7 @@ async def get_recovery_stats_api():
         raise HTTPException(status_code=500, detail=str(e))
 # 新增：异步任务提交端点
 @app.post(f"/{PASSWORD}/api/async/image" if PASSWORD else "/api/async/image")
-async def submit_async_image_task(file: UploadFile):
+async def submit_async_image_task(file: UploadFile, request: Request):
     """提交异步图片OCR任务"""
     import tempfile
 
@@ -2091,6 +2279,9 @@ async def submit_async_image_task(file: UploadFile):
         # 获取文件大小
         file_size_mb = os.path.getsize(tmp_file_path) / (1024 * 1024)
 
+        # 获取客户端IP
+        client_ip = get_client_ip(request)
+
         task_id = await task_manager.submit_image_task_from_file(
             file_path=tmp_file_path,
             file_name=file.filename or "image",
@@ -2098,7 +2289,8 @@ async def submit_async_image_task(file: UploadFile):
                 "source": "async_api",
                 "file_type": file.content_type,
                 "original_filename": file.filename,
-                "file_size_mb": file_size_mb
+                "file_size_mb": file_size_mb,
+                "client_ip": client_ip
             }
         )
 
@@ -2134,29 +2326,29 @@ async def submit_async_image_task(file: UploadFile):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post(f"/{PASSWORD}/api/async/pdf" if PASSWORD else "/api/async/pdf")
-async def submit_async_pdf_task(file: UploadFile):
+async def submit_async_pdf_task(file: UploadFile, request: Request):
     """提交异步PDF OCR任务"""
     if not task_manager:
         raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
+
     if not file:
         raise HTTPException(status_code=400, detail="未收到文件")
-    
+
     try:
         # 流式读取文件，避免一次性加载到内存
         file_data = await file.read()
         if not file_data:
             raise HTTPException(status_code=400, detail="文件内容为空")
-        
+
         # 验证文件类型
         if not file.content_type or file.content_type != 'application/pdf':
             raise HTTPException(status_code=400, detail="不支持的文件类型，请上传PDF文件")
-        
+
         # 文件大小检查（使用环境变量配置）
         max_file_size = MAX_PDF_SIZE_MB * 1024 * 1024
         if len(file_data) > max_file_size:
             raise HTTPException(status_code=400, detail=f"文件过大，最大支持{MAX_PDF_SIZE_MB}MB")
-        
+
         # 获取PDF文件信息
         try:
             page_count, file_size_mb = check_pdf_info(file_data)
@@ -2164,11 +2356,14 @@ async def submit_async_pdf_task(file: UploadFile):
         except Exception as e:
             logger.error(f"PDF文件信息获取失败: {e}")
             raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
-        
+
         # 页数限制检查（使用环境变量配置）
         if page_count > MAX_PDF_PAGES:
             raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{MAX_PDF_PAGES}页")
-        
+
+        # 获取客户端IP
+        client_ip = get_client_ip(request)
+
         task_id = await task_manager.submit_pdf_task(
             file_data=file_data,
             file_name=file.filename or "document.pdf",
@@ -2176,7 +2371,8 @@ async def submit_async_pdf_task(file: UploadFile):
                 "source": "async_api",
                 "file_type": file.content_type,
                 "original_filename": file.filename,
-                "file_size_mb": file_size_mb
+                "file_size_mb": file_size_mb,
+                "client_ip": client_ip
             }
         )
         
@@ -2206,21 +2402,24 @@ async def submit_async_pdf_task(file: UploadFile):
 
 # 新增：批量任务提交端点
 @app.post(f"/{PASSWORD}/api/async/batch" if PASSWORD else "/api/async/batch")
-async def submit_batch_tasks(files: list[UploadFile]):
+async def submit_batch_tasks(files: list[UploadFile], request: Request):
     """提交批量异步任务"""
     if not task_manager:
         raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
+
     if not files or len(files) == 0:
         raise HTTPException(status_code=400, detail="未收到文件")
-    
+
     if len(files) > 20:  # 限制批量上传数量
         raise HTTPException(status_code=400, detail="批量上传最多支持20个文件")
-    
+
     try:
+        # 获取客户端IP（对整个批次只获取一次）
+        client_ip = get_client_ip(request)
+
         submitted_tasks = []
         failed_files = []
-        
+
         for file in files:
             tmp_file_path = None
             try:
@@ -2256,7 +2455,8 @@ async def submit_batch_tasks(files: list[UploadFile]):
                                 "source": "batch_api",
                                 "file_type": file.content_type,
                                 "original_filename": file.filename,
-                                "file_size_mb": file_size_mb
+                                "file_size_mb": file_size_mb,
+                                "client_ip": client_ip
                             }
                         )
 
@@ -2310,7 +2510,8 @@ async def submit_batch_tasks(files: list[UploadFile]):
                                         "file_type": file.content_type,
                                         "original_filename": file.filename,
                                         "file_size_mb": file_size_mb,
-                                        "total_pages": page_count
+                                        "total_pages": page_count,
+                                        "client_ip": client_ip
                                     }
                                 )
 

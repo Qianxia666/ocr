@@ -6,13 +6,6 @@
   <title>{{ title }}</title>
   <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      corePlugins: {
-        outline: false,
-      }
-    }
-  </script>
   <style>
     /* 移除所有按钮的聚焦外框 */
     * {
@@ -92,13 +85,13 @@
     }
 
     /* 复选框和选中样式 */
-    .code-row {
+    .token-row {
       transition: all 0.2s;
     }
-    .code-row.selected {
-      background-color: #dbeafe !important;
+    .token-row.selected {
+      background-color: #e0f2fe !important;
     }
-    .code-checkbox {
+    .token-checkbox {
       width: 18px;
       height: 18px;
       cursor: pointer;
@@ -109,7 +102,7 @@
   <!-- 顶栏 -->
   <header class="bg-white border-b border-blue-200 shadow-sm flex-shrink-0 z-40">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between relative">
-      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-blue-700">兑换码管理</h1>
+      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-blue-700">令牌注册管理</h1>
 
       <!-- 菜单按钮 -->
       <button id="menu-btn" class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-blue-50 active:bg-blue-100 rounded-lg transition-all duration-200 flex-shrink-0">
@@ -143,23 +136,23 @@
       <!-- 操作按钮 -->
       <div class="bg-white rounded-lg shadow-md p-4 mb-4">
         <div class="flex gap-2 flex-wrap">
-          <button onclick="showGenerateCodeForm()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
-            生成兑换码
+          <button onclick="showGenerateTokenForm()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+            生成注册令牌
           </button>
-          <button onclick="loadCodes()" class="px-6 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors">
+          <button onclick="loadTokens()" class="px-6 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors">
             刷新列表
           </button>
-          <button onclick="copyValidCodes()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
-            复制有效兑换码
+          <button onclick="copyValidTokenLinks()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+            复制有效令牌链接
           </button>
-          <button id="select-all-btn" onclick="selectAllCodes()" class="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors hidden">
+          <button id="select-all-btn" onclick="selectAllTokens()" class="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors hidden">
             全选
           </button>
           <div id="batch-actions" class="hidden flex gap-2">
-            <button onclick="copySelectedCodes()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
-              复制选中 (<span id="selected-count">0</span>)
+            <button onclick="copySelectedLinks()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+              复制选中链接 (<span id="selected-count">0</span>)
             </button>
-            <button onclick="deleteSelectedCodes()" class="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
+            <button onclick="deleteSelectedTokens()" class="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
               删除选中
             </button>
             <button onclick="clearSelection()" class="px-6 py-2 bg-gray-400 hover:bg-gray-500 text-white rounded-lg transition-colors">
@@ -174,12 +167,12 @@
         <div class="flex flex-wrap gap-4 items-end">
           <div class="flex-1 min-w-[200px]">
             <label class="block text-sm font-medium text-gray-700 mb-1">搜索</label>
-            <input type="text" id="search-input" placeholder="搜索兑换码..." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
+            <input type="text" id="search-input" placeholder="搜索令牌或备注..." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
           </div>
           <div class="flex-1 min-w-[200px]">
             <label class="block text-sm font-medium text-gray-700 mb-1">状态筛选</label>
             <select id="status-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
-              <option value="">所有兑换码</option>
+              <option value="">所有令牌</option>
               <option value="unused">未使用</option>
               <option value="used">已使用</option>
               <option value="exhausted">已用完</option>
@@ -192,22 +185,22 @@
         </div>
       </div>
 
-      <!-- 兑换码列表表格 -->
+      <!-- 令牌列表表格 -->
       <div class="bg-white rounded-lg shadow-md overflow-hidden">
         <div class="overflow-x-auto" style="max-height: 600px; overflow-y: auto;">
           <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50 sticky top-0 z-10">
               <tr>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">选择</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">兑换码</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">页数</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">令牌</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">使用情况</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">状态</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">有效期</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">创建时间</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">操作</th>
               </tr>
             </thead>
-            <tbody id="codes-table" class="bg-white divide-y divide-gray-200">
+            <tbody id="tokens-table" class="bg-white divide-y divide-gray-200">
               <tr>
                 <td colspan="7" class="px-6 py-4 text-center text-gray-500">加载中...</td>
               </tr>
@@ -234,37 +227,33 @@
     </div>
   </div>
 
-  <!-- 生成兑换码表单弹窗 -->
-  <div id="generate-code-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onclick="if(event.target === this) hideGenerateCodeForm()">
+  <!-- 生成令牌表单弹窗 -->
+  <div id="generate-token-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onclick="if(event.target === this) hideGenerateTokenForm()">
     <div class="bg-white rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
-      <h3 class="text-xl font-bold text-gray-800 mb-4">生成兑换码</h3>
+      <h3 class="text-xl font-bold text-gray-800 mb-4">生成注册令牌</h3>
       <div class="space-y-4">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">生成数量</label>
-          <input type="number" id="code-batch-count" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" value="1" min="1" max="100">
+          <input type="number" id="token-batch-count" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" value="1" min="1" max="100">
           <p class="text-xs text-gray-500 mt-1">批量生成数量(1-100)</p>
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">页数</label>
-          <input type="number" id="code-pages" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" value="100" min="1">
-        </div>
-        <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">最大使用次数</label>
-          <input type="number" id="code-max-uses" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" value="1" min="1">
+          <input type="number" id="token-max-uses" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" value="1" min="1">
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">有效期(天,留空为永久)</label>
-          <input type="number" id="code-expires-days" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="留空为永久">
+          <input type="number" id="token-expires-days" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="留空为永久">
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">备注(可选)</label>
-          <input type="text" id="code-description" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="如:测试用兑换码">
+          <input type="text" id="token-description" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="如:测试用令牌">
         </div>
         <div class="flex gap-2 pt-2">
-          <button onclick="generateCode()" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+          <button onclick="generateToken()" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
             生成
           </button>
-          <button onclick="hideGenerateCodeForm()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+          <button onclick="hideGenerateTokenForm()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
             取消
           </button>
         </div>
@@ -280,20 +269,20 @@
     // 分页相关变量
     let currentPage = 1;
     let pageSize = 50;
-    let totalCodes = 0;
-    let allCodesData = [];
-    let historyData = {};
-    const codeDetailState = new Map();
-    let selectedCodes = new Set(); // 存储选中的兑换码
+    let totalTokens = 0;
+    let allTokensData = [];
+    let selectedTokens = new Set(); // 存储选中的令牌
+    const tokenDetailState = new Map(); // 存储令牌详情展开状态
+    let historyData = {}; // 存储令牌使用记录
 
-    function getCodeCreatedTimestamp(code) {
-      const createdAt = code.created_at || code.createdAt || code.created_time || code.createdTime || code.created;
+    function getTokenCreatedTimestamp(token) {
+      const createdAt = token.created_at || token.createdAt || token.created_time || token.createdTime || token.created;
       const timestamp = createdAt ? new Date(createdAt).getTime() : NaN;
       return Number.isFinite(timestamp) ? timestamp : 0;
     }
 
-    function sortCodesByCreatedAtDesc(codes) {
-      return [...codes].sort((a, b) => getCodeCreatedTimestamp(b) - getCodeCreatedTimestamp(a));
+    function sortTokensByCreatedAtDesc(tokens) {
+      return [...tokens].sort((a, b) => getTokenCreatedTimestamp(b) - getTokenCreatedTimestamp(a));
     }
 
     // 防抖函数
@@ -309,47 +298,44 @@
       };
     }
 
-    // 加载兑换码列表
-    async function loadCodes() {
+    // 加载令牌列表
+    async function loadTokens() {
       try {
-        // 加载所有兑换码
-        const codesResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/codes/list`);
-        const codesData = await codesResponse.json();
+        // 加载所有令牌
+        const tokensResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/list`);
+        const tokensData = await tokensResponse.json();
 
-        // 加载兑换记录
-        const historyResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/codes/history`);
+        // 加载使用记录
+        const historyResponse = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/history`);
         const histData = await historyResponse.json();
 
-        if (codesData.status === 'success' && codesData.data) {
-          allCodesData = sortCodesByCreatedAtDesc(codesData.data);
+        if (tokensData.status === 'success' && tokensData.data) {
+          allTokensData = sortTokensByCreatedAtDesc(tokensData.data);
 
-          // 创建兑换记录映射
+          // 创建令牌使用记录映射
           historyData = {};
           if (histData.status === "success" && histData.data) {
+            console.log('加载到的使用记录:', histData.data);
             histData.data.forEach(record => {
-              if (!historyData[record.code]) {
-                historyData[record.code] = [];
+              if (!historyData[record.token]) {
+                historyData[record.token] = [];
               }
-              historyData[record.code].push(record);
+              historyData[record.token].push(record);
             });
+            console.log('映射后的historyData:', historyData);
+          } else {
+            console.log('使用记录加载失败或无数据:', histData);
           }
-
-          const existingIds = new Set(allCodesData.map(code => code.code));
-          Array.from(codeDetailState.keys()).forEach(id => {
-            if (!existingIds.has(id)) {
-              codeDetailState.delete(id);
-            }
-          });
 
           currentPage = 1;
           const status = document.getElementById('status-filter').value;
-          displayCodes(allCodesData, status);
+          displayTokens(allTokensData, status);
         } else {
-          document.getElementById('codes-table').innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
+          document.getElementById('tokens-table').innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
         }
       } catch (err) {
-        console.error('加载兑换码列表失败:', err);
-        document.getElementById('codes-table').innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
+        console.error('加载令牌列表失败:', err);
+        document.getElementById('tokens-table').innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
       }
     }
 
@@ -357,55 +343,55 @@
     function applyFilters() {
       const status = document.getElementById('status-filter').value;
       currentPage = 1;
-      displayCodes(allCodesData, status);
+      displayTokens(allTokensData, status);
     }
 
-    // 显示兑换码列表
-    function displayCodes(codes, statusFilter = '') {
-      const tbody = document.getElementById('codes-table');
+    // 显示令牌列表
+    function displayTokens(tokens, statusFilter = '') {
+      const tbody = document.getElementById('tokens-table');
       const searchQuery = document.getElementById('search-input').value.toLowerCase();
 
-      let filteredCodes = codes;
+      let filteredTokens = tokens;
 
       // 搜索过滤
       if (searchQuery) {
-        filteredCodes = filteredCodes.filter(code =>
-          code.code.toLowerCase().includes(searchQuery) ||
-          (code.description && code.description.toLowerCase().includes(searchQuery))
+        filteredTokens = filteredTokens.filter(token =>
+          token.token.toLowerCase().includes(searchQuery) ||
+          (token.description && token.description.toLowerCase().includes(searchQuery))
         );
       }
 
       // 状态过滤
       if (statusFilter === 'unused') {
-        filteredCodes = filteredCodes.filter(code => code.used_count === 0);
+        filteredTokens = filteredTokens.filter(token => token.used_count === 0);
       } else if (statusFilter === 'used') {
-        filteredCodes = filteredCodes.filter(code => code.used_count > 0 && code.used_count < code.max_uses);
+        filteredTokens = filteredTokens.filter(token => token.used_count > 0 && token.used_count < token.max_uses);
       } else if (statusFilter === 'exhausted') {
-        filteredCodes = filteredCodes.filter(code => code.used_count >= code.max_uses);
+        filteredTokens = filteredTokens.filter(token => token.used_count >= token.max_uses);
       } else if (statusFilter === 'expired') {
-        filteredCodes = filteredCodes.filter(code =>
-          code.expires_at && new Date(code.expires_at) < new Date()
+        filteredTokens = filteredTokens.filter(token =>
+          token.expires_at && new Date(token.expires_at) < new Date()
         );
       }
 
-      totalCodes = filteredCodes.length;
+      totalTokens = filteredTokens.length;
 
-      if (filteredCodes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-gray-500">暂无兑换码</td></tr>';
+      if (filteredTokens.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-gray-500">暂无令牌</td></tr>';
         updatePaginationUI();
         updateSelectionUI();
         return;
       }
 
       const startIndex = (currentPage - 1) * pageSize;
-      const endIndex = Math.min(startIndex + pageSize, filteredCodes.length);
-      const currentPageCodes = filteredCodes.slice(startIndex, endIndex);
+      const endIndex = Math.min(startIndex + pageSize, filteredTokens.length);
+      const currentPageTokens = filteredTokens.slice(startIndex, endIndex);
 
       const fragment = document.createDocumentFragment();
 
-      currentPageCodes.forEach(code => {
-        fragment.appendChild(createCodeRow(code));
-        fragment.appendChild(createCodeDetailRow(code));
+      currentPageTokens.forEach(token => {
+        fragment.appendChild(createTokenRow(token));
+        fragment.appendChild(createTokenDetailRow(token));
       });
 
       tbody.innerHTML = '';
@@ -416,8 +402,8 @@
 
     // 更新分页UI
     function updatePaginationUI() {
-      const totalPages = Math.ceil(totalCodes / pageSize);
-      document.getElementById('page-info').textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页 (总计 ${totalCodes} 条)`;
+      const totalPages = Math.ceil(totalTokens / pageSize);
+      document.getElementById('page-info').textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页 (总计 ${totalTokens} 条)`;
 
       const prevBtn = document.getElementById('prev-page');
       const nextBtn = document.getElementById('next-page');
@@ -428,13 +414,13 @@
 
     // 改变页码
     function changePage(delta) {
-      const totalPages = Math.ceil(totalCodes / pageSize);
+      const totalPages = Math.ceil(totalTokens / pageSize);
       const newPage = currentPage + delta;
 
       if (newPage >= 1 && newPage <= totalPages) {
         currentPage = newPage;
         const status = document.getElementById('status-filter').value;
-        displayCodes(allCodesData, status);
+        displayTokens(allTokensData, status);
       }
     }
 
@@ -443,44 +429,46 @@
       pageSize = parseInt(document.getElementById('page-size').value);
       currentPage = 1;
       const status = document.getElementById('status-filter').value;
-      displayCodes(allCodesData, status);
+      displayTokens(allTokensData, status);
     }
 
-    // 创建兑换码行元素
-    function createCodeRow(code) {
+    // 创建令牌行元素
+    function createTokenRow(token) {
       const tr = document.createElement('tr');
-      tr.className = 'code-row hover:bg-blue-50 cursor-pointer';
-      if (selectedCodes.has(code.code)) {
+      tr.className = 'token-row hover:bg-blue-50 cursor-pointer';
+      if (selectedTokens.has(token.token)) {
         tr.classList.add('selected');
       }
-      tr.setAttribute('data-code-id', code.code);
+      tr.setAttribute('data-token-id', token.token);
       tr.onclick = (e) => {
-        // 如果点击的是复选框，不触发行点击
+        // 如果点击的是复选框,不触发行点击
         if (e.target.type !== 'checkbox') {
-          toggleCodeDetails(code.code);
+          toggleTokenDetails(token.token);
         }
       };
 
-      tr.innerHTML = createCodeRowHtml(code);
+      tr.innerHTML = createTokenRowHtml(token);
       return tr;
     }
 
-    // 创建兑换码行HTML
-    function createCodeRowHtml(code) {
-      const createdAt = formatDateTime(code.created_at);
-      const detailLabel = codeDetailState.get(code.code) ? '收起详情' : '展开详情';
-      const isExpired = code.expires_at && new Date(code.expires_at) < new Date();
-      const isExhausted = code.used_count >= code.max_uses;
-      const isChecked = selectedCodes.has(code.code);
+    // 创建令牌行HTML
+    function createTokenRowHtml(token) {
+      const createdAt = formatDateTime(token.created_at);
+      const expiresAt = token.expires_at ? formatDateTime(token.expires_at) : '永久有效';
+      const isExpired = token.expires_at && new Date(token.expires_at) < new Date();
+      const isExhausted = token.used_count >= token.max_uses;
+      const isChecked = selectedTokens.has(token.token);
+      const registerUrl = `${baseUrl}${passwordPrefix}/register?token=${token.token}`;
+      const detailLabel = tokenDetailState.get(token.token) ? '收起详情' : '展开详情';
 
       let statusBadge = '';
       if (isExhausted) {
         statusBadge = '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">已用完</span>';
       } else if (isExpired) {
         statusBadge = '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-orange-100 text-orange-800">已过期</span>';
-      } else if (code.used_count > 0) {
+      } else if (token.used_count > 0) {
         statusBadge = '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">已使用</span>';
-      } else if (!code.is_active) {
+      } else if (!token.is_active) {
         statusBadge = '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">已禁用</span>';
       } else {
         statusBadge = '<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">未使用</span>';
@@ -488,79 +476,84 @@
 
       return `
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-          <input type="checkbox" class="code-checkbox" ${isChecked ? 'checked' : ''} onchange="toggleCodeSelection('${code.code}', this)" onclick="event.stopPropagation()">
+          <input type="checkbox" class="token-checkbox" ${isChecked ? 'checked' : ''} onchange="toggleTokenSelection('${token.token}', this)" onclick="event.stopPropagation()">
         </td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900" title="${code.code}">${code.code.substring(0, 12)}...</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${code.pages}</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${code.used_count}/${code.max_uses}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900" title="${token.token}">${token.token.substring(0, 12)}...</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${token.used_count}/${token.max_uses}</td>
         <td class="px-6 py-4 whitespace-nowrap">${statusBadge}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${expiresAt}</td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${createdAt}</td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 space-x-2">
-          <button type="button" class="text-sm text-gray-600 hover:underline" onclick="event.stopPropagation(); toggleCodeDetails('${code.code}')">${detailLabel}</button>
-          <button type="button" class="text-sm text-green-600 hover:underline" onclick="event.stopPropagation(); copyCode('${code.code}')">复制</button>
-          ${code.is_active
-            ? `<button type="button" class="text-sm text-red-600 hover:underline" onclick="event.stopPropagation(); toggleCode('${code.code}', false)">禁用</button>`
-            : `<button type="button" class="text-sm text-blue-600 hover:underline" onclick="event.stopPropagation(); toggleCode('${code.code}', true)">启用</button>`
+          <button type="button" class="text-sm text-gray-600 hover:underline" onclick="event.stopPropagation(); toggleTokenDetails('${token.token}')">${detailLabel}</button>
+          <button type="button" class="text-sm text-green-600 hover:underline" onclick="event.stopPropagation(); copyLink('${registerUrl}')">复制链接</button>
+          ${token.is_active
+            ? `<button type="button" class="text-sm text-red-600 hover:underline" onclick="event.stopPropagation(); toggleToken('${token.token}', false)">禁用</button>`
+            : `<button type="button" class="text-sm text-blue-600 hover:underline" onclick="event.stopPropagation(); toggleToken('${token.token}', true)">启用</button>`
           }
         </td>
       `;
     }
 
-    function createCodeDetailRow(code) {
-      const isExpanded = codeDetailState.get(code.code) || false;
+    // 创建令牌详情行
+    function createTokenDetailRow(token) {
+      const isExpanded = tokenDetailState.get(token.token) || false;
       const detailRow = document.createElement("tr");
-      detailRow.setAttribute('data-detail-for', code.code);
+      detailRow.setAttribute('data-detail-for', token.token);
       detailRow.className = isExpanded ? 'bg-gray-50' : 'bg-gray-50 hidden';
 
       const detailCell = document.createElement("td");
       detailCell.colSpan = 7;
       detailCell.className = 'px-6 py-4 text-sm text-gray-600';
 
-      const records = historyData[code.code] || [];
+      const registerUrl = `${baseUrl}${passwordPrefix}/register?token=${token.token}`;
+
+      // 获取使用记录
+      const records = historyData[token.token] || [];
+      console.log(`令牌 ${token.token.substring(0, 10)}... 的使用记录:`, records);
       const recordsHtml = records.map(record => `
         <div class="text-xs text-gray-600 bg-blue-50 p-2 rounded mt-1">
           用户: <span class="font-semibold">${record.username || '未知'}</span>
           (UUID: <code class="text-xs">${(record.user_uuid || 'N/A').substring(0, 8)}...</code>)
-          | 兑换时间: ${formatDateTime(record.redeemed_at)}
+          | 注册时间: ${formatDateTime(record.registered_at)}
         </div>
       `).join('');
 
       detailCell.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <p class="text-xs text-gray-500 uppercase tracking-wider">兑换码</p>
-            <p class="font-mono text-sm text-gray-800 break-all">${code.code}</p>
-          </div>
-          <div>
-            <p class="text-xs text-gray-500 uppercase tracking-wider">页数</p>
-            <p class="text-sm text-gray-800">${code.pages} 页</p>
+            <p class="text-xs text-gray-500 uppercase tracking-wider">令牌</p>
+            <p class="font-mono text-sm text-gray-800 break-all">${token.token}</p>
           </div>
           <div>
             <p class="text-xs text-gray-500 uppercase tracking-wider">使用次数</p>
-            <p class="text-sm text-gray-800">${code.used_count} / ${code.max_uses}</p>
+            <p class="text-sm text-gray-800">${token.used_count} / ${token.max_uses}</p>
           </div>
           <div>
             <p class="text-xs text-gray-500 uppercase tracking-wider">过期时间</p>
-            <p class="text-sm text-gray-800">${code.expires_at ? formatDateTime(code.expires_at) : '永久有效'}</p>
+            <p class="text-sm text-gray-800">${token.expires_at ? formatDateTime(token.expires_at) : '永久有效'}</p>
           </div>
           <div>
             <p class="text-xs text-gray-500 uppercase tracking-wider">状态</p>
-            <p class="text-sm text-gray-800">${code.is_active ? '启用' : '禁用'}</p>
+            <p class="text-sm text-gray-800">${token.is_active ? '启用' : '禁用'}</p>
           </div>
           <div>
             <p class="text-xs text-gray-500 uppercase tracking-wider">创建时间</p>
-            <p class="text-sm text-gray-800">${formatDateTime(code.created_at)}</p>
+            <p class="text-sm text-gray-800">${formatDateTime(token.created_at)}</p>
           </div>
-          ${code.description ? `
+          <div class="md:col-span-3">
+            <p class="text-xs text-gray-500 uppercase tracking-wider">注册链接</p>
+            <p class="text-sm text-gray-800 break-all">${registerUrl}</p>
+          </div>
+          ${token.description ? `
           <div class="md:col-span-3">
             <p class="text-xs text-gray-500 uppercase tracking-wider">备注</p>
-            <p class="text-sm text-gray-800">${code.description}</p>
+            <p class="text-sm text-gray-800">${token.description}</p>
           </div>
           ` : ''}
         </div>
         ${recordsHtml ? `
           <div class="mt-4">
-            <p class="text-sm font-semibold text-gray-700 mb-2">兑换记录:</p>
+            <p class="text-sm font-semibold text-gray-700 mb-2">注册记录:</p>
             ${recordsHtml}
           </div>
         ` : ''}
@@ -569,47 +562,42 @@
       return detailRow;
     }
 
-    function toggleCodeDetails(codeId) {
-      const currentState = codeDetailState.get(codeId) || false;
+    // 切换令牌详情展开/收起
+    function toggleTokenDetails(tokenId) {
+      const currentState = tokenDetailState.get(tokenId) || false;
       const newState = !currentState;
-      codeDetailState.set(codeId, newState);
+      tokenDetailState.set(tokenId, newState);
 
-      const detailRow = document.querySelector(`tr[data-detail-for="${codeId}"]`);
+      const detailRow = document.querySelector(`tr[data-detail-for="${tokenId}"]`);
       if (detailRow) {
         detailRow.classList.toggle('hidden', !newState);
       }
 
-      const summaryRow = document.querySelector(`tr[data-code-id="${codeId}"]`);
+      const summaryRow = document.querySelector(`tr[data-token-id="${tokenId}"]`);
       if (summaryRow) {
-        const toggleButton = summaryRow.querySelector('button[onclick*="toggleCodeDetails"]');
+        const toggleButton = summaryRow.querySelector('button[onclick*="toggleTokenDetails"]');
         if (toggleButton) {
           toggleButton.textContent = newState ? '收起详情' : '展开详情';
         }
       }
     }
 
-    // 显示生成兑换码表单
-    function showGenerateCodeForm() {
-      document.getElementById('generate-code-modal').classList.remove('hidden');
+    // 显示生成令牌表单
+    function showGenerateTokenForm() {
+      document.getElementById('generate-token-modal').classList.remove('hidden');
     }
 
-    // 隐藏生成兑换码表单
-    function hideGenerateCodeForm() {
-      document.getElementById('generate-code-modal').classList.add('hidden');
+    // 隐藏生成令牌表单
+    function hideGenerateTokenForm() {
+      document.getElementById('generate-token-modal').classList.add('hidden');
     }
 
-    // 生成兑换码
-    async function generateCode() {
-      const pages = parseInt(document.getElementById('code-pages').value);
-      const maxUses = parseInt(document.getElementById('code-max-uses').value);
-      const expiresDays = document.getElementById('code-expires-days').value;
-      const description = document.getElementById('code-description').value;
-      const batchCount = parseInt(document.getElementById('code-batch-count').value) || 1;
-
-      if (!pages || pages < 1) {
-        alert("请输入有效的页数");
-        return;
-      }
+    // 生成令牌
+    async function generateToken() {
+      const maxUses = parseInt(document.getElementById('token-max-uses').value);
+      const expiresDays = document.getElementById('token-expires-days').value;
+      const description = document.getElementById('token-description').value;
+      const batchCount = parseInt(document.getElementById('token-batch-count').value) || 1;
 
       if (batchCount < 1 || batchCount > 100) {
         alert("批量生成数量必须在1-100之间");
@@ -617,11 +605,10 @@
       }
 
       try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/codes/generate`, {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/create`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            pages,
             max_uses: maxUses,
             expires_days: expiresDays ? parseInt(expiresDays) : null,
             description: description || null,
@@ -633,23 +620,24 @@
 
         if (data.status === "success") {
           if (batchCount === 1) {
-            alert(`兑换码生成成功!\n\n${data.code}\n\n页数: ${data.pages}\n使用次数: ${data.max_uses}`);
+            const registerUrl = data.registration_url || (data.registration_urls && data.registration_urls[0]);
+            alert(`令牌生成成功!\n\n注册链接: ${registerUrl}\n\n使用次数: ${data.max_uses}`);
           } else {
-            const codesList = data.codes.join('\n');
+            const linksList = data.registration_urls.join('\n');
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
             modal.innerHTML = `
               <div class="bg-white rounded-xl p-6 max-w-2xl w-full mx-4 shadow-2xl max-h-[80vh] flex flex-col">
                 <h3 class="text-xl font-bold text-gray-800 mb-4">批量生成成功</h3>
                 <div class="mb-4 text-sm text-gray-600">
-                  <p>共生成 <span class="font-bold text-blue-600">${data.total}</span> 个兑换码</p>
-                  <p>页数: ${data.pages} | 使用次数: ${data.max_uses}</p>
+                  <p>共生成 <span class="font-bold text-blue-600">${data.total}</span> 个注册令牌</p>
+                  <p>使用次数: ${data.max_uses}</p>
                 </div>
                 <div class="flex-1 overflow-y-auto mb-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <pre class="text-sm whitespace-pre-wrap font-mono">${codesList}</pre>
+                  <pre class="text-sm whitespace-pre-wrap font-mono">${linksList}</pre>
                 </div>
                 <div class="flex gap-2">
-                  <button onclick="copyToClipboard('${codesList.replace(/\n/g, '\\n')}', this.parentElement.parentElement.parentElement)" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                  <button onclick="copyToClipboard('${linksList.replace(/\n/g, '\\n')}', this.parentElement.parentElement.parentElement)" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
                     复制全部
                   </button>
                   <button onclick="this.parentElement.parentElement.parentElement.remove()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors">
@@ -660,13 +648,13 @@
             `;
             document.body.appendChild(modal);
           }
-          hideGenerateCodeForm();
-          loadCodes();
+          hideGenerateTokenForm();
+          loadTokens();
         } else {
           alert("生成失败: " + (data.message || "未知错误"));
         }
       } catch (err) {
-        console.error("生成兑换码失败:", err);
+        console.error("生成令牌失败:", err);
         alert("生成失败,请重试");
       }
     }
@@ -684,11 +672,10 @@
       });
     }
 
-    // 切换兑换码状态
-    async function toggleCode(code, activate) {
-      const action = activate ? 'activate' : 'deactivate';
+    // 切换令牌状态
+    async function toggleToken(token, activate) {
       try {
-        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/codes/${code}/${action}`, {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/${token}/toggle`, {
           method: 'POST'
         });
 
@@ -696,58 +683,83 @@
 
         if (data.status === "success") {
           alert(data.message);
-          loadCodes();
+          loadTokens();
         } else {
           alert("操作失败");
         }
       } catch (err) {
-        console.error("切换兑换码状态失败:", err);
+        console.error("切换令牌状态失败:", err);
         alert("操作失败,请重试");
       }
     }
 
-    // 复制兑换码
-    function copyCode(code) {
-      navigator.clipboard.writeText(code).then(() => {
-        alert("已复制: " + code);
+    // 删除令牌
+    async function deleteToken(token) {
+      if (!confirm(`确定要删除此令牌吗？此操作不可撤销！`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/${token}`, {
+          method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          loadTokens();
+        } else {
+          alert("删除失败");
+        }
+      } catch (err) {
+        console.error("删除令牌失败:", err);
+        alert("删除失败,请重试");
+      }
+    }
+
+    // 复制链接
+    function copyLink(url) {
+      navigator.clipboard.writeText(url).then(() => {
+        alert("已复制注册链接: " + url);
       });
     }
 
     // 更新选择状态UI
     function updateSelectionUI() {
-      const count = selectedCodes.size;
+      const count = selectedTokens.size;
       document.getElementById('selected-count').textContent = count;
       document.getElementById('batch-actions').classList.toggle('hidden', count === 0);
 
       // 更新全选按钮显示
-      const checkboxes = document.querySelectorAll('.code-checkbox');
+      const checkboxes = document.querySelectorAll('.token-checkbox');
       const selectAllBtn = document.getElementById('select-all-btn');
       selectAllBtn.classList.toggle('hidden', checkboxes.length === 0);
     }
 
     // 切换选择状态
-    function toggleCodeSelection(code, checkbox) {
-      const codeRow = checkbox.closest('tr');
+    function toggleTokenSelection(token, checkbox) {
+      const tokenRow = checkbox.closest('tr');
       if (checkbox.checked) {
-        selectedCodes.add(code);
-        codeRow.classList.add('selected');
+        selectedTokens.add(token);
+        tokenRow.classList.add('selected');
       } else {
-        selectedCodes.delete(code);
-        codeRow.classList.remove('selected');
+        selectedTokens.delete(token);
+        tokenRow.classList.remove('selected');
       }
       updateSelectionUI();
     }
 
-    // 全选当前页的所有兑换码
-    function selectAllCodes() {
-      const checkboxes = document.querySelectorAll('.code-checkbox');
+    // 全选当前页的所有令牌
+    function selectAllTokens() {
+      const checkboxes = document.querySelectorAll('.token-checkbox');
       checkboxes.forEach(cb => {
         if (!cb.checked) {
           cb.checked = true;
-          const codeRow = cb.closest('tr');
-          const codeId = codeRow.getAttribute('data-code-id');
-          selectedCodes.add(codeId);
-          codeRow.classList.add('selected');
+          const tokenRow = cb.closest('tr');
+          const tokenId = tokenRow.getAttribute('data-token-id');
+          selectedTokens.add(tokenId);
+          tokenRow.classList.add('selected');
         }
       });
       updateSelectionUI();
@@ -755,78 +767,52 @@
 
     // 清除选择
     function clearSelection() {
-      selectedCodes.clear();
-      document.querySelectorAll('.code-checkbox').forEach(cb => {
+      selectedTokens.clear();
+      document.querySelectorAll('.token-checkbox').forEach(cb => {
         cb.checked = false;
       });
-      document.querySelectorAll('.code-row').forEach(row => {
+      document.querySelectorAll('.token-row').forEach(row => {
         row.classList.remove('selected');
       });
       updateSelectionUI();
     }
 
-    // 复制选中的兑换码
-    function copySelectedCodes() {
-      if (selectedCodes.size === 0) {
-        alert('请先选择要复制的兑换码');
+    // 复制选中的注册链接
+    function copySelectedLinks() {
+      if (selectedTokens.size === 0) {
+        alert('请先选择要复制的令牌');
         return;
       }
 
-      const codes = Array.from(selectedCodes).join('\n');
+      const links = Array.from(selectedTokens).map(token =>
+        `${baseUrl}${passwordPrefix}/register?token=${token}`
+      ).join('\n');
 
-      navigator.clipboard.writeText(codes).then(() => {
-        alert(`已复制 ${selectedCodes.size} 个兑换码到剪贴板\n\n每行一条，可直接粘贴`);
+      navigator.clipboard.writeText(links).then(() => {
+        alert(`已复制 ${selectedTokens.size} 个注册链接到剪贴板\n\n每行一条，可直接粘贴`);
       }).catch(() => {
-        // 降级复制方案
-        const textarea = document.createElement('textarea');
-        textarea.value = codes;
-        textarea.style.position = 'fixed';
-        textarea.style.top = '0';
-        textarea.style.left = '0';
-        textarea.style.width = '2em';
-        textarea.style.height = '2em';
-        textarea.style.padding = '0';
-        textarea.style.border = 'none';
-        textarea.style.outline = 'none';
-        textarea.style.boxShadow = 'none';
-        textarea.style.background = 'transparent';
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-
-        try {
-          const successful = document.execCommand('copy');
-          if (successful) {
-            alert(`已复制 ${selectedCodes.size} 个兑换码到剪贴板\n\n每行一条，可直接粘贴`);
-          } else {
-            alert('复制失败，请手动复制');
-          }
-        } catch (err) {
-          alert('复制失败，请手动复制');
-        }
-
-        document.body.removeChild(textarea);
+        alert('复制失败，请手动复制');
       });
     }
 
-    // 删除选中的兑换码
-    async function deleteSelectedCodes() {
-      if (selectedCodes.size === 0) {
-        alert('请先选择要删除的兑换码');
+    // 删除选中的令牌
+    async function deleteSelectedTokens() {
+      if (selectedTokens.size === 0) {
+        alert('请先选择要删除的令牌');
         return;
       }
 
-      if (!confirm(`确定要删除选中的 ${selectedCodes.size} 个兑换码吗？此操作不可撤销！`)) {
+      if (!confirm(`确定要删除选中的 ${selectedTokens.size} 个令牌吗？此操作不可撤销！`)) {
         return;
       }
 
-      const codes = Array.from(selectedCodes);
+      const tokens = Array.from(selectedTokens);
       let successCount = 0;
       let failCount = 0;
 
-      for (const code of codes) {
+      for (const token of tokens) {
         try {
-          const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/codes/${code}`, {
+          const response = await fetch(`${baseUrl}${passwordPrefix}/api/admin/registration-tokens/${token}`, {
             method: 'DELETE'
           });
           const data = await response.json();
@@ -836,42 +822,44 @@
             failCount++;
           }
         } catch (err) {
-          console.error(`删除兑换码 ${code} 失败:`, err);
+          console.error(`删除令牌 ${token} 失败:`, err);
           failCount++;
         }
       }
 
       alert(`删除完成！\n成功: ${successCount}\n失败: ${failCount}`);
       clearSelection();
-      loadCodes();
+      loadTokens();
     }
 
-    // 复制有效的兑换码（启用、未过期、还有剩余次数）
-    function copyValidCodes() {
-      // 筛选出有效的兑换码
-      const validCodes = allCodesData.filter(code => {
-        const isExpired = code.expires_at && new Date(code.expires_at) < new Date();
-        const isExhausted = code.used_count >= code.max_uses;
-        const isActive = code.is_active;
+    // 复制有效令牌链接（启用、未过期、还有剩余次数）
+    function copyValidTokenLinks() {
+      // 筛选出有效的令牌
+      const validTokens = allTokensData.filter(token => {
+        const isExpired = token.expires_at && new Date(token.expires_at) < new Date();
+        const isExhausted = token.used_count >= token.max_uses;
+        const isActive = token.is_active;
 
-        // 返回：启用的、未过期的、还有剩余使用次数的兑换码
+        // 返回：启用的、未过期的、还有剩余使用次数的令牌
         return isActive && !isExpired && !isExhausted;
       });
 
-      if (validCodes.length === 0) {
-        alert('没有有效的兑换码');
+      if (validTokens.length === 0) {
+        alert('没有有效的令牌');
         return;
       }
 
-      // 生成复制内容
-      const codesList = validCodes.map(code => code.code).join('\n');
+      // 生成注册链接列表
+      const linksList = validTokens.map(token =>
+        `${baseUrl}${passwordPrefix}/register?token=${token.token}`
+      ).join('\n');
 
-      navigator.clipboard.writeText(codesList).then(() => {
-        alert(`已复制 ${validCodes.length} 个有效兑换码到剪贴板\n\n每行一条，可直接粘贴`);
+      navigator.clipboard.writeText(linksList).then(() => {
+        alert(`已复制 ${validTokens.length} 个有效令牌链接到剪贴板\n\n每行一条，可直接粘贴`);
       }).catch(() => {
         // 降级复制方案
         const textarea = document.createElement('textarea');
-        textarea.value = codesList;
+        textarea.value = linksList;
         textarea.style.position = 'fixed';
         textarea.style.top = '0';
         textarea.style.left = '0';
@@ -889,7 +877,7 @@
         try {
           const successful = document.execCommand('copy');
           if (successful) {
-            alert(`已复制 ${validCodes.length} 个有效兑换码到剪贴板\n\n每行一条，可直接粘贴`);
+            alert(`已复制 ${validTokens.length} 个有效令牌链接到剪贴板\n\n每行一条，可直接粘贴`);
           } else {
             alert('复制失败，请手动复制');
           }
@@ -914,20 +902,20 @@
 
     // 页面加载时初始化
     window.addEventListener('load', () => {
-      loadCodes();
+      loadTokens();
 
       // 搜索框输入时使用防抖
       const searchInput = document.getElementById('search-input');
       const debouncedFilter = debounce(() => {
         const status = document.getElementById('status-filter').value;
         currentPage = 1;
-        displayCodes(allCodesData, status);
+        displayTokens(allTokensData, status);
       }, 500);
       searchInput.addEventListener('input', debouncedFilter);
 
       // 每30秒自动刷新
       setInterval(() => {
-        loadCodes();
+        loadTokens();
       }, 30000);
     });
 

@@ -115,6 +115,20 @@ class DatabaseManager:
                 )
             """)
 
+            # 创建注册令牌使用记录表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS registration_token_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    user_uuid TEXT NOT NULL,
+                    registered_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id),
+                    FOREIGN KEY (token) REFERENCES registration_tokens (token)
+                )
+            """)
+
             # 初始化系统设置（如果不存在）
             await db.execute("""
                 INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
@@ -141,6 +155,7 @@ class DatabaseManager:
                     completed_at TEXT,
                     last_updated_at TEXT,
                     error_message TEXT,
+                    client_ip TEXT,  -- 客户端IP地址
                     metadata TEXT,  -- JSON格式存储额外信息
                     result_summary TEXT,  -- JSON格式存储处理结果摘要
                     page_strategy TEXT DEFAULT 'auto',  -- 分页策略: auto/fixed/adaptive
@@ -233,6 +248,10 @@ class DatabaseManager:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_tokens_created_by ON registration_tokens (created_by)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_tokens_expires_at ON registration_tokens (expires_at)")
 
+            # 注册令牌使用记录表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_token_history_user_id ON registration_token_history (user_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_token_history_token ON registration_token_history (token)")
+
             # 检查并迁移旧数据：如果tasks表存在但没有user_id列，则添加
             try:
                 # 检查user_id列是否存在
@@ -245,6 +264,12 @@ class DatabaseManager:
                         logger.warning("检测到旧的tasks表结构，正在添加user_id列...")
                         await db.execute("ALTER TABLE tasks ADD COLUMN user_id TEXT")
                         logger.info("tasks表迁移完成，已添加user_id列")
+
+                    # 检查client_ip列是否存在，如果不存在则添加
+                    if 'client_ip' not in column_names and len(column_names) > 0:
+                        logger.warning("检测到tasks表缺少client_ip列，正在添加...")
+                        await db.execute("ALTER TABLE tasks ADD COLUMN client_ip TEXT")
+                        logger.info("tasks表迁移完成，已添加client_ip列")
             except Exception as e:
                 logger.error(f"tasks表迁移检查失败: {e}")
 
@@ -297,6 +322,7 @@ class TaskModel:
                          file_size: int,
                          total_pages: int = 1,
                          user_id: Optional[str] = None,
+                         client_ip: Optional[str] = None,
                          metadata: Optional[Dict[str, Any]] = None) -> bool:
         """创建新任务"""
         try:
@@ -304,8 +330,8 @@ class TaskModel:
                 await db.execute("""
                     INSERT INTO tasks (
                         id, user_id, task_type, status, file_name, file_size,
-                        total_pages, created_at, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        total_pages, client_ip, created_at, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     task_id,
                     user_id,
@@ -314,11 +340,12 @@ class TaskModel:
                     file_name,
                     file_size,
                     total_pages,
+                    client_ip,
                     datetime.now(timezone.utc).isoformat(),
                     json.dumps(metadata) if metadata else None
                 ))
                 await db.commit()
-                logger.info(f"任务 {task_id} 创建成功 (用户: {user_id})")
+                logger.info(f"任务 {task_id} 创建成功 (用户: {user_id}, IP: {client_ip})")
                 return True
         except Exception as e:
             logger.error(f"创建任务失败 {task_id}: {e}")
@@ -536,7 +563,7 @@ class TaskModel:
                     SELECT
                         t.id, t.user_id, t.task_type, t.status, t.file_name, t.file_size,
                         t.total_pages, t.processed_pages, t.failed_pages, t.progress,
-                        t.created_at, t.started_at, t.completed_at, t.error_message,
+                        t.created_at, t.started_at, t.completed_at, t.error_message, t.client_ip,
                         u.username, u.id as user_uuid
                     FROM tasks t
                     LEFT JOIN users u ON t.user_id = u.id
@@ -674,7 +701,7 @@ class PageResultModel:
                 if status == "processing":
                     fields.append("started_at = ?")
                     values.append(datetime.now(timezone.utc).isoformat())
-                elif status in ["completed", "failed"]:
+                elif status in ["completed", "failed", "cancelled"]:
                     fields.append("completed_at = ?")
                     values.append(datetime.now(timezone.utc).isoformat())
                 
