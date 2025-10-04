@@ -3,6 +3,7 @@
 利用 OpenAI API 进行图片和 PDF 文档的 OCR 识别，支持异步任务处理、实时通信和完整用户机制的任务管理系统。
 
 **项目地址**：[https://github.com/Qianxia666/ocr](https://github.com/Qianxia666/ocr)
+
 **原作者地址**：[https://github.com/gua12345/web_oai_img2text](https://github.com/gua12345/web_oai_img2text)
 
 ---
@@ -244,4 +245,5 @@ curl http://localhost:54188/your-password/api/tasks/{task_id}/progress
 
 - 问题反馈：[GitHub Issues](https://github.com/你的用户名/web_oai_ocr/issues)
 - 功能建议：[GitHub Discussions](https://github.com/你的用户名/web_oai_ocr/discussions)
+
 
