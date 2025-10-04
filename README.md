@@ -243,7 +243,8 @@ curl http://localhost:54188/your-password/api/tasks/{task_id}/progress
 
 ## 📮 联系方式
 
-- 问题反馈：[GitHub Issues](https://github.com/你的用户名/web_oai_ocr/issues)
-- 功能建议：[GitHub Discussions](https://github.com/你的用户名/web_oai_ocr/discussions)
+- 问题反馈：[GitHub Issues](https://github.com/Qianxia666/ocr/issues)
+- 功能建议：[GitHub Discussions](https://github.com/Qianxia666/ocr/discussions)
+
 
 
