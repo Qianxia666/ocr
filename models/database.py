@@ -167,6 +167,15 @@ class DatabaseManager:
                 VALUES ('ip_abuse_days_window', ?, 'IP滥用检测天数窗口', ?)
             """, (ip_abuse_days, datetime.now(timezone.utc).isoformat()))
 
+            # 初始化 Turnstile 验证开关设置（从环境变量读取默认值）
+            turnstile_enabled_env = os.getenv('TURNSTILE_ENABLED', '')
+            turnstile_enabled_default = 'false' if not turnstile_enabled_env else turnstile_enabled_env.lower()
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('turnstile_enabled', ?, 'Cloudflare Turnstile 人机验证开关', ?)
+            """, (turnstile_enabled_default, datetime.now(timezone.utc).isoformat()))
+
             # 创建任务表
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (

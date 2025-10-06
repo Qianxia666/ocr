@@ -20,19 +20,14 @@
     }
 
     *:focus,
-    *:focus-visible,
-    *:active {
+    *:focus-visible {
       outline: none !important;
-      box-shadow: none !important;
-      border: none !important;
     }
 
     button,
     button:focus,
-    button:focus-visible,
-    button:active {
+    button:focus-visible {
       outline: none !important;
-      box-shadow: none !important;
     }
 
     /* 移除按钮周围的所有边框和线条 */
@@ -143,16 +138,16 @@
       <!-- 操作按钮 -->
       <div class="bg-white rounded-lg shadow-md p-4 mb-4">
         <div class="flex gap-2 flex-wrap">
-          <button onclick="showGenerateCodeForm()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+          <button onclick="showGenerateCodeForm()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             生成兑换码
           </button>
-          <button onclick="loadCodes()" class="px-6 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors">
+          <button onclick="loadCodes()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             刷新列表
           </button>
-          <button onclick="copyValidCodes()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+          <button onclick="copyValidCodes()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             复制有效兑换码
           </button>
-          <button id="select-all-btn" onclick="selectAllCodes()" class="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors hidden">
+          <button id="select-all-btn" onclick="selectAllCodes()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200 hidden">
             全选
           </button>
           <div id="batch-actions" class="hidden flex gap-2">
@@ -186,10 +181,10 @@
               <option value="expired">已过期</option>
             </select>
           </div>
-          <button onclick="applyFilters()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+          <button onclick="applyFilters()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             应用筛选
           </button>
-          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             加载数据
           </button>
         </div>
@@ -918,6 +913,15 @@
         }
       }, 500);
       searchInput.addEventListener('input', debouncedFilter);
+
+      // 状态筛选下拉框实时筛选
+      const statusFilter = document.getElementById('status-filter');
+      statusFilter.addEventListener('change', () => {
+        if (hasLoadedData) {
+          currentPage = 1;
+          loadCodes(); // 重新加载
+        }
+      });
     });
 
     // 菜单控制

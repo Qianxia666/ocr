@@ -7,11 +7,26 @@
     <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Cloudflare Turnstile -->
+    {% if turnstile_enabled %}
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    {% endif %}
     <style>
         /* 强制蓝色背景渐变 */
         .blue-gradient-bg {
             background: linear-gradient(to bottom right, #2563eb, #4f46e5) !important;
+        }
+
+        /* Cloudflare Turnstile 样式定制 */
+        .cf-turnstile {
+            border: none !important;              /* 移除外围边框 */
+            padding: 0 !important;                /* 移除内边距 */
+            background: transparent !important;   /* 透明背景 */
+            box-shadow: none !important;          /* 移除默认阴影 */
+        }
+
+        /* 调整验证成功后的样式 */
+        .cf-turnstile iframe {
+            border-radius: 0.5rem !important;     /* 保持圆角 */
         }
     </style>
 </head>
@@ -80,7 +95,13 @@
                                placeholder="请输入密码">
                     </div>
                     <!-- Cloudflare Turnstile 验证组件 -->
-                    <div class="cf-turnstile" data-sitekey="{{ turnstile_site_key }}" data-callback="onLoginTurnstileSuccess"></div>
+                    {% if turnstile_enabled %}
+                    <div class="cf-turnstile"
+                         data-sitekey="{{ turnstile_site_key }}"
+                         data-callback="onLoginTurnstileSuccess"
+                         data-theme="light"
+                         data-size="flexible"></div>
+                    {% endif %}
                     <input type="hidden" id="login-turnstile-token">
                     <button type="submit"
                             class="w-full bg-blue-600 text-white py-2.5 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors">
@@ -109,7 +130,13 @@
                                placeholder="请再次输入密码">
                     </div>
                     <!-- Cloudflare Turnstile 验证组件 -->
-                    <div class="cf-turnstile" data-sitekey="{{ turnstile_site_key }}" data-callback="onRegisterTurnstileSuccess"></div>
+                    {% if turnstile_enabled %}
+                    <div class="cf-turnstile"
+                         data-sitekey="{{ turnstile_site_key }}"
+                         data-callback="onRegisterTurnstileSuccess"
+                         data-theme="light"
+                         data-size="flexible"></div>
+                    {% endif %}
                     <input type="hidden" id="register-turnstile-token">
                     <button type="submit"
                             class="w-full bg-blue-600 text-white py-2.5 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors">
@@ -137,6 +164,7 @@
     <script>
         const baseUrl = window.location.origin;
         const registrationEnabled = {% if registration_enabled %}true{% else %}false{% endif %};
+        const turnstileEnabled = {% if turnstile_enabled %}true{% else %}false{% endif %};
         const loginTab = document.getElementById('login-tab');
         const registerTab = document.getElementById('register-tab');
         const loginForm = document.getElementById('login-form');
@@ -200,7 +228,7 @@
                 return;
             }
 
-            if (!turnstileToken) {
+            if (turnstileEnabled && !turnstileToken) {
                 showMessage('请完成人机验证', true);
                 return;
             }
@@ -239,7 +267,7 @@
                     return;
                 }
 
-                if (!turnstileToken) {
+                if (turnstileEnabled && !turnstileToken) {
                     showMessage('请完成人机验证', true);
                     return;
                 }

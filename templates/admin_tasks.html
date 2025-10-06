@@ -21,11 +21,14 @@
     }
 
     *:focus,
-    *:focus-visible,
+    *:focus-visible {
+      outline: none !important;
+      box-shadow: none !important;
+    }
+
     *:active {
       outline: none !important;
       box-shadow: none !important;
-      border: none !important;
     }
 
     button,
@@ -156,12 +159,6 @@
             <input type="text" id="search-input" placeholder="搜索文件名、用户名、UUID或内容..." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
           </div>
           <div class="flex-1 min-w-[200px]">
-            <label class="block text-sm font-medium text-gray-700 mb-1">用户筛选</label>
-            <select id="user-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
-              <option value="">所有用户</option>
-            </select>
-          </div>
-          <div class="flex-1 min-w-[200px]">
             <label class="block text-sm font-medium text-gray-700 mb-1">状态筛选</label>
             <select id="status-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400">
               <option value="">所有状态</option>
@@ -172,10 +169,10 @@
               <option value="cancelled">已取消</option>
             </select>
           </div>
-          <button onclick="loadTasks()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+          <button onclick="loadTasks()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             应用筛选
           </button>
-          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             加载数据
           </button>
         </div>
@@ -285,31 +282,11 @@
     const taskDetailState = new Map();
 
     // 加载用户列表到筛选器
-    async function loadUsers() {
-      try {
-        const response = await fetch(`${passwordPrefix}/api/admin/users/list`);
-        const data = await response.json();
-
-        if (data.status === 'success' && data.data) {
-          const userFilter = document.getElementById('user-filter');
-          data.data.forEach(user => {
-            const option = document.createElement('option');
-            option.value = user.id;
-            option.textContent = `${user.username} (${user.id.substring(0, 8)}...)`;
-            userFilter.appendChild(option);
-          });
-        }
-      } catch (err) {
-        console.error('加载用户列表失败:', err);
-      }
-    }
 
     // 加载统计信息
-    async function loadStats(userId = null) {
+    async function loadStats() {
       try {
-        const url = userId
-          ? `${passwordPrefix}/api/admin/tasks/stats?user_id=${userId}`
-          : `${passwordPrefix}/api/admin/tasks/stats`;
+        const url = `${passwordPrefix}/api/admin/tasks/stats`;
 
         const response = await fetch(url);
         const data = await response.json();
@@ -341,15 +318,11 @@
 
     // 加载任务列表
     async function loadTasks() {
-      const userId = document.getElementById('user-filter').value;
       const status = document.getElementById('status-filter').value;
       const searchQuery = document.getElementById('search-input').value;
 
       try {
         let url = `${passwordPrefix}/api/admin/tasks/list?page=${currentPage}&page_size=${pageSize}`;
-        if (userId) {
-          url += `&user_id=${userId}`;
-        }
         if (searchQuery) {
           url += `&search=${encodeURIComponent(searchQuery)}`;
         }
@@ -361,7 +334,7 @@
           totalTasks = data.total || 0;
           displayTasks(data.data || [], status);
           updatePaginationUI();
-          loadStats(userId); // 同时更新统计信息
+          loadStats(); // 同时更新统计信息
         } else {
           document.getElementById('tasks-table').innerHTML = '<tr><td colspan="8" class="px-6 py-4 text-center text-red-500">加载失败</td></tr>';
         }
@@ -735,7 +708,6 @@
     // 手动加载数据
     function loadDataManually() {
       if (!hasLoadedData) {
-        loadUsers();
         loadTasks();
         loadStats();
         hasLoadedData = true;
@@ -762,6 +734,15 @@
         }
       }, 500);
       searchInput.addEventListener('input', debouncedLoadTasks);
+
+      // 状态筛选下拉框实时筛选
+      const statusFilter = document.getElementById('status-filter');
+      statusFilter.addEventListener('change', () => {
+        if (hasLoadedData) {
+          currentPage = 1;
+          loadTasks(); // 重新加载
+        }
+      });
     });
 
     // 菜单控制

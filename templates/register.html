@@ -7,7 +7,9 @@
     <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Cloudflare Turnstile -->
+    {% if turnstile_enabled %}
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    {% endif %}
     <style>
         /* 强制蓝色背景渐变 */
         .blue-gradient-bg {
@@ -75,7 +77,9 @@
                                placeholder="请再次输入密码">
                     </div>
                     <!-- Cloudflare Turnstile 验证组件 -->
+                    {% if turnstile_enabled %}
                     <div class="cf-turnstile" data-sitekey="{{ turnstile_site_key }}" data-callback="onTurnstileSuccess"></div>
+                    {% endif %}
                     <input type="hidden" id="token" required>
                     <input type="hidden" id="turnstile-token" required>
                     <button type="submit" id="submit-btn"
@@ -110,6 +114,7 @@
 
     <script>
         const baseUrl = window.location.origin;
+        const turnstileEnabled = {% if turnstile_enabled %}true{% else %}false{% endif %};
         const registerForm = document.getElementById('register-form');
         const messageDiv = document.getElementById('message');
         const tokenInput = document.getElementById('token');
@@ -185,7 +190,7 @@
                 return;
             }
 
-            if (!turnstileToken) {
+            if (turnstileEnabled && !turnstileToken) {
                 showMessage('请完成人机验证', 'error');
                 return;
             }

@@ -268,18 +268,36 @@ class UserModel:
             logger.error(f"设置配额失败 {user_id}: {e}")
             return False
 
-    async def get_all_users(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """获取所有用户列表"""
+    async def get_all_users(self, limit: int = 100, offset: int = 0, search: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取所有用户列表，支持搜索"""
         try:
             async with self.db_manager.get_connection() as db:
                 db.row_factory = aiosqlite.Row
-                async with db.execute("""
-                    SELECT id, username, is_admin, is_disabled, total_pages, used_pages,
-                           created_at, last_login
-                    FROM users
-                    ORDER BY created_at DESC
-                    LIMIT ? OFFSET ?
-                """, (limit, offset)) as cursor:
+
+                # 构建查询语句
+                if search:
+                    # 支持按用户名或UUID搜索（模糊匹配）
+                    query = """
+                        SELECT id, username, is_admin, is_disabled, total_pages, used_pages,
+                               created_at, last_login
+                        FROM users
+                        WHERE username LIKE ? OR id LIKE ?
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
+                    """
+                    search_pattern = f"%{search}%"
+                    params = (search_pattern, search_pattern, limit, offset)
+                else:
+                    query = """
+                        SELECT id, username, is_admin, is_disabled, total_pages, used_pages,
+                               created_at, last_login
+                        FROM users
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
+                    """
+                    params = (limit, offset)
+
+                async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
                     users = []
                     for row in rows:
@@ -293,13 +311,22 @@ class UserModel:
             logger.error(f"获取用户列表失败: {e}")
             return []
 
-    async def count_users(self) -> int:
-        """统计用户总数"""
+    async def count_users(self, search: Optional[str] = None) -> int:
+        """统计用户总数，支持搜索过滤"""
         try:
             async with self.db_manager.get_connection() as db:
-                async with db.execute("SELECT COUNT(*) FROM users") as cursor:
-                    row = await cursor.fetchone()
-                    return row[0] if row else 0
+                if search:
+                    # 搜索时统计匹配的用户数
+                    query = "SELECT COUNT(*) FROM users WHERE username LIKE ? OR id LIKE ?"
+                    search_pattern = f"%{search}%"
+                    params = (search_pattern, search_pattern)
+                    async with db.execute(query, params) as cursor:
+                        row = await cursor.fetchone()
+                        return row[0] if row else 0
+                else:
+                    async with db.execute("SELECT COUNT(*) FROM users") as cursor:
+                        row = await cursor.fetchone()
+                        return row[0] if row else 0
         except Exception as e:
             logger.error(f"统计用户数失败: {e}")
             return 0
@@ -496,27 +523,37 @@ class RedemptionCodeModel:
             logger.error(f"激活兑换码失败 {code}: {e}")
             return False
 
-    async def get_all_codes(self, created_by: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """获取所有兑换码列表"""
+    async def get_all_codes(self, created_by: Optional[str] = None, limit: int = 100, offset: int = 0, search: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取所有兑换码列表，支持搜索"""
         try:
             async with self.db_manager.get_connection() as db:
                 db.row_factory = aiosqlite.Row
 
+                # 构建查询条件
+                conditions = []
+                params = []
+
                 if created_by:
-                    query = """
-                        SELECT * FROM redemption_codes
-                        WHERE created_by = ?
-                        ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                    """
-                    params = (created_by, limit, offset)
-                else:
-                    query = """
-                        SELECT * FROM redemption_codes
-                        ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                    """
-                    params = (limit, offset)
+                    conditions.append("created_by = ?")
+                    params.append(created_by)
+
+                if search:
+                    # 搜索兑换码和描述字段
+                    search_pattern = f"%{search}%"
+                    conditions.append("(code LIKE ? OR description LIKE ?)")
+                    params.extend([search_pattern, search_pattern])
+
+                where_clause = ""
+                if conditions:
+                    where_clause = "WHERE " + " AND ".join(conditions)
+
+                query = f"""
+                    SELECT * FROM redemption_codes
+                    {where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                """
+                params.extend([limit, offset])
 
                 async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
@@ -531,13 +568,22 @@ class RedemptionCodeModel:
             logger.error(f"获取兑换码列表失败: {e}")
             return []
 
-    async def count_codes(self) -> int:
-        """统计兑换码总数"""
+    async def count_codes(self, search: Optional[str] = None) -> int:
+        """统计兑换码总数，支持搜索过滤"""
         try:
             async with self.db_manager.get_connection() as db:
-                async with db.execute("SELECT COUNT(*) FROM redemption_codes") as cursor:
-                    row = await cursor.fetchone()
-                    return row[0] if row else 0
+                if search:
+                    # 搜索时统计匹配的兑换码数
+                    search_pattern = f"%{search}%"
+                    query = "SELECT COUNT(*) FROM redemption_codes WHERE code LIKE ? OR description LIKE ?"
+                    params = (search_pattern, search_pattern)
+                    async with db.execute(query, params) as cursor:
+                        row = await cursor.fetchone()
+                        return row[0] if row else 0
+                else:
+                    async with db.execute("SELECT COUNT(*) FROM redemption_codes") as cursor:
+                        row = await cursor.fetchone()
+                        return row[0] if row else 0
         except Exception as e:
             logger.error(f"统计兑换码数失败: {e}")
             return 0
@@ -767,27 +813,37 @@ class RegistrationTokenModel:
             logger.error(f"激活注册令牌失败: {e}")
             return False
 
-    async def get_all_tokens(self, created_by: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """获取所有注册令牌列表"""
+    async def get_all_tokens(self, created_by: Optional[str] = None, limit: int = 100, offset: int = 0, search: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取所有注册令牌列表，支持搜索"""
         try:
             async with self.db_manager.get_connection() as db:
                 db.row_factory = aiosqlite.Row
 
+                # 构建查询条件
+                conditions = []
+                params = []
+
                 if created_by:
-                    query = """
-                        SELECT * FROM registration_tokens
-                        WHERE created_by = ?
-                        ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                    """
-                    params = (created_by, limit, offset)
-                else:
-                    query = """
-                        SELECT * FROM registration_tokens
-                        ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                    """
-                    params = (limit, offset)
+                    conditions.append("created_by = ?")
+                    params.append(created_by)
+
+                if search:
+                    # 搜索令牌和描述字段
+                    search_pattern = f"%{search}%"
+                    conditions.append("(token LIKE ? OR description LIKE ?)")
+                    params.extend([search_pattern, search_pattern])
+
+                where_clause = ""
+                if conditions:
+                    where_clause = "WHERE " + " AND ".join(conditions)
+
+                query = f"""
+                    SELECT * FROM registration_tokens
+                    {where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                """
+                params.extend([limit, offset])
 
                 async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
@@ -802,13 +858,22 @@ class RegistrationTokenModel:
             logger.error(f"获取注册令牌列表失败: {e}")
             return []
 
-    async def count_tokens(self) -> int:
-        """统计注册令牌总数"""
+    async def count_tokens(self, search: Optional[str] = None) -> int:
+        """统计注册令牌总数，支持搜索过滤"""
         try:
             async with self.db_manager.get_connection() as db:
-                async with db.execute("SELECT COUNT(*) FROM registration_tokens") as cursor:
-                    row = await cursor.fetchone()
-                    return row[0] if row else 0
+                if search:
+                    # 搜索时统计匹配的令牌数
+                    search_pattern = f"%{search}%"
+                    query = "SELECT COUNT(*) FROM registration_tokens WHERE token LIKE ? OR description LIKE ?"
+                    params = (search_pattern, search_pattern)
+                    async with db.execute(query, params) as cursor:
+                        row = await cursor.fetchone()
+                        return row[0] if row else 0
+                else:
+                    async with db.execute("SELECT COUNT(*) FROM registration_tokens") as cursor:
+                        row = await cursor.fetchone()
+                        return row[0] if row else 0
         except Exception as e:
             logger.error(f"统计注册令牌数失败: {e}")
             return 0

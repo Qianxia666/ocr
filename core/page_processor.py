@@ -28,24 +28,48 @@ class PageStrategy(Enum):
 class PageProcessor:
     """分页处理核心类 - 智能分页策略和并行处理"""
     
-    def __init__(self, api_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, runtime_config=None, api_config: Optional[Dict[str, Any]] = None):
         """
         初始化分页处理器
-        :param api_config: API配置
+        :param runtime_config: 运行时配置对象引用(用于动态读取可变配置)
+        :param api_config: API静态配置(api_base_url, api_key, model等)
         """
+        # 保存runtime_config引用用于动态配置
+        self._runtime_config = runtime_config
+        # 保存静态API配置
         self.api_config = api_config or {}
+
+        # 固定配置(不会变化的)
         self.max_concurrent_pages = self.api_config.get('concurrency', 5)
         self.default_batch_size = self.api_config.get('batch_size', 4)
-        self.max_retries = self.api_config.get('max_retries', 3)
         self.retry_delay = self.api_config.get('retry_delay', 0.5)
-        self.api_timeout = self.api_config.get('api_timeout', 120)
         self.health_check_interval = self.api_config.get('health_check_interval', 300)
+
+        # 会话管理
         self._session = None  # 延迟创建 aiohttp.ClientSession
         self._session_lock = asyncio.Lock()
         self._last_health_check_ts = 0.0
         self._last_health_check_ok = True
-        
+
         logger.info(f"分页处理器初始化完成 - 并发: {self.max_concurrent_pages}, 批次: {self.default_batch_size}")
+
+    @property
+    def max_retries(self) -> int:
+        """动态获取最大重试次数"""
+        if self._runtime_config:
+            retries = getattr(self._runtime_config, 'max_retries', 3)
+            logger.debug(f"从runtime_config读取max_retries: {retries}")
+            return retries
+        return 3
+
+    @property
+    def api_timeout(self) -> int:
+        """动态获取API超时时间"""
+        if self._runtime_config:
+            timeout = getattr(self._runtime_config, 'api_timeout', 120)
+            logger.debug(f"从runtime_config读取api_timeout: {timeout}")
+            return timeout
+        return 120
 
     async def _get_log_prefix_for_task(self, task_id: str) -> str:
         """获取任务的日志前缀（包含文件名）"""
@@ -971,9 +995,13 @@ class PageProcessor:
                 return content.replace('```markdown', '').replace('```', '').strip()
             except Exception:
                 return ''
-def create_page_processor(api_config: Dict[str, Any]) -> PageProcessor:
-    """创建页面处理器实例"""
-    return PageProcessor(api_config)
+def create_page_processor(runtime_config, api_config: Dict[str, Any]) -> PageProcessor:
+    """
+    创建页面处理器实例
+    :param runtime_config: 运行时配置对象引用
+    :param api_config: API静态配置
+    """
+    return PageProcessor(runtime_config, api_config)
 
 # 全局页面处理器实例（需要在应用启动时初始化）
 page_processor: Optional[PageProcessor] = None
@@ -993,33 +1021,37 @@ def _ensure_safe_import():
 # 模块导入时执行安全检查
 _ensure_safe_import()
 
-async def init_page_processor(api_config: Dict[str, Any]):
-    """初始化全局页面处理器"""
+async def init_page_processor(runtime_config, api_config: Dict[str, Any]):
+    """
+    初始化全局页面处理器
+    :param runtime_config: 运行时配置对象引用
+    :param api_config: API静态配置
+    """
     global page_processor, _page_processor_initialized
-    
+
     logger.info("=== 开始初始化全局页面处理器 ===")
     logger.warning(f"初始化前状态: page_processor={page_processor}, _page_processor_initialized={_page_processor_initialized}")
-    
+
     try:
         # 1. 检查必要配置
         logger.info("检查API配置...")
         if not api_config:
             raise ValueError("API配置不能为空")
-        
+
         api_key = api_config.get('api_key')
         if not api_key:
             logger.warning("API密钥未配置，将影响OCR功能")
         else:
             logger.info("API配置验证通过")
-        
+
         # 2. 检查当前状态
         logger.info(f"当前页面处理器状态: page_processor={'已存在' if page_processor is not None else '不存在'}, "
                    f"_page_processor_initialized={_page_processor_initialized}")
-        
+
         # 如果已经初始化，进行更严格的验证
         if _page_processor_initialized and page_processor is not None:
             logger.info("全局页面处理器已经初始化，进行验证...")
-            
+
             # 验证页面处理器是否可用
             if await _validate_page_processor():
                 logger.info("页面处理器验证通过，跳过初始化")
@@ -1027,45 +1059,45 @@ async def init_page_processor(api_config: Dict[str, Any]):
             else:
                 logger.error("页面处理器验证失败，需要重新初始化")
                 await shutdown_page_processor()
-        
+
         # 如果存在旧实例，先清理
         if page_processor is not None:
             logger.info("发现旧的页面处理器实例，进行清理...")
             await shutdown_page_processor()
-        
+
         # 3. 创建新实例
         logger.info("创建新的页面处理器实例...")
-        page_processor = create_page_processor(api_config)
+        page_processor = create_page_processor(runtime_config, api_config)
         logger.warning(f"创建后状态: page_processor={page_processor}, 类型={type(page_processor) if page_processor else 'None'}")
-        
+
         # 4. 验证初始化是否成功
         logger.info("验证页面处理器初始化...")
         if page_processor is None:
             logger.error("页面处理器创建失败 - 对象为 None")
             raise Exception("页面处理器创建失败")
-        
+
         # 验证必要的方法是否存在
         required_methods = ['process_pdf_with_pagination', 'calculate_page_strategy', 'create_page_batches']
         missing_methods = []
         for method in required_methods:
             if not hasattr(page_processor, method):
                 missing_methods.append(method)
-        
+
         if missing_methods:
             logger.error(f"页面处理器缺少必要方法: {missing_methods}")
             raise Exception(f"页面处理器缺少必要方法: {missing_methods}")
-        
+
         logger.info(f"页面处理器创建成功，包含所有必要方法")
-        
+
         # 5. 验证页面处理器功能
         if not await _validate_page_processor():
             raise Exception("页面处理器功能验证失败")
-        
+
         # 6. 设置初始化状态
         _page_processor_initialized = True
         logger.warning(f"初始化完成状态: page_processor={page_processor}, _page_processor_initialized={_page_processor_initialized}")
         logger.info("全局页面处理器初始化完成")
-            
+
     except Exception as e:
         _page_processor_initialized = False
         page_processor = None
@@ -1202,23 +1234,27 @@ def is_page_processor_ready() -> bool:
 
     return True
 
-async def ensure_page_processor_ready(api_config: Dict[str, Any]) -> bool:
-    """确保页面处理器已就绪，如果未就绪则尝试重新初始化"""
+async def ensure_page_processor_ready(runtime_config, api_config: Dict[str, Any]) -> bool:
+    """
+    确保页面处理器已就绪，如果未就绪则尝试重新初始化
+    :param runtime_config: 运行时配置对象引用
+    :param api_config: API静态配置
+    """
     global page_processor, _page_processor_initialized
-    
+
     logger.info("检查页面处理器就绪状态...")
-    
+
     # 如果已经就绪，直接返回
     if is_page_processor_ready():
         logger.info("页面处理器已就绪")
         return True
-    
+
     logger.warning("页面处理器未就绪，尝试重新初始化...")
-    
+
     try:
         # 尝试重新初始化
-        await init_page_processor(api_config)
-        
+        await init_page_processor(runtime_config, api_config)
+
         # 再次检查
         if is_page_processor_ready():
             logger.info("页面处理器重新初始化成功")
@@ -1226,7 +1262,7 @@ async def ensure_page_processor_ready(api_config: Dict[str, Any]) -> bool:
         else:
             logger.error("页面处理器重新初始化后仍不可用")
             return False
-            
+
     except Exception as e:
         logger.error(f"页面处理器重新初始化失败: {e}")
         return False

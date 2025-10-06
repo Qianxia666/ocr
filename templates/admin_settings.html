@@ -117,7 +117,24 @@
               <button id="registration-toggle" onclick="toggleRegistration()" class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
                 <span id="toggle-slider" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
               </button>
-              <span id="registration-status" class="text-sm font-semibold text-gray-600 min-w-[4rem]">-</span>
+              <span id="registration-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
+            </div>
+          </div>
+
+          <!-- Turnstile 人机验证功能 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <!-- 标题和开关 -->
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="text-lg font-semibold text-gray-800">Cloudflare Turnstile 人机验证</h3>
+                <p class="text-sm text-gray-600 mt-1">在登录和注册页面启用人机验证</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <button id="turnstile-toggle" onclick="toggleTurnstile()" class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                  <span id="turnstile-slider" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
+                </button>
+                <span id="turnstile-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
+              </div>
             </div>
           </div>
 
@@ -133,36 +150,28 @@
                 <button id="ip-abuse-toggle" onclick="toggleIpAbuseDetection()" class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
                   <span id="ip-abuse-slider" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
                 </button>
-                <span id="ip-abuse-status" class="text-sm font-semibold text-gray-600 min-w-[4rem]">-</span>
+                <span id="ip-abuse-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
               </div>
             </div>
 
             <!-- 配置参数 -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <label class="block text-sm font-semibold text-gray-800 mb-2">账户数阈值 (M)</label>
-                <input id="ip-abuse-threshold" type="number" min="2" max="100" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                <label class="block text-sm font-semibold text-gray-800 mb-2">账户数阈值</label>
+                <input id="ip-abuse-threshold" type="number" min="2" max="100" onchange="saveIpAbuseSettings()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
                 <p class="text-xs text-gray-500 mt-1">同一IP使用的账户数达到此值时触发封停</p>
               </div>
 
               <div>
-                <label class="block text-sm font-semibold text-gray-800 mb-2">天数窗口 (N)</label>
-                <input id="ip-abuse-days" type="number" min="1" max="365" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                <p class="text-xs text-gray-500 mt-1">在过去N天内的OCR活动会被计入检测</p>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">检测时间窗口</label>
+                <input id="ip-abuse-days" type="number" min="1" max="365" onchange="saveIpAbuseSettings()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                <p class="text-xs text-gray-500 mt-1">统计过去多少天内的OCR活动（单位：天）</p>
               </div>
             </div>
 
             <!-- 说明信息 -->
-            <div class="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
-              <p class="text-xs text-blue-800 mb-1"><strong>检测机制：</strong>系统每5分钟自动检测一次，当发现同一IP在N天内被M个不同账户用于OCR时，将自动封停这M个账户。</p>
-              <p class="text-xs text-orange-700"><strong>注意：</strong>配置在运行时可修改，但应用重启后会恢复为.env文件中的默认值。</p>
-            </div>
-
-            <!-- 保存按钮 -->
-            <div class="flex justify-end">
-              <button onclick="saveIpAbuseSettings()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
-                保存设置
-              </button>
+            <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+              <p class="text-xs text-blue-700"><strong>检测机制：</strong>系统每5分钟自动检测一次，当同一IP在设定时间窗口内被多个账户用于OCR时，将自动封停这些账户。</p>
             </div>
           </div>
         </div>
@@ -170,75 +179,84 @@
 
       <!-- 运行时配置卡片 -->
       <div class="bg-white rounded-xl shadow-md p-6">
-        <div class="mb-6">
-          <h2 class="text-2xl font-bold text-gray-800">运行时配置</h2>
-          <p class="text-sm text-gray-500 mt-1">配置仅保存在内存中，重启后恢复默认值</p>
-        </div>
+        <h2 class="text-2xl font-bold text-gray-800 mb-6">运行时配置</h2>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <!-- 并发配置 -->
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">通用并发数</label>
-            <input id="concurrency" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="concurrency" type="number" min="1" max="50" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">用于向后兼容</p>
           </div>
 
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">最大重试次数</label>
-            <input id="max_retries" type="number" min="1" max="20" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="max_retries" type="number" min="1" max="20" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">OCR失败后的重试次数</p>
           </div>
 
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">图片OCR并发数</label>
-            <input id="image_concurrency" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="image_concurrency" type="number" min="1" max="50" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">同时处理的图片数量</p>
           </div>
 
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">PDF OCR并发数</label>
-            <input id="pdf_concurrency" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="pdf_concurrency" type="number" min="1" max="50" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">同时处理的PDF数量</p>
           </div>
 
           <!-- PDF配置 -->
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">PDF DPI</label>
-            <input id="pdf_dpi" type="number" min="72" max="600" step="1" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="pdf_dpi" type="number" min="72" max="600" step="1" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">PDF转图片的分辨率</p>
           </div>
 
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">批处理大小</label>
-            <input id="batch_size" type="number" min="1" max="50" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="batch_size" type="number" min="1" max="50" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">批量处理的数量</p>
           </div>
 
           <!-- 文件限制 -->
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">图片最大大小(MB)</label>
-            <input id="max_image_size_mb" type="number" min="1" max="500" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="max_image_size_mb" type="number" min="1" max="500" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">单个图片文件大小限制</p>
           </div>
 
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">PDF最大大小(MB)</label>
-            <input id="max_pdf_size_mb" type="number" min="1" max="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="max_pdf_size_mb" type="number" min="1" max="1000" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">单个PDF文件大小限制</p>
           </div>
 
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">PDF最大页数</label>
-            <input id="max_pdf_pages" type="number" min="1" max="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <input id="max_pdf_pages" type="number" min="1" max="1000" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <p class="text-xs text-gray-500 mt-1">单个PDF文件页数限制</p>
           </div>
-        </div>
 
-        <!-- 保存按钮 -->
-        <div class="flex justify-end">
-          <button onclick="saveRuntimeConfig()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
-            保存配置
-          </button>
+          <!-- 超时配置 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">API调用超时(秒)</label>
+            <input id="api_timeout" type="number" min="30" max="1800" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">API调用的超时时间</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">API请求超时(秒)</label>
+            <input id="api_request_timeout" type="number" min="30" max="1800" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">API请求的超时时间</p>
+          </div>
+
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">前端轮询超时(秒)</label>
+            <input id="frontend_poll_timeout" type="number" min="30" max="1800" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <p class="text-xs text-gray-500 mt-1">前端轮询任务结果的超时时间</p>
+          </div>
         </div>
       </div>
     </div>
@@ -275,17 +293,17 @@
       if (enabled) {
         toggle.classList.add('bg-blue-500');
         toggle.classList.remove('bg-gray-300');
-        slider.classList.add('translate-x-5');
+        slider.classList.add('translate-x-6');
         slider.classList.remove('translate-x-1');
-        status.textContent = '已开放';
+        status.textContent = '已启用';
         status.classList.add('text-blue-600');
         status.classList.remove('text-gray-600');
       } else {
         toggle.classList.add('bg-gray-300');
         toggle.classList.remove('bg-blue-500');
         slider.classList.add('translate-x-1');
-        slider.classList.remove('translate-x-5');
-        status.textContent = '已禁止';
+        slider.classList.remove('translate-x-6');
+        status.textContent = '已禁用';
         status.classList.add('text-gray-600');
         status.classList.remove('text-blue-600');
       }
@@ -359,6 +377,9 @@
           document.getElementById('max_image_size_mb').value = config.max_image_size_mb;
           document.getElementById('max_pdf_size_mb').value = config.max_pdf_size_mb;
           document.getElementById('max_pdf_pages').value = config.max_pdf_pages;
+          document.getElementById('api_timeout').value = config.api_timeout || 300;
+          document.getElementById('api_request_timeout').value = config.api_request_timeout || 300;
+          document.getElementById('frontend_poll_timeout').value = config.frontend_poll_timeout || 300;
         }
       } catch (err) {
         console.error("加载运行时配置失败:", err);
@@ -377,7 +398,10 @@
           batch_size: parseInt(document.getElementById('batch_size').value),
           max_image_size_mb: parseInt(document.getElementById('max_image_size_mb').value),
           max_pdf_size_mb: parseInt(document.getElementById('max_pdf_size_mb').value),
-          max_pdf_pages: parseInt(document.getElementById('max_pdf_pages').value)
+          max_pdf_pages: parseInt(document.getElementById('max_pdf_pages').value),
+          api_timeout: parseInt(document.getElementById('api_timeout').value),
+          api_request_timeout: parseInt(document.getElementById('api_request_timeout').value),
+          frontend_poll_timeout: parseInt(document.getElementById('frontend_poll_timeout').value)
         };
 
         const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/config`, {
@@ -424,7 +448,7 @@
       if (enabled) {
         toggle.classList.add('bg-blue-500');
         toggle.classList.remove('bg-gray-300');
-        slider.classList.add('translate-x-5');
+        slider.classList.add('translate-x-6');
         slider.classList.remove('translate-x-1');
         status.textContent = '已启用';
         status.classList.add('text-blue-600');
@@ -433,7 +457,7 @@
         toggle.classList.add('bg-gray-300');
         toggle.classList.remove('bg-blue-500');
         slider.classList.add('translate-x-1');
-        slider.classList.remove('translate-x-5');
+        slider.classList.remove('translate-x-6');
         status.textContent = '已禁用';
         status.classList.add('text-gray-600');
         status.classList.remove('text-blue-600');
@@ -511,11 +535,87 @@
       }
     }
 
+    // ==================== Turnstile 验证开关管理 ====================
+
+    // 加载 Turnstile 配置
+    async function loadTurnstileSettings() {
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/turnstile`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          updateTurnstileUI(data);
+        }
+      } catch (err) {
+        console.error("加载 Turnstile 配置失败:", err);
+      }
+    }
+
+    // 更新 Turnstile UI
+    function updateTurnstileUI(data) {
+      const toggle = document.getElementById('turnstile-toggle');
+      const slider = document.getElementById('turnstile-slider');
+      const status = document.getElementById('turnstile-status');
+
+      // 更新开关状态
+      if (data.enabled) {
+        toggle.classList.add('bg-blue-500');
+        toggle.classList.remove('bg-gray-300');
+        slider.classList.add('translate-x-6');
+        slider.classList.remove('translate-x-1');
+        status.textContent = '已启用';
+        status.classList.add('text-blue-600');
+        status.classList.remove('text-gray-600');
+      } else {
+        toggle.classList.add('bg-gray-300');
+        toggle.classList.remove('bg-blue-500');
+        slider.classList.add('translate-x-1');
+        slider.classList.remove('translate-x-6');
+        status.textContent = '已禁用';
+        status.classList.add('text-gray-600');
+        status.classList.remove('text-blue-600');
+      }
+    }
+
+    // 切换 Turnstile 开关
+    async function toggleTurnstile() {
+      try {
+        // 获取当前状态
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/turnstile`);
+        const data = await response.json();
+
+        const currentEnabled = data.enabled;
+
+        // 切换状态
+        const toggleResponse = await fetch(`${baseUrl}${apiBase}/api/admin/settings/turnstile`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            enabled: !currentEnabled
+          })
+        });
+
+        const toggleData = await toggleResponse.json();
+
+        if (toggleData.status === "success") {
+          alert(toggleData.message);
+          // 重新加载配置
+          await loadTurnstileSettings();
+        } else {
+          alert("操作失败: " + (toggleData.message || "未知错误"));
+        }
+      } catch (err) {
+        console.error("切换 Turnstile 状态失败:", err);
+        alert("操作失败，请重试");
+      }
+    }
+
     // 页面加载时
     window.addEventListener('load', () => {
       loadRegistrationStatus();
       loadRuntimeConfig();
       loadIpAbuseSettings();
+      loadTurnstileSettings();  // 新增
     });
   </script>
 </body>

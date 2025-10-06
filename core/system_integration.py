@@ -17,24 +17,25 @@ logger = logging.getLogger(__name__)
 class SystemIntegration:
     """系统集成器 - 统一管理所有超时、错误处理、监控和恢复功能"""
     
-    def __init__(self, websocket_manager=None):
+    def __init__(self, runtime_config=None, websocket_manager=None):
         """
         初始化系统集成器
+        :param runtime_config: 运行时配置对象引用
         :param websocket_manager: WebSocket管理器，用于发送通知
         """
         self.websocket_manager = websocket_manager
-        self.timeout_manager = TimeoutManager()
+        self.timeout_manager = TimeoutManager(runtime_config, websocket_manager)
         self.error_handler = ErrorHandler()
         self.system_monitor = SystemMonitor()
         self.recovery_manager = RecoveryManager()
-        
+
         # 初始化状态
         self._initialized = False
         self._shutdown_event = asyncio.Event()
-        
+
         # 设置组件间的回调
         self._setup_component_callbacks()
-        
+
         logger.info("系统集成器创建完成")
     
     def _setup_component_callbacks(self):
@@ -444,11 +445,15 @@ class SystemIntegration:
 # 全局系统集成器实例
 system_integration: Optional[SystemIntegration] = None
 
-async def init_system_integration(websocket_manager=None):
-    """初始化全局系统集成器"""
+async def init_system_integration(runtime_config=None, websocket_manager=None):
+    """
+    初始化全局系统集成器
+    :param runtime_config: 运行时配置对象引用
+    :param websocket_manager: WebSocket管理器
+    """
     global system_integration
     if system_integration is None:
-        system_integration = SystemIntegration(websocket_manager)
+        system_integration = SystemIntegration(runtime_config, websocket_manager)
         await system_integration.initialize()
         logger.info("全局系统集成器初始化完成")
 

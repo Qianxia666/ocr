@@ -9,6 +9,7 @@ import aiohttp
 import asyncio
 from fastapi import FastAPI, Request, UploadFile, Query, HTTPException, WebSocket, WebSocketDisconnect, Response
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, RedirectResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from typing import Optional
 from contextlib import asynccontextmanager
 import os
@@ -86,6 +87,10 @@ class RuntimeConfig:
         self.max_image_size_mb = int(os.getenv("MAX_IMAGE_SIZE_MB", 50))
         self.max_pdf_size_mb = int(os.getenv("MAX_PDF_SIZE_MB", 50))
         self.max_pdf_pages = int(os.getenv("MAX_PDF_PAGES", 50))
+        # 超时配置
+        self.api_timeout = int(os.getenv("API_TIMEOUT", 300))
+        self.api_request_timeout = int(os.getenv("API_REQUEST_TIMEOUT", 300))
+        self.frontend_poll_timeout = int(os.getenv("FRONTEND_POLL_TIMEOUT", 300))
 
     def get_all(self) -> dict:
         """获取所有配置"""
@@ -98,7 +103,10 @@ class RuntimeConfig:
             "batch_size": self.batch_size,
             "max_image_size_mb": self.max_image_size_mb,
             "max_pdf_size_mb": self.max_pdf_size_mb,
-            "max_pdf_pages": self.max_pdf_pages
+            "max_pdf_pages": self.max_pdf_pages,
+            "api_timeout": self.api_timeout,
+            "api_request_timeout": self.api_request_timeout,
+            "frontend_poll_timeout": self.frontend_poll_timeout
         }
 
     def update(self, config: dict):
@@ -121,9 +129,51 @@ class RuntimeConfig:
             self.max_pdf_size_mb = int(config["max_pdf_size_mb"])
         if "max_pdf_pages" in config:
             self.max_pdf_pages = int(config["max_pdf_pages"])
+        if "api_timeout" in config:
+            self.api_timeout = int(config["api_timeout"])
+            logger.info(f"更新API超时配置: {self.api_timeout}秒")
+        if "api_request_timeout" in config:
+            self.api_request_timeout = int(config["api_request_timeout"])
+            logger.info(f"更新API请求超时配置: {self.api_request_timeout}秒")
+        if "frontend_poll_timeout" in config:
+            self.frontend_poll_timeout = int(config["frontend_poll_timeout"])
+            logger.info(f"更新前端轮询超时配置: {self.frontend_poll_timeout}秒")
 
 # 创建全局运行时配置实例
 runtime_config = RuntimeConfig()
+
+# Cloudflare Turnstile 配置读取函数
+async def get_turnstile_enabled_status() -> tuple[bool, str]:
+    """
+    获取 Turnstile 验证开关状态
+    返回: (是否启用, 配置来源)
+
+    优先级: 数据库 > .env > 默认值(禁用) - 运行时设置优先
+    """
+    import os
+
+    # 1. 优先检查数据库配置（运行时设置）
+    try:
+        from models.database import db_manager
+        async with db_manager.get_connection() as db:
+            async with db.execute(
+                "SELECT value FROM system_settings WHERE key = 'turnstile_enabled'"
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    enabled = row[0].lower() == 'true'
+                    return enabled, 'database'
+    except Exception as e:
+        logger.error(f"读取 Turnstile 数据库配置失败: {e}")
+
+    # 2. 检查 .env 环境变量（重启后的默认值）
+    env_value = os.getenv('TURNSTILE_ENABLED', '').lower()
+    if env_value in ('true', 'false'):
+        enabled = env_value == 'true'
+        return enabled, 'env'
+
+    # 3. 默认值(禁用)
+    return False, 'default'
 
 # Cloudflare Turnstile 验证函数
 async def verify_turnstile_token(token: str, remote_ip: str = None) -> tuple[bool, str]:
@@ -131,9 +181,17 @@ async def verify_turnstile_token(token: str, remote_ip: str = None) -> tuple[boo
     验证 Cloudflare Turnstile token
     返回: (是否成功, 消息)
     """
-    if not TURNSTILE_SECRET_KEY:
-        logger.warning("Turnstile Secret Key 未配置，跳过验证")
+    # 检查是否启用 Turnstile 验证
+    enabled, source = await get_turnstile_enabled_status()
+
+    if not enabled:
+        logger.info(f"Turnstile 验证已禁用 (配置来源: {source})")
         return True, "验证已跳过"
+
+    # 检查必要的密钥配置
+    if not TURNSTILE_SECRET_KEY:
+        logger.warning("Turnstile Secret Key 未配置,无法验证")
+        return False, "人机验证配置错误,请联系管理员"
 
     if not token:
         return False, "缺少验证令牌"
@@ -197,12 +255,24 @@ async def lifespan(app: FastAPI):
             'pdf_concurrency': runtime_config.pdf_concurrency,
             'max_retries': runtime_config.max_retries,
             'retry_delay': RETRY_DELAY,
-            'pdf_dpi': runtime_config.pdf_dpi
+            'pdf_dpi': runtime_config.pdf_dpi,
+            'api_timeout': runtime_config.api_timeout
         }
 
         # 初始化页面处理器
         from core.page_processor import init_page_processor, is_page_processor_ready, shutdown_page_processor
         logger.info("开始初始化页面处理器")
+
+        # 准备静态API配置(不会变化的配置)
+        static_api_config = {
+            'api_base_url': API_BASE_URL,
+            'api_key': API_KEY,
+            'model': MODEL,
+            'concurrency': runtime_config.concurrency,
+            'batch_size': 4,
+            'retry_delay': RETRY_DELAY,
+            'health_check_interval': 300
+        }
 
         # 先检查是否已经初始化，避免重复初始化
         if is_page_processor_ready():
@@ -218,8 +288,9 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"检查现有页面处理器实例时出错: {e}")
 
-            # 进行初始化
-            await init_page_processor(api_config)
+            # 进行初始化,传递runtime_config引用
+            logger.warning(f"传递给页面处理器: runtime_config={runtime_config}, static_api_config={static_api_config}")
+            await init_page_processor(runtime_config, static_api_config)
 
             # 验证页面处理器状态
             if is_page_processor_ready():
@@ -252,8 +323,8 @@ async def lifespan(app: FastAPI):
                 import gc
                 gc.collect()
 
-                # 强制重新初始化任务管理器
-                await init_task_manager(api_config, websocket_manager)
+                # 强制重新初始化任务管理器,传递runtime_config引用
+                await init_task_manager(runtime_config, api_config, websocket_manager)
 
                 # 直接从模块获取最新的任务管理器实例
                 from core.task_manager import task_manager as global_task_manager_instance
@@ -1096,7 +1167,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
                 
         except WebSocketDisconnect:
             logger.info(f"WebSocket客户端断开连接: {actual_client_id}")
-            
+
+        except (ConnectionResetError, ConnectionError) as e:
+            # Windows/Linux 连接重置错误,这是正常的客户端断开情况
+            logger.info(f"WebSocket客户端连接断开 {actual_client_id}: {type(e).__name__}")
+
         except Exception as e:
             logger.error(f"WebSocket连接异常 {actual_client_id}: {e}")
             
@@ -1106,7 +1181,10 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
     finally:
         # 清理连接
         if 'actual_client_id' in locals():
-            await websocket_manager.disconnect(actual_client_id)
+            try:
+                await websocket_manager.disconnect(actual_client_id)
+            except Exception as e:
+                logger.debug(f"清理连接时发生错误 {actual_client_id}: {e}")
 
 # 任务管理API路由
 @app.post(f"/{PASSWORD}/api/tasks/image" if PASSWORD else "/api/tasks/image")
@@ -1317,12 +1395,16 @@ async def login_page(request: Request):
         logger.error(f"获取注册状态失败: {e}")
         registration_enabled = False
 
+    # 获取 Turnstile 验证开关状态
+    turnstile_enabled, _ = await get_turnstile_enabled_status()
+
     return templates.TemplateResponse("login.html", {
         "request": request,
         "favicon_url": FAVICON_URL,
         "title": TITLE,
         "registration_enabled": registration_enabled,
-        "turnstile_site_key": TURNSTILE_SITE_KEY
+        "turnstile_site_key": TURNSTILE_SITE_KEY,
+        "turnstile_enabled": turnstile_enabled
     })
 
 @app.get("/test-login", response_class=HTMLResponse)
@@ -1336,12 +1418,16 @@ async def test_login_page(request: Request):
 @app.get(f"/{PASSWORD}/register" if PASSWORD else "/register-disabled", response_class=HTMLResponse)
 async def register_page(request: Request, token: str = ""):
     """注册页面"""
+    # 获取 Turnstile 验证开关状态
+    turnstile_enabled, _ = await get_turnstile_enabled_status()
+
     return templates.TemplateResponse("register.html", {
         "request": request,
         "token": token,
         "favicon_url": FAVICON_URL,
         "title": TITLE,
-        "turnstile_site_key": TURNSTILE_SITE_KEY
+        "turnstile_site_key": TURNSTILE_SITE_KEY,
+        "turnstile_enabled": turnstile_enabled
     })
 
 @app.post("/api/auth/register")
@@ -1664,14 +1750,14 @@ async def generate_redemption_code_api(request: Request, code_config: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/admin/codes/list" if PASSWORD else "/api/admin/codes/list")
-async def list_redemption_codes_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000)):
+async def list_redemption_codes_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000), search: Optional[str] = Query(None, description="搜索关键词")):
     """查看所有兑换码(仅管理员)"""
     try:
         user = await auth_manager_instance.require_admin(request)
 
         offset = (page - 1) * page_size
-        codes = await redemption_code_model.get_all_codes(limit=page_size, offset=offset)
-        total = await redemption_code_model.count_codes()
+        codes = await redemption_code_model.get_all_codes(limit=page_size, offset=offset, search=search)
+        total = await redemption_code_model.count_codes(search=search)
 
         return JSONResponse({
             "status": "success",
@@ -1750,14 +1836,19 @@ async def get_redemption_history_api(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/admin/users/list" if PASSWORD else "/api/admin/users/list")
-async def list_users_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000)):
-    """查看所有用户(仅管理员)"""
+async def list_users_api(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=1000),
+    search: str = Query(None, description="搜索用户名或UUID")
+):
+    """查看所有用户(仅管理员)，支持搜索"""
     try:
         user = await auth_manager_instance.require_admin(request)
 
         offset = (page - 1) * page_size
-        users = await user_model.get_all_users(limit=page_size, offset=offset)
-        total = await user_model.count_users()
+        users = await user_model.get_all_users(limit=page_size, offset=offset, search=search)
+        total = await user_model.count_users(search=search)
 
         return JSONResponse({
             "status": "success",
@@ -1913,6 +2004,81 @@ async def toggle_registration_api(request: Request, settings_data: dict):
         logger.error(f"切换注册状态失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==================== Turnstile 验证开关管理 API ====================
+
+@app.get(f"/{PASSWORD}/api/admin/settings/turnstile" if PASSWORD else "/api/admin/settings/turnstile")
+async def get_turnstile_settings_api(request: Request):
+    """获取 Turnstile 验证配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        import os
+        from models.database import db_manager
+
+        # 检查 .env 是否强制控制
+        env_value = os.getenv('TURNSTILE_ENABLED', '').lower()
+        env_forced = env_value in ('true', 'false')
+
+        # 获取数据库配置
+        async with db_manager.get_connection() as db:
+            async with db.execute(
+                "SELECT value FROM system_settings WHERE key = 'turnstile_enabled'"
+            ) as cursor:
+                row = await cursor.fetchone()
+                db_enabled = row[0].lower() == 'true' if row else False
+
+        # 计算最终生效状态
+        enabled, source = await get_turnstile_enabled_status()
+
+        return JSONResponse({
+            "status": "success",
+            "enabled": enabled,
+            "source": source,
+            "env_forced": env_forced,
+            "env_value": env_value if env_forced else None,
+            "db_value": db_enabled,
+            "has_secret_key": bool(TURNSTILE_SECRET_KEY),
+            "site_key": TURNSTILE_SITE_KEY
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取 Turnstile 配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/settings/turnstile" if PASSWORD else "/api/admin/settings/turnstile")
+async def update_turnstile_settings_api(request: Request, settings_data: dict):
+    """更新 Turnstile 验证配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        from models.database import db_manager
+        from datetime import datetime, timezone
+
+        enabled = settings_data.get('enabled', False)
+
+        # 更新数据库配置（运行时立即生效）
+        async with db_manager.get_connection() as db:
+            await db.execute("""
+                UPDATE system_settings
+                SET value = ?, updated_at = ?
+                WHERE key = 'turnstile_enabled'
+            """, ('true' if enabled else 'false', datetime.now(timezone.utc).isoformat()))
+            await db.commit()
+
+        logger.info(f"管理员 {admin['username']} 更新 Turnstile 验证: {enabled} (运行时生效)")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"Turnstile 验证已{'启用' if enabled else '禁用'}",
+            "enabled": enabled
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新 Turnstile 配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get(f"/{PASSWORD}/api/admin/settings/ip-abuse" if PASSWORD else "/api/admin/settings/ip-abuse")
 async def get_ip_abuse_settings_api(request: Request):
     """获取IP滥用检测配置(仅管理员)"""
@@ -2010,6 +2176,23 @@ async def update_runtime_config_api(request: Request, config_data: dict):
         logger.error(f"更新运行时配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get(f"/{PASSWORD}/api/frontend/config" if PASSWORD else "/api/frontend/config")
+async def get_frontend_config_api():
+    """获取前端配置"""
+    try:
+        return JSONResponse({
+            "status": "success",
+            "config": {
+                "frontend_poll_timeout": runtime_config.frontend_poll_timeout,
+                "max_image_size_mb": runtime_config.max_image_size_mb,
+                "max_pdf_size_mb": runtime_config.max_pdf_size_mb,
+                "max_pdf_pages": runtime_config.max_pdf_pages
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取前端配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ==================== 注册令牌管理API ====================
 
 @app.post(f"/{PASSWORD}/api/admin/registration-tokens/create" if PASSWORD else "/api/admin/registration-tokens/create")
@@ -2083,14 +2266,14 @@ async def create_registration_token_api(request: Request, token_data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/admin/registration-tokens/list" if PASSWORD else "/api/admin/registration-tokens/list")
-async def list_registration_tokens_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000)):
+async def list_registration_tokens_api(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=1000), search: Optional[str] = Query(None, description="搜索关键词")):
     """获取所有注册令牌列表(仅管理员)"""
     try:
         admin = await auth_manager_instance.require_admin(request)
 
         offset = (page - 1) * page_size
-        tokens = await registration_token_model.get_all_tokens(limit=page_size, offset=offset)
-        total = await registration_token_model.count_tokens()
+        tokens = await registration_token_model.get_all_tokens(limit=page_size, offset=offset, search=search)
+        total = await registration_token_model.count_tokens(search=search)
 
         return JSONResponse({
             "status": "success",

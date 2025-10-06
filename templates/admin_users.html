@@ -13,11 +13,14 @@
     }
 
     *:focus,
-    *:focus-visible,
+    *:focus-visible {
+      outline: none !important;
+      box-shadow: none !important;
+    }
+
     *:active {
       outline: none !important;
       box-shadow: none !important;
-      border: none !important;
     }
 
     button,
@@ -152,20 +155,20 @@
       <!-- 批量操作按钮 -->
       <div class="bg-white rounded-lg shadow-md p-4 mb-4">
         <div class="flex gap-2 flex-wrap">
-          <button id="select-all-btn" onclick="selectAllUsers()" class="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors hidden">
+          <button id="select-all-btn" onclick="selectAllUsers()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             全选
           </button>
           <div id="batch-actions" class="hidden flex gap-2 flex-wrap">
-            <button onclick="batchToggleUserStatus(false)" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+            <button onclick="batchToggleUserStatus(false)" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
               批量启用 (<span id="selected-count">0</span>)
             </button>
-            <button onclick="batchToggleUserStatus(true)" class="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
+            <button onclick="batchToggleUserStatus(true)" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
               批量禁用 (<span id="selected-count-2">0</span>)
             </button>
-            <button onclick="batchAdjustQuota()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+            <button onclick="batchAdjustQuota()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
               批量调整配额 (<span id="selected-count-3">0</span>)
             </button>
-            <button onclick="clearSelection()" class="px-6 py-2 bg-gray-400 hover:bg-gray-500 text-white rounded-lg transition-colors">
+            <button onclick="clearSelection()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
               取消选择
             </button>
           </div>
@@ -188,10 +191,10 @@
               <option value="admin">管理员</option>
             </select>
           </div>
-          <button onclick="loadUsers()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+          <button onclick="loadUsers()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             应用筛选
           </button>
-          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             加载数据
           </button>
         </div>
@@ -735,9 +738,7 @@
     }
 
     // 页面加载时初始化
-    window.addEventListener('load', () => {
-      // 不再自动加载数据，等待用户点击"加载数据"按钮
-
+    document.addEventListener('DOMContentLoaded', () => {
       // 搜索框输入时实时搜索（使用防抖）
       const searchInput = document.getElementById('search-input');
       const debouncedSearch = debounce(() => {
@@ -747,6 +748,15 @@
         }
       }, 500);
       searchInput.addEventListener('input', debouncedSearch);
+
+      // 状态筛选下拉框实时筛选
+      const statusFilter = document.getElementById('status-filter');
+      statusFilter.addEventListener('change', () => {
+        if (hasLoadedData) {
+          currentPage = 1;
+          loadUsers(); // 重新加载
+        }
+      });
     });
 
     // 菜单控制

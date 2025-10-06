@@ -27,6 +27,11 @@ class WebSocketConnection:
                 await self.websocket.send_text(json.dumps(message))
                 return True
             return False
+        except (ConnectionResetError, ConnectionError, RuntimeError,
+                WebSocketDisconnect) as e:
+            logger.debug(f"客户端连接已断开 {self.client_id}: {e}")
+            self.is_active = False
+            return False
         except Exception as e:
             logger.error(f"发送消息失败 {self.client_id}: {e}")
             self.is_active = False
@@ -36,7 +41,15 @@ class WebSocketConnection:
         """关闭WebSocket连接"""
         try:
             if self.is_active:
-                await self.websocket.close(code=code, reason=reason)
+                # 检查连接是否仍然有效
+                if hasattr(self.websocket, 'client_state') and \
+                   self.websocket.client_state.name in ['CONNECTED', 'CONNECTING']:
+                    await self.websocket.close(code=code, reason=reason)
+        except (ConnectionResetError, ConnectionError, RuntimeError) as e:
+            # Windows: ConnectionResetError (WinError 10054)
+            # Linux: BrokenPipeError
+            # asyncio: RuntimeError (连接已关闭)
+            logger.debug(f"连接已断开,忽略关闭错误 {self.client_id}: {e}")
         except Exception as e:
             logger.error(f"关闭连接失败 {self.client_id}: {e}")
         finally:

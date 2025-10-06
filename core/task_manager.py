@@ -95,6 +95,7 @@ class TaskManager:
                  pdf_task_queue: TaskQueue,
                  image_worker_pool: WorkerPool,
                  pdf_worker_pool: WorkerPool,
+                 runtime_config=None,
                  api_config: Optional[Dict[str, Any]] = None,
                  websocket_manager=None):
         """
@@ -103,6 +104,7 @@ class TaskManager:
         :param pdf_task_queue: PDF任务队列
         :param image_worker_pool: 图片工作者池
         :param pdf_worker_pool: PDF工作者池
+        :param runtime_config: 运行时配置对象引用
         :param api_config: API配置
         :param websocket_manager: WebSocket管理器
         """
@@ -110,6 +112,7 @@ class TaskManager:
         self.pdf_task_queue = pdf_task_queue
         self.image_worker_pool = image_worker_pool
         self.pdf_worker_pool = pdf_worker_pool
+        self.runtime_config = runtime_config  # 保存引用
         self.api_config = api_config or {}
         self.websocket_manager = websocket_manager
         self._initialized = False
@@ -137,7 +140,7 @@ class TaskManager:
             
             # 初始化系统集成器
             try:
-                await init_system_integration(self.websocket_manager)
+                await init_system_integration(self.runtime_config, self.websocket_manager)
                 logger.info("系统集成器初始化成功")
             except Exception as e:
                 logger.warning(f"系统集成器初始化失败: {e}")
@@ -146,7 +149,7 @@ class TaskManager:
             # 初始化页面处理器
             try:
                 logger.warning("=== 任务管理器中初始化页面处理器 ===")
-                await init_page_processor(self.api_config)
+                await init_page_processor(self.runtime_config, self.api_config)
                 
                 # 验证页面处理器状态
                 if is_page_processor_ready():
@@ -800,7 +803,7 @@ class TaskManager:
                 log.info(f"checking page processor for {task_id}")
                 if not is_page_processor_ready():
                     log.warning(f"page processor not ready for {task_id}, reinitializing")
-                    processor_ready = await ensure_page_processor_ready(self.api_config)
+                    processor_ready = await ensure_page_processor_ready(self.runtime_config, self.api_config)
                     if not processor_ready:
                         log.error(f"page processor initialization failed for {task_id}; fallback will be used if needed")
                     else:
@@ -1017,7 +1020,7 @@ class TaskManager:
             if not is_page_processor_ready():
                 log.warning(f"页面处理器未初始化 {task_item.task_id}，尝试重新初始化...")
                 try:
-                    await init_page_processor(self.api_config)
+                    await init_page_processor(self.runtime_config, self.api_config)
                     if not is_page_processor_ready():
                         raise Exception("页面处理器重新初始化失败")
                     log.info(f"页面处理器重新初始化成功 {task_item.task_id}")
@@ -1071,7 +1074,7 @@ class TaskManager:
                     log.warning(f"页面处理器不可用，尝试重新初始化...")
 
                     try:
-                        init_success = await ensure_page_processor_ready(self.api_config)
+                        init_success = await ensure_page_processor_ready(self.runtime_config, self.api_config)
                         log.info(f"页面处理器重新初始化结果: {init_success}")
 
                         if init_success:
@@ -1837,8 +1840,13 @@ class TaskManager:
             logger.error(f"发送错误通知消息失败 {task_id}: {e}")
 
 # 创建全局任务管理器实例
-def create_task_manager(api_config: Dict[str, Any], websocket_manager=None) -> TaskManager:
-    """创建任务管理器实例"""
+def create_task_manager(runtime_config, api_config: Dict[str, Any], websocket_manager=None) -> TaskManager:
+    """
+    创建任务管理器实例
+    :param runtime_config: 运行时配置对象引用
+    :param api_config: API配置
+    :param websocket_manager: WebSocket管理器
+    """
     global image_worker_pool, pdf_worker_pool
 
     # 从配置中获取并发数
@@ -1867,14 +1875,19 @@ def create_task_manager(api_config: Dict[str, Any], websocket_manager=None) -> T
     return TaskManager(
         image_task_queue, pdf_task_queue,
         image_worker_pool, pdf_worker_pool,
-        api_config, websocket_manager
+        runtime_config, api_config, websocket_manager
     )
 
 # 全局任务管理器实例（需要在应用启动时初始化）
 task_manager: Optional[TaskManager] = None
 
-async def init_task_manager(api_config: Dict[str, Any], websocket_manager=None):
-    """初始化全局任务管理器"""
+async def init_task_manager(runtime_config, api_config: Dict[str, Any], websocket_manager=None):
+    """
+    初始化全局任务管理器
+    :param runtime_config: 运行时配置对象引用
+    :param api_config: API配置
+    :param websocket_manager: WebSocket管理器
+    """
     global task_manager
 
     # 强制重新初始化，确保每次启动都能正确初始化
@@ -1889,7 +1902,7 @@ async def init_task_manager(api_config: Dict[str, Any], websocket_manager=None):
             logger.warning(f"关闭现有任务管理器失败: {e}")
 
     # 创建新的任务管理器实例
-    task_manager = create_task_manager(api_config, websocket_manager)
+    task_manager = create_task_manager(runtime_config, api_config, websocket_manager)
 
     # 初始化任务管理器
     await task_manager.initialize()

@@ -73,23 +73,25 @@ class TimeoutContext:
 
 class TimeoutManager:
     """多层超时管理器"""
-    
-    def __init__(self, websocket_manager=None):
+
+    def __init__(self, runtime_config=None, websocket_manager=None):
         """
         初始化超时管理器
-        :param websocket_manager: WebSocket管理器，用于发送预警通知
+        :param runtime_config: 运行时配置对象引用(用于动态读取api_timeout配置)
+        :param websocket_manager: WebSocket管理器,用于发送预警通知
         """
+        self._runtime_config = runtime_config
         self.websocket_manager = websocket_manager
         self._active_timeouts: Dict[str, TimeoutContext] = {}
         self._timeout_tasks: Dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
         self._running = False
         self._monitor_task: Optional[asyncio.Task] = None
-        
+
         # 默认超时配置
         self._default_configs = {
             TimeoutLevel.API_REQUEST: TimeoutConfig(
-                timeout_seconds=30.0,
+                timeout_seconds=float(self._get_api_request_timeout()),
                 warning_threshold=0.8,
                 max_retries=3,
                 retry_delay=1.0,
@@ -117,7 +119,7 @@ class TimeoutManager:
                 action=TimeoutAction.CANCEL
             )
         }
-        
+
         # 统计信息
         self._stats = {
             'total_timeouts': 0,
@@ -127,8 +129,16 @@ class TimeoutManager:
             'retries_performed': 0,
             'cancellations': 0
         }
-        
-        logger.info("超时管理器初始化完成")
+
+        logger.info(f"超时管理器初始化完成 - API请求超时: {self._get_api_request_timeout()}秒")
+
+    def _get_api_request_timeout(self) -> int:
+        """动态获取API请求超时时间"""
+        if self._runtime_config:
+            timeout = getattr(self._runtime_config, 'api_timeout', 300)
+            logger.debug(f"从runtime_config读取api_timeout: {timeout}")
+            return timeout
+        return 300
     
     async def start(self):
         """启动超时管理器"""
@@ -560,13 +570,17 @@ class TimeoutManager:
 # 全局超时管理器实例
 timeout_manager: Optional[TimeoutManager] = None
 
-async def init_timeout_manager(websocket_manager=None):
-    """初始化全局超时管理器"""
+async def init_timeout_manager(runtime_config, websocket_manager=None):
+    """
+    初始化全局超时管理器
+    :param runtime_config: 运行时配置对象引用
+    :param websocket_manager: WebSocket管理器
+    """
     global timeout_manager
     if timeout_manager is None:
-        timeout_manager = TimeoutManager(websocket_manager)
+        timeout_manager = TimeoutManager(runtime_config, websocket_manager)
         await timeout_manager.start()
-        logger.info("全局超时管理器初始化完成")
+        logger.info(f"全局超时管理器初始化完成 - API请求超时: {timeout_manager._get_api_request_timeout()}秒")
 
 async def shutdown_timeout_manager():
     """关闭全局超时管理器"""
