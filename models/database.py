@@ -268,12 +268,33 @@ class DatabaseManager:
                     UNIQUE(task_id, batch_number)
                 )
             """)
+
+            # 创建内容审查日志表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS moderation_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    page_number INTEGER,
+                    action TEXT NOT NULL,
+                    risk_level TEXT,
+                    violation_types TEXT,
+                    reason TEXT,
+                    original_content TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
+                )
+            """)
             
             # 创建索引以提高查询性能
             # 用户表索引
             await db.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_users_session_token ON users (session_token)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users (is_admin)")
+
+            # 审查日志表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_moderation_logs_task_id ON moderation_logs (task_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_moderation_logs_action ON moderation_logs (action)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_moderation_logs_created_at ON moderation_logs (created_at)")
 
             # 兑换码表索引
             await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_codes_is_active ON redemption_codes (is_active)")

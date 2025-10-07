@@ -450,9 +450,16 @@
       const createdAt = formatDateTime(task.created_at);
       const username = task.username || '未知用户';
       const detailLabel = taskDetailState.get(task.id) ? '收起详情' : '展开详情';
-      const viewButton = task.status === 'completed'
+
+      // 管理员可以查看已完成的任务和审查失败的任务
+      const canViewContent = task.status === 'completed' ||
+                            (task.status === 'cancelled' &&
+                             (task.error_message === '内容道德审查未通过' ||
+                              task.error_message?.includes('所有页面内容道德审查未通过')));
+      const viewButton = canViewContent
         ? `<button type="button" class="text-sm text-blue-600 hover:underline" onclick="event.stopPropagation(); viewContent('${task.id}')">查看结果</button>`
         : '';
+
       const canCancel = task.status === 'pending' || task.status === 'processing';
       const cancelButton = canCancel
         ? `<button type="button" class="text-sm text-red-600 hover:underline" onclick="event.stopPropagation(); cancelTask('${task.id}')">停止任务</button>`
@@ -613,19 +620,40 @@
       error.classList.add('hidden');
 
       try {
-        const response = await fetch(`${passwordPrefix}/api/admin/tasks/${taskId}/content`);
-        const data = await response.json();
+        // 先尝试获取任务结果（支持审查失败的任务）
+        const resultResponse = await fetch(`${passwordPrefix}/api/tasks/${taskId}/result`);
+        const resultData = await resultResponse.json();
 
-        if (data.status === 'success' && data.data) {
-          currentContentData = data.data;
-          displayContent(data.data);
+        if (resultData.status === 'success' && resultData.data) {
+          const taskResult = resultData.data;
+
+          // 如果有内容（completed 或管理员查看 cancelled）
+          if (taskResult.content) {
+            // 获取任务详细信息
+            const detailResponse = await fetch(`${passwordPrefix}/api/admin/tasks/${taskId}/content`);
+            const detailData = await detailResponse.json();
+
+            if (detailData.status === 'success' && detailData.data) {
+              currentContentData = detailData.data;
+              // 标记是否为管理员查看审查失败的任务
+              if (taskResult.admin_view) {
+                currentContentData.admin_view = true;
+              }
+              displayContent(currentContentData);
+            } else {
+              throw new Error('获取内容详情失败');
+            }
+          } else {
+            throw new Error('任务内容为空');
+          }
         } else {
-          throw new Error('获取内容失败');
+          throw new Error('获取任务结果失败');
         }
       } catch (err) {
         console.error('获取内容失败:', err);
         loading.classList.add('hidden');
         error.classList.remove('hidden');
+        document.getElementById('modal-error').textContent = err.message || '获取内容失败，请重试';
       }
     }
 
@@ -637,25 +665,59 @@
         'pending': '等待中',
         'processing': '处理中',
         'completed': '已完成',
-        'failed': '失败'
+        'failed': '失败',
+        'cancelled': '已取消'
       }[data.status] || data.status;
       document.getElementById('content-created').textContent = new Date(data.created_at).toLocaleString('zh-CN');
 
       const pagesContainer = document.getElementById('pages-container');
       pagesContainer.innerHTML = '';
 
+      // 如果是管理员查看审查失败的任务，添加提示
+      if (data.admin_view) {
+        const warningDiv = document.createElement('div');
+        warningDiv.className = 'bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4';
+        warningDiv.innerHTML = `
+          <div class="flex">
+            <div class="flex-shrink-0">
+              <svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+              </svg>
+            </div>
+            <div class="ml-3">
+              <p class="text-sm text-yellow-700">
+                <strong>管理员查看模式：</strong>此任务因内容审查未通过而被取消，以下是原始识别内容。
+              </p>
+            </div>
+          </div>
+        `;
+        pagesContainer.appendChild(warningDiv);
+      }
+
       if (data.pages && data.pages.length > 0) {
         data.pages.forEach(page => {
           const pageDiv = document.createElement('div');
           pageDiv.className = 'border border-gray-200 rounded-lg p-4';
 
-          const pageStatus = page.status === 'completed' ? 'text-green-600' : 'text-red-600';
+          // 页面状态显示逻辑：completed=绿色, cancelled=黄色(管理员查看), 其他=红色
+          let pageStatus = 'text-red-600';
+          let pageStatusText = page.status;
+          if (page.status === 'completed') {
+            pageStatus = 'text-green-600';
+            pageStatusText = '已完成';
+          } else if (page.status === 'cancelled') {
+            pageStatus = 'text-yellow-600';
+            pageStatusText = '审查失败';
+          } else if (page.status === 'failed') {
+            pageStatusText = '处理失败';
+          }
+
           const pageContent = page.content || page.error_message || '无内容';
 
           pageDiv.innerHTML = `
             <div class="flex items-center justify-between mb-2">
               <h3 class="font-medium text-gray-900">第 ${page.page_number} 页</h3>
-              <span class="text-xs ${pageStatus}">${page.status}</span>
+              <span class="text-xs ${pageStatus}">${pageStatusText}</span>
             </div>
             <div class="bg-gray-50 p-3 rounded text-sm whitespace-pre-wrap font-mono">${pageContent}</div>
           `;

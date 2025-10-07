@@ -157,6 +157,11 @@
       color: #92400e;
     }
 
+    .status-cancelled {
+      background: #f3f4f6;
+      color: #6b7280;
+    }
+
     /* 双按钮样式 */
     .copy-text-btn,
     .copy-markdown-btn {
@@ -565,7 +570,8 @@
         'pending': { class: 'status-pending', text: '等待中' },
         'processing': { class: 'status-processing', text: '处理中' },
         'completed': { class: 'status-completed', text: '已完成' },
-        'failed': { class: 'status-failed', text: '失败' }
+        'failed': { class: 'status-failed', text: '失败' },
+        'cancelled': { class: 'status-cancelled', text: '已取消' }
       };
 
       const status = statusConfig[task.status] || statusConfig['pending'];
@@ -738,7 +744,8 @@
               'pending': { class: 'status-pending', text: '等待中' },
               'processing': { class: 'status-processing', text: '处理中' },
               'completed': { class: 'status-completed', text: '已完成' },
-              'failed': { class: 'status-failed', text: '失败' }
+              'failed': { class: 'status-failed', text: '失败' },
+              'cancelled': { class: 'status-cancelled', text: '已取消' }
             };
             const status = statusConfig[task.status] || statusConfig['pending'];
             statusBadge.className = `status-badge ${status.class}`;
@@ -949,12 +956,93 @@
       }
     });
 
+    // WebSocket 连接管理
+    let ws = null;
+    let wsReconnectTimer = null;
+
+    // 连接 WebSocket
+    function connectWebSocket() {
+      try {
+        // 根据当前协议自动选择 ws 或 wss
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        // 从当前路径提取PASSWORD前缀(例如 /ocr/main 中的 ocr)
+        const pathPrefix = window.location.pathname.split('/')[1];
+        const wsPath = (pathPrefix && pathPrefix !== 'main') ? `/${pathPrefix}/ws` : '/ws';
+        const wsUrl = `${protocol}//${window.location.host}${wsPath}`;
+
+        console.log('正在连接 WebSocket:', wsUrl);
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log('WebSocket 已连接');
+          // 清除重连定时器
+          if (wsReconnectTimer) {
+            clearTimeout(wsReconnectTimer);
+            wsReconnectTimer = null;
+          }
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            handleWebSocketMessage(message);
+          } catch (err) {
+            console.error('解析 WebSocket 消息失败:', err);
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error('WebSocket 错误:', error);
+        };
+
+        ws.onclose = () => {
+          console.log('WebSocket 已断开，5秒后尝试重连...');
+          ws = null;
+          // 5秒后自动重连
+          wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+        };
+      } catch (err) {
+        console.error('WebSocket 连接失败:', err);
+        // 5秒后重试
+        wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+      }
+    }
+
+    // 处理 WebSocket 消息
+    function handleWebSocketMessage(message) {
+      console.log('收到 WebSocket 消息:', message);
+
+      // 处理任务取消消息
+      if (message.type === 'task_cancelled') {
+        console.log('任务已取消，刷新任务列表');
+        loadTasks();
+      }
+      // 可以扩展处理其他消息类型
+      else if (message.type === 'task_updated') {
+        console.log('任务状态更新，刷新任务列表');
+        loadTasks();
+      }
+    }
+
+    // 订阅任务更新（可选功能，供后续扩展使用）
+    function subscribeTask(taskId) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'subscribe',
+          task_id: taskId
+        }));
+      }
+    }
+
     // 页面加载时自动加载任务列表和用户信息
     window.addEventListener('load', () => {
       loadTasks();
       loadUserInfo();
 
-      // 每30秒自动刷新任务列表
+      // 连接 WebSocket 实现实时更新
+      connectWebSocket();
+
+      // 每30秒自动刷新任务列表（作为 WebSocket 的备用机制）
       setInterval(loadTasks, 30000);
       // 每30秒自动刷新用户配额
       setInterval(loadUserInfo, 30000);

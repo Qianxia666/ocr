@@ -172,24 +172,34 @@ class SystemIntegration:
                         raise
                         
                     except Exception as e:
+                        # 审查失败异常不进入重试逻辑，直接传播
+                        from core.content_moderator import ModerationFailedException
+                        if isinstance(e, ModerationFailedException):
+                            raise
+
                         last_error = e
                         # 处理其他错误
                         if retry_count < max_retries:
                             recovery_result = await self.error_handler.handle_error(
                                 e, task_id, recovery_strategy
                             )
-                            
+
                             if recovery_result.should_retry:
                                 # 计算退避延迟
                                 retry_delay = min(1.0 * (2 ** retry_count), 30.0)  # 指数退避，最大30秒
                                 logger.info(f"任务 {task_id} 准备第 {retry_count + 1} 次重试，延迟 {retry_delay:.1f} 秒")
                                 await asyncio.sleep(retry_delay)
                                 continue  # 继续下一次重试
-                        
+
                         # 如果是最后一次重试或者不需要重试，抛出异常
                         raise
                 
                 except Exception as e:
+                    # 审查失败异常直接传播，不判断重试次数
+                    from core.content_moderator import ModerationFailedException
+                    if isinstance(e, ModerationFailedException):
+                        raise
+
                     # 如果所有重试都失败了，抛出最后的错误
                     if retry_count == max_retries:
                         raise

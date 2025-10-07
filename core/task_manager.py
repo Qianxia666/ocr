@@ -28,6 +28,7 @@ from core.page_processor import (
     is_page_processor_ready,
     ensure_page_processor_ready
 )
+from core.content_moderator import ModerationFailedException
 from core.progress_tracker import ProgressTracker, init_progress_tracker, shutdown_progress_tracker, progress_tracker
 from core.system_integration import SystemIntegration, init_system_integration, shutdown_system_integration, get_system_integration
 from core.timeout_manager import TimeoutLevel
@@ -74,6 +75,9 @@ class TaskManager:
         prefix = self._get_task_log_prefix(task_item)
 
         class _TaskLogger:
+            def debug(self_inner, message: str) -> None:
+                logger.debug(prefix + message)
+
             def info(self_inner, message: str) -> None:
                 logger.info(prefix + message)
 
@@ -500,15 +504,26 @@ class TaskManager:
 
                 contents = []
                 empty_pages = []
+                moderation_failed_pages = []
                 for page_result in page_results:
                     page_num = page_result.get('page_number')
+                    page_status = page_result.get('status')
+                    error_message = page_result.get('error_message', '')
                     content = page_result.get('content', '')
+
+                    # 过滤审查失败的页面
+                    if page_status == 'cancelled' and error_message == '内容道德审查未通过':
+                        moderation_failed_pages.append(page_num)
+                        logger.debug(f"过滤审查失败页面 {task_id}-{page_num}")
+                        continue
 
                     if content:
                         contents.append(content)
                     else:
                         empty_pages.append(page_num)
 
+                if moderation_failed_pages:
+                    logger.info(f"PDF任务有 {len(moderation_failed_pages)} 个页面审查失败: 页面 {moderation_failed_pages}")
                 if empty_pages:
                     logger.error(f"PDF任务有 {len(empty_pages)} 个页面内容为空: 页面 {empty_pages}")
 
@@ -517,6 +532,13 @@ class TaskManager:
 
                 if not result['content']:
                     logger.error(f"严重: PDF任务所有页面内容都为空! {task_id}")
+        elif task_data['status'] == TaskStatus.CANCELLED.value:
+            # 审查失败的任务 - 前端不可见内容
+            if task_data.get('error_message') == '内容道德审查未通过':
+                result['content'] = ''  # 前端看不到内容
+            else:
+                # 其他取消原因，可以返回内容
+                result['content'] = ''
         else:
             result['content'] = ''
 
@@ -825,13 +847,25 @@ class TaskManager:
 
             log.info(f"task pipeline finished for {task_id}")
 
-            if system_integration and timeout_context:
-                log.info(f"complete monitoring {task_id} (success)")
-                await system_integration.complete_task_monitoring(
-                    task_id, timeout_context, success=True
-                )
+            # 检查是否为审查失败（特殊处理）
+            is_moderation_failed = isinstance(result, dict) and result.get('moderation_failed') == True
 
-            log.info(f"=== task finished {task_id} ===")
+            if system_integration and timeout_context:
+                if is_moderation_failed:
+                    log.info(f"complete monitoring {task_id} (cancelled - moderation failed)")
+                    await system_integration.complete_task_monitoring(
+                        task_id, timeout_context, success=False
+                    )
+                else:
+                    log.info(f"complete monitoring {task_id} (success)")
+                    await system_integration.complete_task_monitoring(
+                        task_id, timeout_context, success=True
+                    )
+
+            if is_moderation_failed:
+                log.info(f"=== task cancelled {task_id} (moderation failed) ===")
+            else:
+                log.info(f"=== task finished {task_id} ===")
             return result
 
         except Exception as exc:
@@ -880,12 +914,12 @@ class TaskManager:
     async def _process_image_task(self, task_item: TaskItem) -> Dict[str, Any]:
         """Process a single image OCR task."""
         import os
-    
+
         log = self._task_logger(task_item)
         start_time = time.time()
         temp_file_path = task_item.metadata.get('temp_file_path')
         image_data: Optional[bytes] = None
-    
+
         try:
             if temp_file_path:
                 log.info(f"load image bytes from temp file {temp_file_path}")
@@ -955,10 +989,67 @@ class TaskManager:
 
             log.info(f"image task completed {task_item.task_id} in {processing_time:.2f}s")
             return result_summary
-    
+
+        except ModerationFailedException as moderation_exc:
+            # 审查失败异常 - 特殊处理
+            processing_time = time.time() - start_time
+            log.warning(f"内容道德审查未通过 {task_item.task_id}: {moderation_exc.details}")
+
+            # 保存原始OCR内容到page_result（仅后端可见）
+            await page_result_model.create_page_result(task_item.task_id, 1, 'cancelled')
+            await page_result_model.update_page_result(
+                task_item.task_id,
+                1,
+                'cancelled',
+                content=moderation_exc.original_content,  # 保存原始内容
+                error_message='内容道德审查未通过',
+                processing_time=processing_time
+            )
+
+            # 将任务状态设置为CANCELLED
+            await task_model.update_task_status(
+                task_item.task_id,
+                TaskStatus.CANCELLED,
+                progress=0.0,
+                processed_pages=0,
+                error_message='内容道德审查未通过'
+            )
+
+            # 保存审查日志到moderation_logs表
+            await self._save_moderation_log(
+                task_id=task_item.task_id,
+                page_number=1,
+                action='block',
+                details=moderation_exc.details,
+                original_content=moderation_exc.original_content
+            )
+
+            # WebSocket通知前端任务已取消
+            if self.websocket_manager:
+                cancelled_message = MessageFactory.create_task_failed(
+                    task_item.task_id,
+                    '内容道德审查未通过',
+                    failed_page=1
+                )
+                await self.websocket_manager.send_to_task_subscribers(
+                    task_item.task_id,
+                    cancelled_message.to_dict()
+                )
+
+            log.info(f"任务已取消(审查未通过) {task_item.task_id}")
+            # 返回特殊标记，让上层识别为取消而非成功
+            return {
+                'total_pages': 1,
+                'successful_pages': 0,
+                'failed_pages': 0,
+                'cancelled': True,
+                'moderation_failed': True,  # 添加特殊标记
+                'reason': '内容道德审查未通过'
+            }
+
         except Exception as exc:
             processing_time = time.time() - start_time
-    
+
             await page_result_model.create_page_result(task_item.task_id, 1, 'failed')
             await page_result_model.update_page_result(
                 task_item.task_id,
@@ -967,7 +1058,7 @@ class TaskManager:
                 error_message=str(exc),
                 processing_time=processing_time
             )
-    
+
             if self.websocket_manager:
                 failed_message = MessageFactory.create_task_failed(
                     task_item.task_id,
@@ -978,7 +1069,7 @@ class TaskManager:
                     task_item.task_id,
                     failed_message.to_dict()
                 )
-    
+
             raise
         finally:
             pass
@@ -1141,20 +1232,45 @@ class TaskManager:
 
             successful_pages = 0
             failed_pages = 0
+            moderation_failed_pages = 0
             total_content_length = 0
 
             for page_result in page_results:
-                if page_result.get('status') == 'completed':
+                page_status = page_result.get('status')
+                error_message = page_result.get('error_message', '')
+
+                if page_status == 'completed':
                     successful_pages += 1
                     content = page_result.get('content', '')
                     content_length = len(content) if content else 0
                     total_content_length += content_length
                     log.info(f"页面 {page_result['page_number']}: 内容长度={content_length}字符, 预览={content[:100] if content else '无内容'}...")
+                elif page_status == 'cancelled' and error_message == '内容道德审查未通过':
+                    moderation_failed_pages += 1
+                    log.warning(f"页面 {page_result['page_number']}: 审查失败")
                 else:
                     failed_pages += 1
-                    log.error(f"页面 {page_result['page_number']}: 状态={page_result.get('status')}, 错误={page_result.get('error_message')}")
+                    log.error(f"页面 {page_result['page_number']}: 状态={page_status}, 错误={error_message}")
 
-            log.info(f" 页面统计: 成功={successful_pages}, 失败={failed_pages}, 总内容长度={total_content_length}字符")
+            log.info(f" 页面统计: 成功={successful_pages}, 失败={failed_pages}, 审查失败={moderation_failed_pages}, 总内容长度={total_content_length}字符")
+
+            # 如果所有页面都审查失败，将任务标记为CANCELLED
+            if moderation_failed_pages == task_item.total_pages:
+                log.warning(f"所有页面审查失败，将任务标记为CANCELLED {task_item.task_id}")
+                await task_model.update_task_status(
+                    task_item.task_id,
+                    TaskStatus.CANCELLED,
+                    error_message='所有页面内容道德审查未通过'
+                )
+                return {
+                    'total_pages': task_item.total_pages,
+                    'successful_pages': 0,
+                    'failed_pages': 0,
+                    'moderation_failed': True,
+                    'moderation_failed_pages': moderation_failed_pages,
+                    'cancelled': True,
+                    'reason': '所有页面内容道德审查未通过'
+                }
 
             if total_content_length == 0 and successful_pages > 0:
                 log.error(f" 检测到严重问题: 页面显示成功但内容为空！可能是OCR API响应解析失败。")
@@ -1640,18 +1756,18 @@ class TaskManager:
                                     semaphore: Optional[asyncio.Semaphore] = None) -> str:
         """调用受保护的OCR API"""
         system_integration = get_system_integration()
-        
+
         async def _api_call_operation():
-            return await self._call_ocr_api(image_data, semaphore)
-        
+            return await self._call_ocr_api(task_id, image_data, semaphore)
+
         if system_integration:
             return await system_integration.protected_api_call(
                 task_id, _api_call_operation
             )
         else:
-            return await self._call_ocr_api(image_data, semaphore)
+            return await self._call_ocr_api(task_id, image_data, semaphore)
     
-    async def _call_ocr_api(self, image_data: bytes, semaphore: Optional[asyncio.Semaphore] = None) -> str:
+    async def _call_ocr_api(self, task_id: str, image_data: bytes, semaphore: Optional[asyncio.Semaphore] = None) -> str:
         """调用OCR API - 基础实现"""
         system_prompt = """
         OCR识别图片上的内容，给出markdown的katex的格式的内容。
@@ -1677,31 +1793,55 @@ class TaskManager:
         
         if semaphore:
             async with semaphore:
-                return await self._make_api_request_with_timeout(image_data, system_prompt)
+                return await self._make_api_request_with_timeout(task_id, image_data, system_prompt)
         else:
-            return await self._make_api_request_with_timeout(image_data, system_prompt)
+            return await self._make_api_request_with_timeout(task_id, image_data, system_prompt)
     
-    async def _make_api_request_with_timeout(self, image_data: bytes, system_prompt: str, timeout: int = 120) -> str:
+    async def _save_moderation_log(self, task_id: str, page_number: int, action: str, details: Dict[str, Any], original_content: str = None):
+        """保存审查日志到数据库"""
+        try:
+            from models.database import db_manager
+            async with db_manager.get_connection() as db:
+                await db.execute("""
+                    INSERT INTO moderation_logs
+                    (task_id, page_number, action, risk_level, violation_types, reason, original_content, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    task_id,
+                    page_number,
+                    action,
+                    details.get('risk_level', 'high'),
+                    json.dumps(details.get('violation_types', []), ensure_ascii=False),
+                    details.get('reason', ''),
+                    original_content,
+                    datetime.now(timezone.utc).isoformat()
+                ))
+                await db.commit()
+                logger.info(f"审查日志已保存 {task_id}-{page_number}")
+        except Exception as e:
+            logger.error(f"保存审查日志失败 {task_id}: {e}")
+
+    async def _make_api_request_with_timeout(self, task_id: str, image_data: bytes, system_prompt: str, timeout: int = 120) -> str:
         """发起API请求 - 增加超时控制"""
         try:
             return await asyncio.wait_for(
-                self._make_api_request(image_data, system_prompt),
+                self._make_api_request(task_id, image_data, system_prompt),
                 timeout=timeout
             )
         except asyncio.TimeoutError:
             raise asyncio.TimeoutError(f"API请求超时 (>{timeout}秒)")
     
-    async def _make_api_request(self, image_data: bytes, system_prompt: str) -> str:
-        """发起API请求"""
+    async def _make_api_request(self, task_id: str, image_data: bytes, system_prompt: str) -> str:
+        """发起API请求（包含审查）"""
         api_base_url = self.api_config.get('api_base_url', 'https://api.openai.com')
         api_key = self.api_config.get('api_key')
         model = self.api_config.get('model', 'gpt-4o')
-        
+
         if not api_key:
             raise Exception("API密钥未配置")
-        
+
         encoded_image = base64.b64encode(image_data).decode('utf-8')
-        
+
         async with aiohttp.ClientSession() as session:
             response = await session.post(
                 f"{api_base_url}/v1/chat/completions",
@@ -1736,16 +1876,51 @@ class TaskManager:
                     "top_p": 1,
                 }
             )
-            
+
             if response.status == 200:
                 result = await response.json()
                 content = result['choices'][0]['message']['content']
-                
+
                 # 解析返回内容
                 parsed_content = _extract_markdown_from_response(content)
-                if parsed_content:
-                    return parsed_content
-                raise Exception("OCR返回内容为空或格式不正确")
+                if not parsed_content:
+                    raise Exception("OCR返回内容为空或格式不正确")
+
+                # ========== 内容道德审查 ==========
+                from core.content_moderator import ContentModerator, ModerationFailedException, get_moderation_config
+
+                # 初始化审查器
+                moderator = ContentModerator(get_moderation_config())
+
+                # 查询用户是否为管理员
+                user_is_admin = False
+                if task_id:
+                    try:
+                        from models.database import task_model, db_manager
+                        task_data = await task_model.get_task(task_id)
+                        if task_data and task_data.get('user_id'):
+                            # 直接查询数据库获取用户信息
+                            async with db_manager.get_connection() as db:
+                                async with db.execute(
+                                    "SELECT is_admin FROM users WHERE id = ?",
+                                    (task_data['user_id'],)
+                                ) as cursor:
+                                    user_row = await cursor.fetchone()
+                                    user_is_admin = bool(user_row[0]) if user_row else False
+                    except Exception as e:
+                        logger.warning(f"查询用户管理员权限失败 {task_id}: {e}")
+
+                # 执行审查
+                action, moderated_content, details = await moderator.moderate_content(
+                    content=parsed_content,
+                    task_id=task_id,
+                    user_is_admin=user_is_admin
+                )
+                # 审查通过，返回内容
+                return moderated_content
+                # 注意：ModerationFailedException会直接向上传播，由_process_image_task捕获处理
+                # ==================================
+
             else:
                 raise Exception(f"API请求失败, 状态码: {response.status}")
     

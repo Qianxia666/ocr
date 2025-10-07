@@ -1288,18 +1288,47 @@ async def get_task_info_api(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/tasks/{{task_id}}/result" if PASSWORD else "/api/tasks/{task_id}/result")
-async def get_task_result_api(task_id: str):
+async def get_task_result_api(task_id: str, request: Request):
     """获取任务结果API"""
     if not task_manager:
         logger.error(f"任务管理器未初始化，无法获取任务结果: {task_id}")
         raise HTTPException(status_code=503, detail="任务管理器未初始化")
 
     try:
+        # 检查用户是否为管理员
+        user = await auth_manager_instance.require_user(request)
+        is_admin = user.get('is_admin', False)
+
         task_result = await task_manager.get_task_result(task_id)
 
         if not task_result:
             logger.warning(f"任务不存在: {task_id}")
             raise HTTPException(status_code=404, detail="任务不存在")
+
+        # 如果是管理员且任务审查失败，返回原始内容
+        if is_admin and task_result.get('status') == 'cancelled':
+            if task_result.get('error_message') == '内容道德审查未通过' or \
+               '所有页面内容道德审查未通过' in str(task_result.get('error_message', '')):
+                from models.database import page_result_model, task_model
+                task_data = await task_model.get_task(task_id)
+
+                if task_data:
+                    page_results = await page_result_model.get_task_page_results(task_id)
+
+                    if task_data['task_type'] == 'image_ocr':
+                        # 图片任务：返回原始内容
+                        if page_results:
+                            task_result['content'] = page_results[0].get('content', '')
+                            task_result['admin_view'] = True
+                    else:
+                        # PDF任务：返回所有页面（包括审查失败的）
+                        contents = []
+                        for page_result in page_results:
+                            content = page_result.get('content', '')
+                            if content:
+                                contents.append(content)
+                        task_result['content'] = '\n\n'.join(contents)
+                        task_result['admin_view'] = True
 
         # 只在异常情况下记录日志
         if task_result.get('status') == 'completed' and not task_result.get('content'):
@@ -2688,14 +2717,14 @@ async def get_recovery_stats_api():
     """获取错误恢复统计API"""
     if not task_manager:
         raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
+
     try:
         stats = await task_manager.get_system_stats()
         system_health = stats.get('system_health', {})
-        
+
         recovery_stats = system_health.get('recovery_manager', {})
         error_stats = system_health.get('error_handler', {})
-        
+
         return JSONResponse({
             "status": "success",
             "data": {
@@ -2711,9 +2740,204 @@ async def get_recovery_stats_api():
                 }
             }
         })
-        
+
     except Exception as e:
         logger.error(f"获取错误恢复统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 审查配置管理接口（仅管理员）
+@app.get(f"/{PASSWORD}/api/moderation/config" if PASSWORD else "/api/moderation/config")
+async def get_moderation_config_api(request: Request):
+    """获取审查配置（仅管理员）"""
+    # 验证管理员权限
+    user = await auth_manager_instance.get_current_user(request)
+    if not user or not user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+    from core.content_moderator import get_moderation_config
+    config = get_moderation_config()
+
+    return JSONResponse({
+        "status": "success",
+        "data": config.get_all_config()
+    })
+
+@app.post(f"/{PASSWORD}/api/moderation/config" if PASSWORD else "/api/moderation/config")
+async def update_moderation_config_api(request: Request):
+    """更新审查配置（运行时，重启失效）（仅管理员）"""
+    # 验证管理员权限
+    user = await auth_manager_instance.get_current_user(request)
+    if not user or not user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+    try:
+        data = await request.json()
+
+        from core.content_moderator import get_moderation_config
+        config = get_moderation_config()
+
+        # 更新运行时配置
+        config.update_runtime(data)
+
+        logger.info(f"管理员 {user['username']} 更新了审查配置（运行时）: {data}")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "审查配置已更新（仅本次运行有效，重启后恢复ENV配置）",
+            "data": config.get_all_config()
+        })
+
+    except Exception as e:
+        logger.error(f"更新审查配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/moderation/config/reset" if PASSWORD else "/api/moderation/config/reset")
+async def reset_moderation_config_api(request: Request):
+    """重置审查配置为ENV默认值（仅管理员）"""
+    # 验证管理员权限
+    user = await auth_manager_instance.get_current_user(request)
+    if not user or not user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+    try:
+        from core.content_moderator import get_moderation_config
+        config = get_moderation_config()
+
+        # 重置运行时配置
+        config.reset_runtime()
+
+        logger.info(f"管理员 {user['username']} 重置了审查配置为ENV默认值")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "审查配置已重置为ENV默认值",
+            "data": config.get_all_config()
+        })
+
+    except Exception as e:
+        logger.error(f"重置审查配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/moderation/logs" if PASSWORD else "/api/moderation/logs")
+async def get_moderation_logs_api(
+    request: Request,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
+    """获取审查日志（仅管理员）"""
+    # 验证管理员权限
+    user = await auth_manager_instance.get_current_user(request)
+    if not user or not user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+    try:
+        from models.database import db_manager
+        async with db_manager.get_connection() as db:
+            # 查询审查日志
+            async with db.execute("""
+                SELECT
+                    ml.*,
+                    t.file_name,
+                    t.status as task_status,
+                    u.username
+                FROM moderation_logs ml
+                LEFT JOIN tasks t ON ml.task_id = t.id
+                LEFT JOIN users u ON t.user_id = u.id
+                ORDER BY ml.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (limit, offset)) as cursor:
+                rows = await cursor.fetchall()
+
+                logs = []
+                for row in rows:
+                    logs.append({
+                        "id": row[0],
+                        "task_id": row[1],
+                        "page_number": row[2],
+                        "action": row[3],
+                        "risk_level": row[4],
+                        "violation_types": json.loads(row[5]) if row[5] else [],
+                        "reason": row[6],
+                        "original_content": row[7][:200] if row[7] else None,  # 只返回前200字符
+                        "created_at": row[8],
+                        "file_name": row[9] if len(row) > 9 else None,
+                        "task_status": row[10] if len(row) > 10 else None,
+                        "username": row[11] if len(row) > 11 else None
+                    })
+
+            # 获取总数
+            async with db.execute("SELECT COUNT(*) FROM moderation_logs") as cursor:
+                total_row = await cursor.fetchone()
+                total = total_row[0] if total_row else 0
+
+        return JSONResponse({
+            "status": "success",
+            "data": {
+                "logs": logs,
+                "total": total,
+                "limit": limit,
+                "offset": offset
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"获取审查日志失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/moderation/stats" if PASSWORD else "/api/moderation/stats")
+async def get_moderation_stats_api(request: Request):
+    """获取审查统计（仅管理员）"""
+    # 验证管理员权限
+    user = await auth_manager_instance.get_current_user(request)
+    if not user or not user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+    try:
+        from models.database import db_manager
+        async with db_manager.get_connection() as db:
+            # 总审查次数
+            async with db.execute("SELECT COUNT(*) FROM moderation_logs") as cursor:
+                total_row = await cursor.fetchone()
+                total = total_row[0] if total_row else 0
+
+            # 动作分布
+            async with db.execute("""
+                SELECT action, COUNT(*) as count
+                FROM moderation_logs
+                GROUP BY action
+            """) as cursor:
+                action_rows = await cursor.fetchall()
+                action_dist = {row[0]: row[1] for row in action_rows}
+
+            # 风险等级分布
+            async with db.execute("""
+                SELECT risk_level, COUNT(*) as count
+                FROM moderation_logs
+                GROUP BY risk_level
+            """) as cursor:
+                risk_rows = await cursor.fetchall()
+                risk_dist = {row[0]: row[1] for row in risk_rows}
+
+            # 最近24小时审查次数
+            async with db.execute("""
+                SELECT COUNT(*) FROM moderation_logs
+                WHERE datetime(created_at) >= datetime('now', '-1 day')
+            """) as cursor:
+                recent_row = await cursor.fetchone()
+                recent_24h = recent_row[0] if recent_row else 0
+
+        return JSONResponse({
+            "status": "success",
+            "data": {
+                "total": total,
+                "action_distribution": action_dist,
+                "risk_distribution": risk_dist,
+                "recent_24h": recent_24h
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"获取审查统计失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 # 新增：异步任务提交端点
 @app.post(f"/{PASSWORD}/api/async/image" if PASSWORD else "/api/async/image")

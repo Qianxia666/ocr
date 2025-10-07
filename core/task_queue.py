@@ -571,10 +571,14 @@ class WorkerPool:
 
                     processing_time = time.time() - start_time
 
+                    # 检查是否为审查失败
+                    is_moderation_failed = isinstance(result, dict) and result.get('moderation_failed') == True
+
                     await self.task_queue.task_done(
                         task_item.task_id,
-                        success=True,
-                        result_summary=result if isinstance(result, dict) else None
+                        success=not is_moderation_failed,  # 审查失败标记为失败
+                        result_summary=result if isinstance(result, dict) else None,
+                        final_status=TaskStatus.CANCELLED if is_moderation_failed else None
                     )
 
                     async with self._lock:

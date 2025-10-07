@@ -13,9 +13,10 @@ import base64
 from enum import Enum
 
 from models.database import (
-    TaskStatus, TaskType, task_model, page_result_model, 
+    TaskStatus, TaskType, task_model, page_result_model,
     task_progress_model, page_batch_model
 )
+from core.content_moderator import ContentModerator, ModerationFailedException, get_moderation_config
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,9 @@ class PageProcessor:
         self._runtime_config = runtime_config
         # 保存静态API配置
         self.api_config = api_config or {}
+
+        # 初始化内容审查器
+        self.moderator = ContentModerator(get_moderation_config())
 
         # 固定配置(不会变化的)
         self.max_concurrent_pages = self.api_config.get('concurrency', 5)
@@ -541,8 +545,8 @@ class PageProcessor:
             pix = None
             page = None
             
-            # 调用OCR API，支持重试
-            content = await self._call_ocr_api_with_retry(image_data, semaphore)
+            # 调用OCR API，支持重试（传递task_id用于审查）
+            content = await self._call_ocr_api_with_retry(image_data, semaphore, task_id=task_id)
             processing_time = time.time() - page_start_time
             
             # 更新页面结果
@@ -562,7 +566,36 @@ class PageProcessor:
                 'content_length': len(content) if content else 0,
                 'processing_time': processing_time
             }
-            
+
+        except ModerationFailedException as moderation_exc:
+            # 审查失败 - 特殊处理
+            processing_time = time.time() - page_start_time
+            logger.warning(f"页面内容审查未通过 {task_id}-{page_number}: {moderation_exc.details}")
+
+            # 保存原始内容(仅后端可见)
+            await page_result_model.update_page_result(
+                task_id, page_number, 'cancelled',
+                content=moderation_exc.original_content,
+                error_message='内容道德审查未通过',
+                processing_time=processing_time,
+                batch_id=batch_id
+            )
+
+            # 保存审查日志
+            await self._save_moderation_log(
+                task_id, page_number, 'block',
+                moderation_exc.details,
+                moderation_exc.original_content
+            )
+
+            return {
+                'success': False,
+                'moderation_failed': True,  # 特殊标记
+                'page_number': page_number,
+                'error': '内容道德审查未通过',
+                'processing_time': processing_time
+            }
+
         except Exception as e:
             processing_time = time.time() - page_start_time
             logger.error(f"页面处理失败 {task_id}-{page_number}: {e}")
@@ -603,7 +636,7 @@ class PageProcessor:
         else:
             return base_dpi
     
-    async def _call_ocr_api_with_retry(self, image_data: bytes, semaphore: asyncio.Semaphore) -> str:
+    async def _call_ocr_api_with_retry(self, image_data: bytes, semaphore: asyncio.Semaphore, task_id: str = None) -> str:
         """调用OCR API，包含增强的重试与诊断信息"""
         last_exception: Optional[Exception] = None
         retry_count = 0
@@ -619,8 +652,11 @@ class PageProcessor:
                         break
 
                 async with semaphore:
-                    content = await self._make_ocr_request(image_data)
+                    content = await self._make_ocr_request(image_data, task_id=task_id)
                     return content
+            except ModerationFailedException:
+                # 审查失败异常不重试，直接抛出
+                raise
             except Exception as exc:
                 last_exception = exc
                 attempt_errors.append({
@@ -771,8 +807,28 @@ class PageProcessor:
             self._session = aiohttp.ClientSession(timeout=timeout)
             return self._session
 
-    async def _make_ocr_request(self, image_data: bytes) -> str:
-        """Send OCR request with shared session and response validation"""
+    async def _get_user_is_admin_from_task(self, task_id: str) -> bool:
+        """通过task_id查询用户是否为管理员"""
+        try:
+            task_data = await task_model.get_task(task_id)
+            if not task_data or not task_data.get('user_id'):
+                return False
+
+            # 直接查询数据库获取用户信息
+            from models.database import db_manager
+            async with db_manager.get_connection() as db:
+                async with db.execute(
+                    "SELECT is_admin FROM users WHERE id = ?",
+                    (task_data['user_id'],)
+                ) as cursor:
+                    user_row = await cursor.fetchone()
+                    return bool(user_row[0]) if user_row else False
+        except Exception as e:
+            logger.warning(f"查询用户管理员权限失败 {task_id}: {e}")
+            return False
+
+    async def _make_ocr_request(self, image_data: bytes, task_id: str = None) -> str:
+        """Send OCR request with shared session, response validation and content moderation"""
         api_base_url = self.api_config.get('api_base_url', 'https://api.openai.com')
         api_key = self.api_config.get('api_key')
         model = self.api_config.get('model', 'gpt-4o')
@@ -846,18 +902,67 @@ class PageProcessor:
                     logger.warning('OCR返回内容为空')
                     raise Exception('OCR返回内容为空')
 
-                return parsed_content
+                # ========== 内容道德审查 ==========
+                # 查询用户是否为管理员
+                user_is_admin = False
+                if task_id:
+                    user_is_admin = await self._get_user_is_admin_from_task(task_id)
+
+                try:
+                    action, moderated_content, details = await self.moderator.moderate_content(
+                        content=parsed_content,
+                        task_id=task_id,
+                        user_is_admin=user_is_admin
+                    )
+                    # 审查通过，返回内容
+                    return moderated_content
+                except ModerationFailedException as e:
+                    # 审查未通过，直接向上抛出异常（包含原始内容）
+                    raise
+                # ==================================
 
             error_text = (await response.text())[:500]
             if response.status in (401, 403):
                 raise Exception(f'认证失败, 状态码: {response.status}, 响应: {error_text}')
             raise Exception(f'API请求失败, 状态码: {response.status}, 响应: {error_text}')
+        except ModerationFailedException:
+            # 审查失败异常直接向上抛出
+            raise
         except asyncio.TimeoutError as exc:
             logger.warning('API请求超时: %s', exc)
             raise Exception('API请求超时') from exc
         except aiohttp.ClientError as exc:
             logger.warning('API请求网络错误: %s', exc)
             raise Exception(f'API请求网络错误: {exc}') from exc
+
+    async def _save_moderation_log(self, task_id: str, page_number: int,
+                                   action: str, details: Dict[str, Any],
+                                   original_content: str = None):
+        """保存审查日志到数据库"""
+        try:
+            from models.database import db_manager
+            from datetime import datetime, timezone
+            import json
+
+            async with db_manager.get_connection() as db:
+                await db.execute("""
+                    INSERT INTO moderation_logs
+                    (task_id, page_number, action, risk_level, violation_types, reason, original_content, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    task_id,
+                    page_number,
+                    action,
+                    details.get('risk_level', 'high'),
+                    json.dumps(details.get('violation_types', []), ensure_ascii=False),
+                    details.get('reason', ''),
+                    original_content,
+                    datetime.now(timezone.utc).isoformat()
+                ))
+                await db.commit()
+                logger.info(f"审查日志已保存 {task_id}-{page_number}")
+        except Exception as e:
+            logger.error(f"保存审查日志失败 {task_id}: {e}")
 
     async def close(self) -> None:
         """关闭内部持有的 HTTP 会话"""
