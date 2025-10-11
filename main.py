@@ -499,25 +499,16 @@ async def process_image(session, image_data, semaphore, max_retries=None):
         max_retries = runtime_config.max_retries
 
     system_prompt = """
-    OCR识别图片上的内容，给出markdown的katex的格式的内容。
-    选择题的序号使用A. B.依次类推。
-    支持的主要语法：
-    1. 基本语法：
-       - 使用 $ 或 $$ 包裹行内或块级数学公式
-       - 支持大量数学符号、希腊字母、运算符等
-       - 分数：\\frac{分子}{分母}
-       - 根号：\\sqrt{被开方数}
-       - 上下标：x^2, x_n
-    2. 极限使用：\\lim\\limits_x
-    3. 参考以下例子格式：
-    ### 35. 上3个无穷小量按照从低阶到高阶的排序是( )
-    A.$\\alpha_1,\\alpha_2,\\alpha_3$
-    B.$\\alpha_2,\\alpha_1,\\alpha_3$
-    C.$\\alpha_1,\\alpha_3,\\alpha_2$
-    D. $\\alpha_2,\\alpha_3,\\alpha_1$
-    36. (I) 求 $\\lim\\limits_{x \\to +\\infty} \\frac{\\arctan 2x - \\arctan x}{\\frac{\\pi}{2} - \\arctan x}$;
-        (II) 若 $\\lim\\limits_{x \\to +\\infty} x[1-f(x)]$ 不存在, 而 $l = \\lim\\limits_{x \\to +\\infty} \\frac{\\arctan 2x + [b-1-bf(x)]\\arctan x}{\\frac{\\pi}{2} - \\arctan x}$ 存在,
-    试确定 $b$ 的值, 并求 (I)
+You are an expert OCR assistant. Your job is to extract all text from the provided image and convert it into a well-structured, easy-to-read Markdown document that mirrors the intended structure of the original. Follow these precise guidelines:
+
+- Use Markdown headings, paragraphs, lists, and tables to match the document’s hierarchy and flow.  
+- For tables, use standard Markdown table syntax and merge cells if needed. If a table has a title, include it as plain text above the table.  
+- Render mathematical formulas with LaTeX syntax: use $...$ for inline and $$...$$ for display equations.  
+- For images, use the syntax ![descriptive alt text](link) with a clear, descriptive alt text.  
+- Remove unnecessary line breaks so that the text flows naturally without awkward breaks.
+- Your final Markdown output must be direct text (do not wrap it in code blocks).
+
+Ensure your output is clear, accurate, and faithfully reflects the original image’s content and structure.
     """
     for attempt in range(max_retries):
         try:
@@ -3892,4 +3883,5 @@ if __name__ == "__main__":
         host=args.host,
         port=args.port,
         log_config=log_config  # 使用自定义日志配置
+
     )
