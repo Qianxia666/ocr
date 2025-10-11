@@ -140,6 +140,30 @@ class DatabaseManager:
                 )
             """)
 
+            # 创建用户协议表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_agreements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+            # 创建用户协议接受记录表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_agreement_acceptance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    agreement_id INTEGER NOT NULL,
+                    accepted_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id),
+                    FOREIGN KEY (agreement_id) REFERENCES user_agreements (id)
+                )
+            """)
+
             # 初始化系统设置（如果不存在）
             await db.execute("""
                 INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
@@ -175,6 +199,92 @@ class DatabaseManager:
                 INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
                 VALUES ('turnstile_enabled', ?, 'Cloudflare Turnstile 人机验证开关', ?)
             """, (turnstile_enabled_default, datetime.now(timezone.utc).isoformat()))
+
+            # 初始化广播系统配置
+            now = datetime.now(timezone.utc).isoformat()
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('broadcast_enabled', 'false', '广播条开关', ?)
+            """, (now,))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('broadcast_message', '欢迎使用OCR系统!', '广播内容', ?)
+            """, (now,))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('broadcast_link', '', '广播链接(可选)', ?)
+            """, (now,))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('broadcast_type', 'info', '广播样式类型(info/warning/success)', ?)
+            """, (now,))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('broadcast_closable', 'true', '是否可关闭', ?)
+            """, (now,))
+
+            # 初始化公告系统配置
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('announcement_enabled', 'false', '公告功能开关', ?)
+            """, (now,))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('announcement_content', '# 欢迎使用本系统！\n\n请注意及时保存您的工作。', '公告内容(Markdown格式)', ?)
+            """, (now,))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('announcement_type', 'info', '公告样式类型(info/warning/success/error)', ?)
+            """, (now,))
+
+            await db.execute("""
+                INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                VALUES ('announcement_closable', 'true', '是否可关闭', ?)
+            """, (now,))
+
+            # 初始化默认用户协议
+            await db.execute("""
+                INSERT OR IGNORE INTO user_agreements (id, content, version, is_active, created_at, updated_at)
+                VALUES (1, ?, 1, 1, ?, ?)
+            """, (
+                """# 用户服务协议
+
+欢迎使用本OCR服务平台!
+
+## 1. 服务说明
+本平台提供基于AI的光学字符识别(OCR)服务,支持图片和PDF文件的文字提取。
+
+## 2. 用户责任
+- 用户应保证上传的文件内容合法合规
+- 禁止上传包含违法、暴力、色情等不良信息的文件
+- 禁止滥用服务进行恶意攻击或其他违法行为
+
+## 3. 隐私保护
+- 我们重视您的隐私保护
+- 上传的文件仅用于OCR处理,不会用于其他用途
+- 处理完成后文件将被安全删除
+
+## 4. 服务限制
+- 平台可能会对单个用户的使用量进行限制
+- 管理员有权暂停或终止违规用户的服务
+
+## 5. 免责声明
+- 本服务按"现状"提供,不保证100%的识别准确率
+- 因服务使用产生的任何后果由用户自行承担
+
+## 6. 协议修改
+本协议可能会不定期更新,请定期查看最新版本。
+
+感谢您的使用!""",
+                now,
+                now
+            ))
 
             # 创建任务表
             await db.execute("""
@@ -318,6 +428,12 @@ class DatabaseManager:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_ip_tracking_user_id ON ocr_ip_tracking (user_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_ip_tracking_client_ip ON ocr_ip_tracking (client_ip)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_ip_tracking_created_at ON ocr_ip_tracking (created_at)")
+
+            # 用户协议表索引
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_user_agreements_is_active ON user_agreements (is_active)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_user_agreements_version ON user_agreements (version)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_user_agreement_acceptance_user_id ON user_agreement_acceptance (user_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_user_agreement_acceptance_agreement_id ON user_agreement_acceptance (agreement_id)")
 
             # 检查并迁移旧数据：如果tasks表存在但没有user_id列，则添加
             try:
@@ -1284,6 +1400,177 @@ class IPTrackingModel:
             logger.error(f"重置IP滥用检测配置失败: {e}")
             return False
 
+
+class UserAgreementModel:
+    """用户协议模型,提供用户协议相关的数据库操作"""
+
+    def __init__(self, db_manager):
+        self.db_manager = db_manager
+
+    async def get_active_agreement(self) -> Optional[Dict[str, Any]]:
+        """获取当前激活的用户协议"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("""
+                    SELECT * FROM user_agreements
+                    WHERE is_active = 1
+                    ORDER BY version DESC
+                    LIMIT 1
+                """) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        agreement = dict(row)
+                        agreement['is_active'] = bool(agreement['is_active'])
+                        return agreement
+                    return None
+        except Exception as e:
+            logger.error(f"获取当前用户协议失败: {e}")
+            return None
+
+    async def get_agreement_by_id(self, agreement_id: int) -> Optional[Dict[str, Any]]:
+        """根据ID获取用户协议"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("""
+                    SELECT * FROM user_agreements WHERE id = ?
+                """, (agreement_id,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        agreement = dict(row)
+                        agreement['is_active'] = bool(agreement['is_active'])
+                        return agreement
+                    return None
+        except Exception as e:
+            logger.error(f"获取用户协议失败 {agreement_id}: {e}")
+            return None
+
+    async def create_agreement(self, content: str) -> Optional[int]:
+        """创建新的用户协议并将其设为激活状态"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                # 1. 获取当前最大版本号
+                async with db.execute("""
+                    SELECT MAX(version) FROM user_agreements
+                """) as cursor:
+                    row = await cursor.fetchone()
+                    max_version = row[0] if row[0] else 0
+                    new_version = max_version + 1
+
+                # 2. 停用所有旧协议
+                await db.execute("""
+                    UPDATE user_agreements SET is_active = 0
+                """)
+
+                # 3. 插入新协议
+                now = datetime.now(timezone.utc).isoformat()
+                cursor = await db.execute("""
+                    INSERT INTO user_agreements (content, version, is_active, created_at, updated_at)
+                    VALUES (?, ?, 1, ?, ?)
+                """, (content, new_version, now, now))
+
+                await db.commit()
+                logger.info(f"创建新用户协议成功,版本: {new_version}, ID: {cursor.lastrowid}")
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"创建用户协议失败: {e}")
+            return None
+
+    async def update_agreement(self, content: str) -> bool:
+        """更新当前激活的用户协议内容"""
+        try:
+            # 第一步: 先获取当前激活的协议(独立连接)
+            active_agreement = await self.get_active_agreement()
+            if not active_agreement:
+                # 如果没有激活协议,创建新的
+                return await self.create_agreement(content) is not None
+
+            # 第二步: 使用独立连接更新协议(避免死锁)
+            async with self.db_manager.get_connection() as db:
+                now = datetime.now(timezone.utc).isoformat()
+                await db.execute("""
+                    UPDATE user_agreements
+                    SET content = ?, updated_at = ?
+                    WHERE id = ?
+                """, (content, now, active_agreement['id']))
+
+                await db.commit()
+                logger.info(f"更新用户协议成功,ID: {active_agreement['id']}")
+                return True
+        except Exception as e:
+            logger.error(f"更新用户协议失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
+            return False
+
+    async def record_acceptance(self, user_id: str, agreement_id: int) -> bool:
+        """记录用户接受协议"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                # 检查是否已经接受过该版本
+                async with db.execute("""
+                    SELECT COUNT(*) FROM user_agreement_acceptance
+                    WHERE user_id = ? AND agreement_id = ?
+                """, (user_id, agreement_id)) as cursor:
+                    row = await cursor.fetchone()
+                    if row and row[0] > 0:
+                        # 已经接受过,不重复记录
+                        return True
+
+                # 插入接受记录
+                now = datetime.now(timezone.utc).isoformat()
+                await db.execute("""
+                    INSERT INTO user_agreement_acceptance (user_id, agreement_id, accepted_at)
+                    VALUES (?, ?, ?)
+                """, (user_id, agreement_id, now))
+
+                await db.commit()
+                logger.info(f"用户 {user_id} 接受协议 {agreement_id}")
+                return True
+        except Exception as e:
+            logger.error(f"记录用户接受协议失败 {user_id}, {agreement_id}: {e}")
+            return False
+
+    async def has_user_accepted_current(self, user_id: str) -> bool:
+        """检查用户是否已接受当前激活的协议"""
+        try:
+            active_agreement = await self.get_active_agreement()
+            if not active_agreement:
+                return True  # 如果没有激活协议,默认通过
+
+            async with self.db_manager.get_connection() as db:
+                async with db.execute("""
+                    SELECT COUNT(*) FROM user_agreement_acceptance
+                    WHERE user_id = ? AND agreement_id = ?
+                """, (user_id, active_agreement['id'])) as cursor:
+                    row = await cursor.fetchone()
+                    return row and row[0] > 0
+        except Exception as e:
+            logger.error(f"检查用户接受状态失败 {user_id}: {e}")
+            return False
+
+    async def get_all_agreements(self) -> List[Dict[str, Any]]:
+        """获取所有协议版本(用于管理)"""
+        try:
+            async with self.db_manager.get_connection() as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("""
+                    SELECT * FROM user_agreements
+                    ORDER BY version DESC
+                """) as cursor:
+                    rows = await cursor.fetchall()
+                    agreements = []
+                    for row in rows:
+                        agreement = dict(row)
+                        agreement['is_active'] = bool(agreement['is_active'])
+                        agreements.append(agreement)
+                    return agreements
+        except Exception as e:
+            logger.error(f"获取所有协议失败: {e}")
+            return []
+
+
 # 全局数据库管理器实例
 db_manager = DatabaseManager()
 task_model = TaskModel(db_manager)
@@ -1291,6 +1578,7 @@ page_result_model = PageResultModel(db_manager)
 task_progress_model = TaskProgressModel(db_manager)
 page_batch_model = PageBatchModel(db_manager)
 ip_tracking_model = IPTrackingModel(db_manager)
+user_agreement_model = UserAgreementModel(db_manager)
 
 async def init_database():
     """初始化数据库"""

@@ -6,6 +6,10 @@
   <title>{{ title }}</title>
   <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Markdown 渲染库 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+  <!-- Markdown 样式 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.5.1/github-markdown.min.css">
   <style>
     /* 文字对比度增强 */
     body .text-gray-800 {
@@ -64,6 +68,94 @@
       width: 1.25rem;
       height: 1.25rem;
       flex-shrink: 0;
+    }
+
+    /* 公告预览 Markdown 样式 */
+    #preview-announcement-content.markdown-body {
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    #preview-announcement-content.markdown-body h1,
+    #preview-announcement-content.markdown-body h2,
+    #preview-announcement-content.markdown-body h3,
+    #preview-announcement-content.markdown-body h4,
+    #preview-announcement-content.markdown-body h5,
+    #preview-announcement-content.markdown-body h6 {
+      margin-top: 16px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    #preview-announcement-content.markdown-body h1 {
+      font-size: 1.5em;
+      border-bottom: 1px solid currentColor;
+      padding-bottom: 6px;
+    }
+
+    #preview-announcement-content.markdown-body h2 {
+      font-size: 1.25em;
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+      padding-bottom: 4px;
+    }
+
+    #preview-announcement-content.markdown-body h3 {
+      font-size: 1.1em;
+    }
+
+    #preview-announcement-content.markdown-body p {
+      margin: 8px 0;
+    }
+
+    #preview-announcement-content.markdown-body ul,
+    #preview-announcement-content.markdown-body ol {
+      margin: 8px 0;
+      padding-left: 2em;
+    }
+
+    #preview-announcement-content.markdown-body li {
+      margin: 4px 0;
+    }
+
+    #preview-announcement-content.markdown-body code {
+      background: rgba(0,0,0,0.1);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+
+    #preview-announcement-content.markdown-body pre {
+      background: rgba(0,0,0,0.05);
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+
+    #preview-announcement-content.markdown-body pre code {
+      background: transparent;
+      padding: 0;
+    }
+
+    #preview-announcement-content.markdown-body blockquote {
+      border-left: 4px solid currentColor;
+      padding-left: 16px;
+      margin: 12px 0;
+      opacity: 0.8;
+    }
+
+    #preview-announcement-content.markdown-body a {
+      text-decoration: underline;
+      opacity: 0.9;
+    }
+
+    #preview-announcement-content.markdown-body strong {
+      font-weight: 600;
+    }
+
+    #preview-announcement-content.markdown-body em {
+      font-style: italic;
     }
   </style>
 </head>
@@ -169,9 +261,147 @@
               </div>
             </div>
 
-            <!-- 说明信息 -->
-            <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
-              <p class="text-xs text-blue-700"><strong>检测机制：</strong>系统每5分钟自动检测一次，当同一IP在设定时间窗口内被多个账户用于OCR时，将自动封停这些账户。</p>
+          </div>
+
+          <!-- 用户协议设置 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="text-lg font-semibold text-gray-800">用户协议管理</h3>
+                <p class="text-sm text-gray-600 mt-1">编辑在登录和注册页面展示的用户协议(支持 Markdown 格式)</p>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">协议内容 (Markdown 格式)</label>
+                <textarea id="agreement-editor"
+                          rows="12"
+                          placeholder="# 用户服务协议&#10;&#10;欢迎使用本OCR服务平台!&#10;&#10;## 1. 服务说明&#10;..."
+                          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm"></textarea>
+                <p class="text-xs text-gray-500 mt-1">支持 Markdown 语法,包括标题(#)、列表(-)、粗体(**)等</p>
+              </div>
+
+              <div class="flex gap-3">
+                <button onclick="saveAgreement()"
+                        class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                  保存协议
+                </button>
+                <button onclick="previewAgreement()"
+                        class="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                  预览效果
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 系统公告管理 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="text-lg font-semibold text-gray-800">系统公告管理</h3>
+                <p class="text-sm text-gray-600 mt-1">在主页和工作页面顶部显示全局公告（支持 Markdown 格式）</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <button id="announcement-toggle"
+                        onclick="toggleAnnouncement()"
+                        class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"></span>
+                </button>
+                <span id="announcement-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
+              </div>
+            </div>
+
+            <div id="announcement-settings" class="space-y-3 hidden">
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">公告内容 (Markdown 格式) <span class="text-red-500">*</span></label>
+                <textarea id="announcement-editor"
+                          rows="8"
+                          placeholder="# 系统公告&#10;&#10;欢迎使用本系统！&#10;&#10;**重要提醒**：请及时保存您的工作..."
+                          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm"></textarea>
+                <p class="text-xs text-gray-500 mt-1">支持 Markdown 语法，包括标题(#)、粗体(**)、链接等</p>
+              </div>
+
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">公告样式</label>
+                <select id="announcement-type"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                  <option value="info">信息（蓝色）</option>
+                  <option value="warning">警告（黄色）</option>
+                  <option value="success">成功（绿色）</option>
+                  <option value="error">错误（红色）</option>
+                </select>
+              </div>
+
+              <div class="flex items-center">
+                <input type="checkbox" id="announcement-closable"
+                       class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                <label for="announcement-closable" class="ml-2 text-sm font-semibold text-gray-800">
+                  允许用户关闭公告
+                </label>
+              </div>
+
+              <div class="flex gap-3">
+                <button onclick="saveAnnouncementSettings()"
+                        class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                  保存公告设置
+                </button>
+                <button onclick="previewAnnouncement()"
+                        class="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                  预览效果
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 广播通知栏设置 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="text-lg font-semibold text-gray-800">广播通知栏</h3>
+                <p class="text-sm text-gray-600 mt-1">在主页和工作页面顶部显示全局通知消息</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <button id="broadcast-toggle"
+                        onclick="toggleBroadcast()"
+                        class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"></span>
+                </button>
+                <span id="broadcast-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
+              </div>
+            </div>
+
+            <div id="broadcast-settings" class="space-y-3 hidden">
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">广播内容 <span class="text-red-500">*</span></label>
+                <input id="broadcast-message"
+                       type="text"
+                       maxlength="200"
+                       placeholder="请输入广播消息内容(最多200字符)"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <p class="text-xs text-gray-500 mt-1">剩余: <span id="message-count">200</span> 字符</p>
+              </div>
+
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">可选链接</label>
+                <input id="broadcast-link"
+                       type="url"
+                       placeholder="https://example.com"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+              </div>
+
+              <div class="flex items-center">
+                <input type="checkbox" id="broadcast-closable"
+                       class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                <label for="broadcast-closable" class="ml-2 text-sm font-semibold text-gray-800">
+                  允许用户关闭广播条
+                </label>
+              </div>
+
+              <button onclick="saveBroadcastSettings()"
+                      class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                保存广播设置
+              </button>
             </div>
           </div>
         </div>
@@ -610,12 +840,408 @@
       }
     }
 
+    // ==================== 用户协议管理功能 ====================
+
+    async function loadAgreement() {
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/user-agreement`);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.agreement) {
+          const editorInput = document.getElementById('agreement-editor');
+          if (editorInput) {
+            editorInput.value = data.agreement.content || '';
+          }
+        }
+      } catch (error) {
+        console.error('加载用户协议失败:', error);
+      }
+    }
+
+    async function saveAgreement() {
+      const editorInput = document.getElementById('agreement-editor');
+      if (!editorInput) {
+        alert('协议编辑器未找到');
+        return;
+      }
+
+      const content = editorInput.value.trim();
+      if (!content) {
+        alert('协议内容不能为空');
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/user-agreement`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ content })
+        });
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          alert('用户协议已保存');
+        } else {
+          alert('保存失败: ' + (data.message || '未知错误'));
+        }
+      } catch (error) {
+        console.error('保存用户协议失败:', error);
+        alert('保存失败，请重试');
+      }
+    }
+
+    function previewAgreement() {
+      const content = document.getElementById('agreement-editor').value.trim();
+      if (!content) {
+        alert('请先输入协议内容');
+        return;
+      }
+
+      // 创建预览弹窗
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50';
+      modal.innerHTML = `
+        <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+          <div class="p-4 border-b flex justify-between items-center">
+            <h3 class="text-lg font-bold text-gray-800">协议预览</h3>
+            <button onclick="this.closest('.fixed').remove()" class="text-gray-500 hover:text-gray-700">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="p-6 overflow-y-auto flex-1">
+            <div id="preview-content" class="markdown-body" style="padding: 1rem;"></div>
+          </div>
+          <div class="p-4 border-t">
+            <button onclick="this.closest('.fixed').remove()" class="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-lg">
+              关闭
+            </button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      // 使用 marked 渲染 Markdown (需要先加载库)
+      if (typeof marked !== 'undefined') {
+        document.getElementById('preview-content').innerHTML = marked.parse(content);
+      } else {
+        // 如果 marked 未加载,显示纯文本
+        document.getElementById('preview-content').textContent = content;
+        alert('Markdown 渲染库未加载,显示为纯文本');
+      }
+    }
+
+    // ==================== 公告管理功能 ====================
+
+    async function loadAnnouncementSettings() {
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/announcement/config`);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+          const enabled = data.enabled;
+          const toggle = document.getElementById('announcement-toggle');
+          const status = document.getElementById('announcement-status');
+          const settings = document.getElementById('announcement-settings');
+
+          // 更新开关状态
+          if (enabled) {
+            toggle.classList.add('bg-blue-500');
+            toggle.classList.remove('bg-gray-300');
+            toggle.querySelector('span').classList.add('translate-x-6');
+            status.textContent = '已启用';
+            status.classList.add('text-blue-600');
+            status.classList.remove('text-gray-600');
+            settings.classList.remove('hidden');
+          } else {
+            toggle.classList.add('bg-gray-300');
+            toggle.classList.remove('bg-blue-500');
+            toggle.querySelector('span').classList.remove('translate-x-6');
+            status.textContent = '已禁用';
+            status.classList.add('text-gray-600');
+            status.classList.remove('text-blue-600');
+            settings.classList.add('hidden');
+          }
+
+          // 填充表单
+          const editorInput = document.getElementById('announcement-editor');
+          const typeSelect = document.getElementById('announcement-type');
+          const closableCheckbox = document.getElementById('announcement-closable');
+
+          if (editorInput) editorInput.value = data.content || '';
+          if (typeSelect) typeSelect.value = data.type || 'info';
+          if (closableCheckbox) closableCheckbox.checked = data.closable || false;
+        }
+      } catch (error) {
+        console.error('加载公告设置失败:', error);
+      }
+    }
+
+    async function toggleAnnouncement() {
+      const toggle = document.getElementById('announcement-toggle');
+      const isEnabled = toggle.classList.contains('bg-blue-500');
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/announcement`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            announcement_enabled: !isEnabled
+          })
+        });
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          await loadAnnouncementSettings();
+          alert('公告功能' + (!isEnabled ? '已启用' : '已禁用'));
+        } else {
+          alert('操作失败: ' + data.message);
+        }
+      } catch (error) {
+        console.error('切换公告状态失败:', error);
+        alert('操作失败');
+      }
+    }
+
+    async function saveAnnouncementSettings() {
+      const editorInput = document.getElementById('announcement-editor');
+      const typeSelect = document.getElementById('announcement-type');
+      const closableCheckbox = document.getElementById('announcement-closable');
+
+      if (!editorInput) {
+        alert('公告编辑器未找到');
+        return;
+      }
+
+      const content = editorInput.value.trim();
+      if (!content) {
+        alert('请输入公告内容');
+        return;
+      }
+
+      const settings = {
+        announcement_content: content,
+        announcement_type: typeSelect ? typeSelect.value : 'info',
+        announcement_closable: closableCheckbox ? closableCheckbox.checked : true
+      };
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/announcement`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(settings)
+        });
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          alert('公告设置已保存并推送更新');
+        } else {
+          alert('保存失败: ' + data.message);
+        }
+      } catch (error) {
+        console.error('保存公告设置失败:', error);
+        alert('保存失败');
+      }
+    }
+
+    function previewAnnouncement() {
+      const content = document.getElementById('announcement-editor').value.trim();
+      if (!content) {
+        alert('请先输入公告内容');
+        return;
+      }
+
+      const type = document.getElementById('announcement-type').value;
+      const closable = document.getElementById('announcement-closable').checked;
+
+      // 创建预览窗口
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50';
+
+      const typeStyles = {
+        'info': { bg: '#dbeafe', text: '#1e40af', label: '信息' },
+        'warning': { bg: '#fef3c7', text: '#92400e', label: '警告' },
+        'success': { bg: '#d1fae5', text: '#065f46', label: '成功' },
+        'error': { bg: '#fee2e2', text: '#991b1b', label: '错误' }
+      };
+      const style = typeStyles[type];
+
+      modal.innerHTML = `
+        <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+          <div class="p-4 border-b flex justify-between items-center">
+            <h3 class="text-lg font-bold text-gray-800">公告预览</h3>
+            <button onclick="this.closest('.fixed').remove()" class="text-gray-500 hover:text-gray-700">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="p-6 overflow-y-auto flex-1">
+            <div id="preview-announcement-content" class="markdown-body" style="padding: 1rem;"></div>
+          </div>
+          <div class="p-4 border-t">
+            <button onclick="this.closest('.fixed').remove()" class="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-lg">
+              关闭
+            </button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      // 渲染Markdown
+      if (typeof marked !== 'undefined') {
+        document.getElementById('preview-announcement-content').innerHTML = marked.parse(content);
+      } else {
+        document.getElementById('preview-announcement-content').textContent = content;
+      }
+    }
+
+    // 通知提示函数
+    function showNotification(message, type) {
+      // 使用简洁的alert提示
+      alert(message);
+    }
+
     // 页面加载时
+    // 广播管理功能
+    async function loadBroadcastSettings() {
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/broadcast/config`);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+          const enabled = data.enabled;
+          const toggle = document.getElementById('broadcast-toggle');
+          const status = document.getElementById('broadcast-status');
+          const settings = document.getElementById('broadcast-settings');
+
+          // 更新开关状态
+          if (enabled) {
+            toggle.classList.add('bg-blue-500');
+            toggle.classList.remove('bg-gray-300');
+            toggle.querySelector('span').classList.add('translate-x-6');
+            status.textContent = '已启用';
+            status.classList.add('text-blue-600');
+            status.classList.remove('text-gray-600');
+            settings.classList.remove('hidden');
+          } else {
+            toggle.classList.add('bg-gray-300');
+            toggle.classList.remove('bg-blue-500');
+            toggle.querySelector('span').classList.remove('translate-x-6');
+            status.textContent = '已禁用';
+            status.classList.add('text-gray-600');
+            status.classList.remove('text-blue-600');
+            settings.classList.add('hidden');
+          }
+
+          // 填充表单
+          const messageInput = document.getElementById('broadcast-message');
+          const linkInput = document.getElementById('broadcast-link');
+          const closableCheckbox = document.getElementById('broadcast-closable');
+
+          if (messageInput) messageInput.value = data.message || '';
+          if (linkInput) linkInput.value = data.link || '';
+          if (closableCheckbox) closableCheckbox.checked = data.closable || false;
+
+          updateMessageCount();
+        }
+      } catch (error) {
+        console.error('加载广播设置失败:', error);
+      }
+    }
+
+    async function toggleBroadcast() {
+      const toggle = document.getElementById('broadcast-toggle');
+      const isEnabled = toggle.classList.contains('bg-blue-500');
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/broadcast`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            broadcast_enabled: !isEnabled
+          })
+        });
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          await loadBroadcastSettings();
+          showNotification('广播条' + (!isEnabled ? '已启用' : '已禁用'), 'success');
+        } else {
+          showNotification('操作失败: ' + data.message, 'error');
+        }
+      } catch (error) {
+        console.error('切换广播状态失败:', error);
+        showNotification('操作失败', 'error');
+      }
+    }
+
+    async function saveBroadcastSettings() {
+      const messageInput = document.getElementById('broadcast-message');
+      const linkInput = document.getElementById('broadcast-link');
+      const closableCheckbox = document.getElementById('broadcast-closable');
+
+      if (!messageInput) {
+        alert('广播消息输入框未找到');
+        return;
+      }
+
+      const message = messageInput.value.trim();
+      if (!message) {
+        alert('请输入广播内容');
+        return;
+      }
+
+      const settings = {
+        broadcast_message: message,
+        broadcast_link: linkInput ? linkInput.value.trim() : '',
+        broadcast_closable: closableCheckbox ? closableCheckbox.checked : true
+      };
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/broadcast`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(settings)
+        });
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          showNotification('广播设置已保存并推送更新', 'success');
+        } else {
+          showNotification('保存失败: ' + data.message, 'error');
+        }
+      } catch (error) {
+        console.error('保存广播设置失败:', error);
+        showNotification('保存失败', 'error');
+      }
+    }
+
+    function updateMessageCount() {
+      const input = document.getElementById('broadcast-message');
+      const count = document.getElementById('message-count');
+      if (input && count) {
+        count.textContent = 200 - input.value.length;
+      }
+    }
+
+    // 监听输入变化
+    document.addEventListener('DOMContentLoaded', function() {
+      const messageInput = document.getElementById('broadcast-message');
+      if (messageInput) {
+        messageInput.addEventListener('input', updateMessageCount);
+      }
+    });
+
     window.addEventListener('load', () => {
       loadRegistrationStatus();
       loadRuntimeConfig();
       loadIpAbuseSettings();
-      loadTurnstileSettings();  // 新增
+      loadTurnstileSettings();
+      loadAnnouncementSettings();  // 加载公告设置
+      loadBroadcastSettings();
+      loadAgreement();  // 加载用户协议
     });
   </script>
 </body>

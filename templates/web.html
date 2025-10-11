@@ -214,9 +214,127 @@
       z-index: 1;
     }
 
+    /* 公告模态框 Markdown 样式 */
+    #announcement-modal-content.markdown-body {
+      background: transparent;
+      font-size: 14px;
+      line-height: 1.8;
+      color: #1f2937;
+    }
+
+    #announcement-modal-content.markdown-body h1 {
+      font-size: 1.5em;
+      margin-top: 0;
+      margin-bottom: 16px;
+      border-bottom: 1px solid #d1d5db;
+      padding-bottom: 8px;
+    }
+
+    #announcement-modal-content.markdown-body h2 {
+      font-size: 1.25em;
+      margin-top: 24px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 6px;
+    }
+
+    #announcement-modal-content.markdown-body h3 {
+      font-size: 1.1em;
+      margin-top: 20px;
+      margin-bottom: 10px;
+    }
+
+    #announcement-modal-content.markdown-body p {
+      margin-top: 0;
+      margin-bottom: 12px;
+    }
+
+    #announcement-modal-content.markdown-body ul,
+    #announcement-modal-content.markdown-body ol {
+      margin-top: 0;
+      margin-bottom: 12px;
+      padding-left: 2em;
+    }
+
+    #announcement-modal-content.markdown-body li {
+      margin-top: 4px;
+    }
+
+    #announcement-modal-content.markdown-body code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+
+    #announcement-modal-content.markdown-body pre {
+      background: #f3f4f6;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+
+    #announcement-modal-content.markdown-body pre code {
+      background: transparent;
+      padding: 0;
+    }
+
+    #announcement-modal-content.markdown-body blockquote {
+      border-left: 4px solid #d1d5db;
+      padding-left: 16px;
+      margin: 12px 0;
+      color: #6b7280;
+    }
+
+    #announcement-modal-content.markdown-body a {
+      color: #3b82f6;
+      text-decoration: underline;
+    }
+
+    #announcement-modal-content.markdown-body a:hover {
+      color: #2563eb;
+    }
+
+    #announcement-modal-content.markdown-body strong {
+      font-weight: 600;
+    }
+
+    #announcement-modal-content.markdown-body em {
+      font-style: italic;
+    }
+
+    #announcement-modal-content.markdown-body hr {
+      border: none;
+      border-top: 1px solid #e5e7eb;
+      margin: 20px 0;
+    }
+
+    #announcement-modal-content.markdown-body table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 12px 0;
+    }
+
+    #announcement-modal-content.markdown-body table th,
+    #announcement-modal-content.markdown-body table td {
+      border: 1px solid #d1d5db;
+      padding: 8px 12px;
+      text-align: left;
+    }
+
+    #announcement-modal-content.markdown-body table th {
+      background: #f3f4f6;
+      font-weight: 600;
+    }
+
+
   </style>
   <!-- 引入 KaTeX 样式 -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.css">
+  <!-- 引入 GitHub Markdown 样式 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.5.1/github-markdown.min.css">
 </head>
 <body class="h-screen flex flex-col overflow-hidden" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 50%, #dbeafe 100%);">
   <!-- 顶栏 -->
@@ -292,6 +410,33 @@
         </div>
     </div>
   </header>
+
+  <!-- 公告模态框 -->
+  <div id="announcement-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px);">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col">
+      <!-- 标题栏 -->
+      <div id="announcement-modal-header" class="px-6 py-4 border-b flex items-center gap-3">
+        <svg id="announcement-modal-icon" class="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+        </svg>
+        <h2 class="text-xl font-bold flex-1">系统公告</h2>
+      </div>
+
+      <!-- 公告内容区域 -->
+      <div class="flex-1 overflow-y-auto px-6 py-6">
+        <div id="announcement-modal-content" class="markdown-body"></div>
+      </div>
+
+      <!-- 底部按钮 -->
+      <div class="px-6 py-4 border-t flex justify-end gap-3">
+        <button id="announcement-agree-btn"
+                onclick="agreeAnnouncement()"
+                class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-all transform hover:scale-105 shadow-lg">
+          我已知晓
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- 主内容区 -->
   <div class="flex-1 overflow-hidden">
@@ -538,7 +683,9 @@
           // 检查任务状态
           const backurl = "{{ backurl }}";
           const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
-          const response = await fetch(`${baseUrl}/api/tasks/${taskId}`);
+          const response = await fetch(`${baseUrl}/api/tasks/${taskId}`, {
+            credentials: 'include'
+          });
           const data = await response.json();
 
           if (data.status === "success" && data.data) {
@@ -617,7 +764,9 @@
       try {
         const backurl = "{{ backurl }}";
         const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
-        const response = await fetch(`${baseUrl}/api/tasks/${taskId}/result`);
+        const response = await fetch(`${baseUrl}/api/tasks/${taskId}/result`, {
+          credentials: 'include'
+        });
         const data = await response.json();
 
         if (data.status === "success" && data.data) {
@@ -680,7 +829,9 @@
       console.log("正在加载任务列表:", apiUrl);
 
       try {
-        const response = await fetch(apiUrl);
+        const response = await fetch(apiUrl, {
+          credentials: 'include'
+        });
         const data = await response.json();
 
         console.log("任务列表响应:", data);
@@ -804,7 +955,9 @@
       const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
 
       try {
-        const response = await fetch(`${baseUrl}/api/tasks/${taskId}/result`);
+        const response = await fetch(`${baseUrl}/api/tasks/${taskId}/result`, {
+          credentials: 'include'
+        });
         const data = await response.json();
 
         if (data.status === "success" && data.data && data.data.status === 'completed') {
@@ -1022,6 +1175,12 @@
         console.log('任务状态更新，刷新任务列表');
         loadTasks();
       }
+      // 处理公告更新消息
+      else if (message.type === 'announcement_updated') {
+        console.log('收到公告更新通知，清除已同意记录并重新加载公告');
+        localStorage.removeItem('announcement_agreed'); // 清除已同意状态
+        loadAnnouncement();
+      }
     }
 
     // 订阅任务更新（可选功能，供后续扩展使用）
@@ -1034,10 +1193,125 @@
       }
     }
 
+    // 公告管理功能（弹窗模态框形式）
+    let announcementConfig = null;
+
+    // 生成公告内容的简单哈希值（用于判断是否已读）
+    function simpleHash(str) {
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+      }
+      return hash.toString();
+    }
+
+    async function loadAnnouncement() {
+      try {
+        const backurl = "{{ backurl }}";
+        const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
+        const response = await fetch(`${baseUrl}/api/announcement/config`);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.enabled) {
+          announcementConfig = data;
+          showAnnouncement();
+        }
+      } catch (error) {
+        console.error('加载公告失败:', error);
+      }
+    }
+
+    function showAnnouncement() {
+      if (!announcementConfig || !announcementConfig.enabled) return;
+
+      // 只有在允许关闭的情况下才检查 localStorage
+      if (announcementConfig.closable) {
+        // 计算公告内容的哈希值
+        const contentHash = simpleHash(announcementConfig.content);
+        const agreedHash = localStorage.getItem('announcement_agreed');
+
+        // 如果用户已经同意过此版本的公告，则不再显示
+        if (agreedHash === contentHash) {
+          console.log('用户已同意此版本公告，跳过显示');
+          return;
+        }
+      }
+      // 如果不允许关闭，则不检查 localStorage，每次都会显示弹窗
+
+      const modal = document.getElementById('announcement-modal');
+      const content = document.getElementById('announcement-modal-content');
+      const header = document.getElementById('announcement-modal-header');
+      const icon = document.getElementById('announcement-modal-icon');
+
+      // 设置样式类型
+      const typeStyles = {
+        'info': { bg: '#dbeafe', text: '#1e40af', icon: '#3b82f6', title: '系统公告' },
+        'warning': { bg: '#fef3c7', text: '#92400e', icon: '#f59e0b', title: '重要提醒' },
+        'success': { bg: '#d1fae5', text: '#065f46', icon: '#10b981', title: '通知' },
+        'error': { bg: '#fee2e2', text: '#991b1b', icon: '#ef4444', title: '紧急公告' }
+      };
+      const style = typeStyles[announcementConfig.type] || typeStyles['info'];
+
+      // 设置标题栏样式
+      header.style.background = style.bg;
+      header.style.color = style.text;
+      icon.style.color = style.icon;
+      header.querySelector('h2').textContent = style.title;
+
+      // 渲染Markdown内容
+      if (typeof marked !== 'undefined') {
+        content.innerHTML = marked.parse(announcementConfig.content);
+      } else {
+        content.textContent = announcementConfig.content;
+      }
+
+      // 根据 closable 参数控制关闭按钮的显示
+      const agreeBtn = document.getElementById('announcement-agree-btn');
+      if (announcementConfig.closable) {
+        agreeBtn.style.display = 'block';
+        console.log('公告允许关闭，显示"我已知晓"按钮');
+      } else {
+        agreeBtn.style.display = 'none';
+        console.log('公告不允许关闭，隐藏"我已知晓"按钮，用户无法关闭弹窗');
+      }
+
+      // 显示模态框
+      modal.classList.remove('hidden');
+
+      // 禁用页面滚动
+      document.body.style.overflow = 'hidden';
+    }
+
+    function agreeAnnouncement() {
+      if (!announcementConfig) return;
+
+      // 只有在允许关闭时才能关闭弹窗
+      if (!announcementConfig.closable) {
+        console.log('公告不允许关闭，忽略关闭请求');
+        return;
+      }
+
+      const modal = document.getElementById('announcement-modal');
+      const contentHash = simpleHash(announcementConfig.content);
+
+      // 记录用户已同意此版本公告
+      localStorage.setItem('announcement_agreed', contentHash);
+      console.log('用户已同意公告，哈希值已保存:', contentHash);
+
+      // 隐藏模态框
+      modal.classList.add('hidden');
+
+      // 恢复页面滚动
+      document.body.style.overflow = '';
+    }
+
     // 页面加载时自动加载任务列表和用户信息
     window.addEventListener('load', () => {
       loadTasks();
       loadUserInfo();
+      loadAnnouncement();  // 加载公告
 
       // 连接 WebSocket 实现实时更新
       connectWebSocket();

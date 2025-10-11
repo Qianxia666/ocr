@@ -922,7 +922,8 @@ async def root_page(request: Request, response: Response):
                 "model": MODEL,
                 "max_image_size_mb": runtime_config.max_image_size_mb,
                 "max_pdf_size_mb": runtime_config.max_pdf_size_mb,
-                "max_pdf_pages": runtime_config.max_pdf_pages
+                "max_pdf_pages": runtime_config.max_pdf_pages,
+                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
             }
         )
 
@@ -1405,6 +1406,56 @@ async def get_system_stats_api():
     except Exception as e:
         logger.error(f"获取系统统计失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/{PASSWORD}/api/broadcast/config" if PASSWORD else "/api/broadcast/config")
+async def get_broadcast_config():
+    """获取广播条配置 - 所有用户可访问"""
+    try:
+        from models.database import db_manager
+        async with db_manager.get_connection() as db:
+            cursor = await db.execute("""
+                SELECT key, value FROM system_settings
+                WHERE key IN ('broadcast_enabled', 'broadcast_message', 'broadcast_link', 'broadcast_type', 'broadcast_closable')
+            """)
+            rows = await cursor.fetchall()
+            config = {row[0]: row[1] for row in rows}
+
+        return JSONResponse({
+            "status": "success",
+            "enabled": config.get('broadcast_enabled') == 'true',
+            "message": config.get('broadcast_message', ''),
+            "link": config.get('broadcast_link', ''),
+            "type": config.get('broadcast_type', 'info'),
+            "closable": config.get('broadcast_closable') == 'true'
+        })
+    except Exception as e:
+        logger.error(f"获取广播配置失败: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get(f"/{PASSWORD}/api/announcement/config" if PASSWORD else "/api/announcement/config")
+async def get_announcement_config():
+    """获取公告配置 - 所有用户可访问"""
+    try:
+        from models.database import db_manager
+        async with db_manager.get_connection() as db:
+            cursor = await db.execute("""
+                SELECT key, value FROM system_settings
+                WHERE key IN ('announcement_enabled', 'announcement_content',
+                             'announcement_type', 'announcement_closable')
+            """)
+            rows = await cursor.fetchall()
+            config = {row[0]: row[1] for row in rows}
+
+        return JSONResponse({
+            "status": "success",
+            "enabled": config.get('announcement_enabled') == 'true',
+            "content": config.get('announcement_content', ''),
+            "type": config.get('announcement_type', 'info'),
+            "closable": config.get('announcement_closable') == 'true'
+        })
+    except Exception as e:
+        logger.error(f"获取公告配置失败: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 # ==================== 认证 API 端点 ====================
 
@@ -2221,6 +2272,192 @@ async def get_frontend_config_api():
     except Exception as e:
         logger.error(f"获取前端配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"/{PASSWORD}/api/admin/settings/broadcast" if PASSWORD else "/api/admin/settings/broadcast")
+async def update_broadcast_settings(request: Request):
+    """更新广播条配置 - 仅管理员"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+        data = await request.json()
+
+        from models.database import db_manager
+        now = datetime.now().isoformat()
+        async with db_manager.get_connection() as db:
+            # 更新所有广播相关配置 - 使用 INSERT OR REPLACE 确保key存在
+            for key in ['broadcast_enabled', 'broadcast_message', 'broadcast_link', 'broadcast_type', 'broadcast_closable']:
+                if key in data:
+                    value = str(data[key]).lower() if isinstance(data[key], bool) else str(data[key])
+                    await db.execute(
+                        "INSERT OR REPLACE INTO system_settings (key, value, updated_at, description) VALUES (?, ?, ?, ?)",
+                        (key, value, now, f'{key}配置')
+                    )
+            await db.commit()
+
+        # 通过WebSocket推送更新通知 (添加安全检查)
+        if websocket_manager:
+            try:
+                await websocket_manager.broadcast({
+                    'type': 'broadcast_updated',
+                    'message': '广播条配置已更新'
+                })
+            except Exception as ws_error:
+                logger.warning(f"WebSocket广播失败(非致命): {ws_error}")
+        else:
+            logger.warning("WebSocket管理器未初始化,跳过广播")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "广播设置已保存并推送更新"
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"更新广播配置失败: {e}")
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        logger.error(f"请求数据: {data if 'data' in locals() else 'N/A'}")
+        return JSONResponse({"status": "error", "message": f"更新失败: {str(e)}"}, status_code=500)
+
+@app.post(f"/{PASSWORD}/api/admin/settings/announcement" if PASSWORD else "/api/admin/settings/announcement")
+async def update_announcement_settings(request: Request):
+    """更新公告配置 - 仅管理员"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+        data = await request.json()
+
+        from models.database import db_manager
+        now = datetime.now().isoformat()
+        async with db_manager.get_connection() as db:
+            # 更新所有公告相关配置 - 使用 INSERT OR REPLACE 确保key存在
+            for key in ['announcement_enabled', 'announcement_content',
+                       'announcement_type', 'announcement_closable']:
+                if key in data:
+                    value = str(data[key]).lower() if isinstance(data[key], bool) else str(data[key])
+                    await db.execute(
+                        "INSERT OR REPLACE INTO system_settings (key, value, updated_at, description) VALUES (?, ?, ?, ?)",
+                        (key, value, now, f'{key}配置')
+                    )
+            await db.commit()
+
+        # 通过WebSocket推送更新通知 (添加安全检查)
+        if websocket_manager:
+            try:
+                await websocket_manager.broadcast({
+                    'type': 'announcement_updated',
+                    'message': '公告配置已更新'
+                })
+            except Exception as ws_error:
+                logger.warning(f"WebSocket广播失败(非致命): {ws_error}")
+        else:
+            logger.warning("WebSocket管理器未初始化,跳过广播")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "公告设置已保存并推送更新"
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"更新公告配置失败: {e}")
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        logger.error(f"请求数据: {data if 'data' in locals() else 'N/A'}")
+        return JSONResponse({"status": "error", "message": f"更新失败: {str(e)}"}, status_code=500)
+
+
+# ==================== 用户协议管理API ====================
+
+@app.get(f"/{PASSWORD}/api/admin/settings/user-agreement" if PASSWORD else "/api/admin/settings/user-agreement")
+async def get_user_agreement_admin(request: Request):
+    """获取当前用户协议 - 管理员接口"""
+    try:
+        await auth_manager_instance.require_admin(request)
+        from models.database import user_agreement_model
+
+        agreement = await user_agreement_model.get_active_agreement()
+        if not agreement:
+            return JSONResponse({
+                "status": "success",
+                "agreement": None,
+                "message": "暂无用户协议"
+            })
+
+        return JSONResponse({
+            "status": "success",
+            "agreement": {
+                "id": agreement['id'],
+                "content": agreement['content'],
+                "version": agreement['version'],
+                "created_at": agreement['created_at'],
+                "updated_at": agreement['updated_at']
+            }
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"获取用户协议失败: {e}")
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        return JSONResponse({"status": "error", "message": f"获取失败: {str(e)}"}, status_code=500)
+
+
+@app.post(f"/{PASSWORD}/api/admin/settings/user-agreement" if PASSWORD else "/api/admin/settings/user-agreement")
+async def update_user_agreement_admin(request: Request):
+    """更新用户协议 - 管理员接口"""
+    try:
+        await auth_manager_instance.require_admin(request)
+        data = await request.json()
+        content = data.get('content', '').strip()
+
+        if not content:
+            raise HTTPException(status_code=400, detail="协议内容不能为空")
+
+        from models.database import user_agreement_model
+        success = await user_agreement_model.update_agreement(content)
+
+        if success:
+            return JSONResponse({
+                "status": "success",
+                "message": "用户协议已更新"
+            })
+        else:
+            raise HTTPException(status_code=500, detail="更新用户协议失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"更新用户协议失败: {e}")
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        logger.error(f"请求内容长度: {len(content) if 'content' in locals() else 'N/A'}")
+        return JSONResponse({"status": "error", "message": f"更新失败: {str(e)}"}, status_code=500)
+
+
+@app.get("/api/user-agreement/current")
+async def get_current_user_agreement():
+    """获取当前激活的用户协议 - 公开接口"""
+    try:
+        from models.database import user_agreement_model
+        agreement = await user_agreement_model.get_active_agreement()
+
+        if not agreement:
+            return JSONResponse({
+                "status": "success",
+                "agreement": None,
+                "message": "暂无用户协议"
+            })
+
+        return JSONResponse({
+            "status": "success",
+            "agreement": {
+                "id": agreement['id'],
+                "content": agreement['content'],
+                "version": agreement['version']
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取用户协议失败: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 
 # ==================== 注册令牌管理API ====================
 

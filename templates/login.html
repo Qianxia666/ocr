@@ -6,14 +6,18 @@
     <title>登录 - {{ title }}</title>
     <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Markdown 渲染库 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+    <!-- Markdown 样式 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.5.1/github-markdown.min.css">
     <!-- Cloudflare Turnstile -->
     {% if turnstile_enabled %}
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     {% endif %}
     <style>
-        /* 强制蓝色背景渐变 */
+        /* 深蓝色渐变背景 - 与整体主题色匹配 */
         .blue-gradient-bg {
-            background: linear-gradient(to bottom right, #2563eb, #4f46e5) !important;
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 50%, #2563eb 100%) !important;
         }
 
         /* Cloudflare Turnstile 样式定制 */
@@ -34,7 +38,7 @@
     <!-- 左侧蓝色主题区域 -->
     <div class="hidden md:flex md:w-1/2 blue-gradient-bg relative overflow-hidden">
         <!-- 装饰性背景元素 -->
-        <div class="absolute inset-0 opacity-10">
+        <div class="absolute inset-0 opacity-20">
             <div class="absolute top-20 left-20 w-64 h-64 bg-white rounded-full blur-3xl"></div>
             <div class="absolute bottom-20 right-20 w-96 h-96 bg-white rounded-full blur-3xl"></div>
         </div>
@@ -52,7 +56,7 @@
             <!-- 底部 GitHub 链接 -->
             <div>
                 <a href="https://github.com/Qianxia666/ocr" target="_blank"
-                   class="inline-flex items-center gap-2 text-white hover:text-blue-200 transition-colors group">
+                   class="inline-flex items-center gap-2 text-white hover:text-cyan-300 transition-colors group">
                     <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
                     </svg>
@@ -103,6 +107,15 @@
                          data-size="flexible"></div>
                     {% endif %}
                     <input type="hidden" id="login-turnstile-token">
+                    <!-- 用户协议复选框 -->
+                    <div class="flex items-start gap-2">
+                        <input type="checkbox" id="login-agree" required
+                               class="mt-1 w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                        <label for="login-agree" class="text-sm text-gray-700">
+                            我已阅读并同意
+                            <a href="#" onclick="showAgreement(event)" class="text-blue-600 hover:underline">《用户协议》</a>
+                        </label>
+                    </div>
                     <button type="submit"
                             class="w-full bg-blue-600 text-white py-2.5 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors">
                         登录
@@ -138,6 +151,15 @@
                          data-size="flexible"></div>
                     {% endif %}
                     <input type="hidden" id="register-turnstile-token">
+                    <!-- 用户协议复选框 -->
+                    <div class="flex items-start gap-2">
+                        <input type="checkbox" id="register-agree" required
+                               class="mt-1 w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                        <label for="register-agree" class="text-sm text-gray-700">
+                            我已阅读并同意
+                            <a href="#" onclick="showAgreement(event)" class="text-blue-600 hover:underline">《用户协议》</a>
+                        </label>
+                    </div>
                     <button type="submit"
                             class="w-full bg-blue-600 text-white py-2.5 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors">
                         注册
@@ -161,6 +183,33 @@
         </div>
     </div>
 
+    <!-- 用户协议弹窗 -->
+    <div id="agreement-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
+        <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h3 class="text-lg font-bold text-gray-800">用户协议</h3>
+                <button onclick="closeAgreement()" class="text-gray-500 hover:text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto flex-1">
+                <div id="agreement-content" class="markdown-body" style="font-size: 0.875rem;"></div>
+            </div>
+            <div class="p-4 border-t flex gap-3">
+                <button onclick="acceptAndClose()"
+                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg font-medium transition-colors">
+                    同意并继续
+                </button>
+                <button onclick="closeAgreement()"
+                        class="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-700 py-2 px-4 rounded-lg font-medium transition-colors">
+                    关闭
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const baseUrl = window.location.origin;
         const registrationEnabled = {% if registration_enabled %}true{% else %}false{% endif %};
@@ -170,6 +219,58 @@
         const loginForm = document.getElementById('login-form');
         const registerForm = document.getElementById('register-form');
         const messageDiv = document.getElementById('message');
+
+        // ==================== 用户协议功能 ====================
+
+        let currentFormType = 'login';  // 记录当前表单类型
+
+        async function showAgreement(event) {
+            event.preventDefault();
+            try {
+                const response = await fetch(`${baseUrl}/api/user-agreement/current`);
+                const data = await response.json();
+
+                if (data.status === 'success' && data.agreement) {
+                    const content = data.agreement.content;
+                    const modal = document.getElementById('agreement-modal');
+                    const contentDiv = document.getElementById('agreement-content');
+
+                    // 使用 marked 渲染 Markdown (兼容多版本)
+                    if (typeof marked !== 'undefined') {
+                        if (typeof marked.parse === 'function') {
+                            contentDiv.innerHTML = marked.parse(content);
+                        } else if (typeof marked === 'function') {
+                            contentDiv.innerHTML = marked(content);
+                        } else {
+                            console.error('marked库加载异常');
+                            contentDiv.innerHTML = content.replace(/\n/g, '<br>');
+                        }
+                    } else {
+                        console.warn('marked库未加载,使用纯文本显示');
+                        contentDiv.innerHTML = content.replace(/\n/g, '<br>');
+                    }
+
+                    modal.classList.remove('hidden');
+                } else {
+                    alert('暂无用户协议');
+                }
+            } catch (error) {
+                console.error('加载用户协议失败:', error);
+                alert('加载用户协议失败,请稍后重试');
+            }
+        }
+
+        function closeAgreement() {
+            document.getElementById('agreement-modal').classList.add('hidden');
+        }
+
+        function acceptAndClose() {
+            // 自动勾选当前活跃表单的协议复选框
+            const loginFormActive = !loginForm.classList.contains('hidden');
+            const checkboxId = loginFormActive ? 'login-agree' : 'register-agree';
+            document.getElementById(checkboxId).checked = true;
+            closeAgreement();
+        }
 
         // Turnstile 验证成功回调
         function onLoginTurnstileSuccess(token) {
@@ -222,9 +323,15 @@
             const username = document.getElementById('login-username').value.trim();
             const password = document.getElementById('login-password').value;
             const turnstileToken = document.getElementById('login-turnstile-token').value.trim();
+            const agreed = document.getElementById('login-agree').checked;
 
             if (!username || !password) {
                 showMessage('请输入用户名和密码', true);
+                return;
+            }
+
+            if (!agreed) {
+                showMessage('请先阅读并同意用户协议', true);
                 return;
             }
 
@@ -261,9 +368,15 @@
                 const password = document.getElementById('register-password').value;
                 const passwordConfirm = document.getElementById('register-password-confirm').value;
                 const turnstileToken = document.getElementById('register-turnstile-token').value.trim();
+                const agreed = document.getElementById('register-agree').checked;
 
                 if (!username || !password || !passwordConfirm) {
                     showMessage('请填写所有字段', true);
+                    return;
+                }
+
+                if (!agreed) {
+                    showMessage('请先阅读并同意用户协议', true);
                     return;
                 }
 
