@@ -540,11 +540,21 @@ class PageProcessor:
                 png_data = pix.tobytes("png")
                 buffer.write(png_data)
                 image_data = buffer.getvalue()
-            
+
             # 立即释放内存
             pix = None
             page = None
-            
+
+            # 压缩图片（如果配置了压缩比例）
+            # 只压缩大于1MB的图片，避免对小图片的无谓开销
+            MIN_COMPRESS_SIZE = 1 * 1024 * 1024  # 1MB
+            if (self._runtime_config and
+                hasattr(self._runtime_config, 'image_compression_ratio') and
+                len(image_data) > MIN_COMPRESS_SIZE):
+                compression_ratio = self._runtime_config.image_compression_ratio
+                if compression_ratio < 1.0:
+                    image_data = self._compress_image(image_data, compression_ratio)
+
             # 调用OCR API，支持重试（传递task_id用于审查）
             content = await self._call_ocr_api_with_retry(image_data, semaphore, task_id=task_id)
             processing_time = time.time() - page_start_time
@@ -620,14 +630,14 @@ class PageProcessor:
         rect = page.rect
         width, height = rect.width, rect.height
         page_area = width * height
-        
+
         # 基础DPI
         base_dpi = self.api_config.get('pdf_dpi', 200)
-        
+
         # 根据内存优化策略调整
         if strategy.get('memory_optimization', False):
             base_dpi = min(base_dpi, 150)  # 降低DPI以节省内存
-        
+
         # 根据页面大小调整DPI
         if page_area > 500000:  # 大页面
             return max(120, base_dpi - 50)
@@ -635,6 +645,49 @@ class PageProcessor:
             return min(250, base_dpi + 30)
         else:
             return base_dpi
+
+    def _compress_image(self, image_data: bytes, compression_ratio: float) -> bytes:
+        """
+        压缩图片到指定比例
+        :param image_data: 原始图片数据
+        :param compression_ratio: 压缩比例(0.1-1.0)，如0.2表示压缩到原尺寸的20%
+        :return: 压缩后的图片数据
+        """
+        try:
+            # 如果压缩比例为1.0，直接返回原图
+            if compression_ratio >= 1.0:
+                return image_data
+
+            # 限制压缩比例范围
+            compression_ratio = max(0.1, min(1.0, compression_ratio))
+
+            # 打开图片
+            with BytesIO(image_data) as input_buffer:
+                img = Image.open(input_buffer)
+
+                # 计算新尺寸
+                original_width, original_height = img.size
+                new_width = int(original_width * compression_ratio)
+                new_height = int(original_height * compression_ratio)
+
+                # 压缩图片（使用LANCZOS算法保证质量）
+                compressed_img = img.resize((new_width, new_height), Image.LANCZOS)
+
+                # 转换为字节
+                with BytesIO() as output_buffer:
+                    compressed_img.save(output_buffer, format='PNG')
+                    compressed_data = output_buffer.getvalue()
+
+                size_saved_percent = (1 - len(compressed_data) / len(image_data)) * 100
+                logger.info(f"图片压缩完成: {original_width}x{original_height} -> {new_width}x{new_height}, "
+                           f"原大小: {len(image_data)//1024}KB, 压缩后: {len(compressed_data)//1024}KB, "
+                           f"节省: {size_saved_percent:.1f}%")
+
+                return compressed_data
+
+        except Exception as e:
+            logger.warning(f"图片压缩失败，使用原图: {e}")
+            return image_data
     
     async def _call_ocr_api_with_retry(self, image_data: bytes, semaphore: asyncio.Semaphore, task_id: str = None) -> str:
         """调用OCR API，包含增强的重试与诊断信息"""

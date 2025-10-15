@@ -73,6 +73,9 @@ MAX_IMAGE_SIZE_MB = int(os.getenv("MAX_IMAGE_SIZE_MB", 50))  # 图片文件最�
 MAX_PDF_SIZE_MB = int(os.getenv("MAX_PDF_SIZE_MB", 200))  # PDF文件最大大小(MB)
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 500))  # PDF最大页数限制
 
+# 图片压缩配置
+IMAGE_COMPRESSION_RATIO = float(os.getenv("IMAGE_COMPRESSION_RATIO", 0.2))  # 图片压缩比例(0.1-1.0)，默认0.2即20%
+
 # 运行时配置管理器
 class RuntimeConfig:
     """运行时配置管理器 - 仅保存在内存中，重启后恢复默认值"""
@@ -91,6 +94,8 @@ class RuntimeConfig:
         self.api_timeout = int(os.getenv("API_TIMEOUT", 300))
         self.api_request_timeout = int(os.getenv("API_REQUEST_TIMEOUT", 300))
         self.frontend_poll_timeout = int(os.getenv("FRONTEND_POLL_TIMEOUT", 300))
+        # 图片压缩配置
+        self.image_compression_ratio = float(os.getenv("IMAGE_COMPRESSION_RATIO", 0.2))
 
     def get_all(self) -> dict:
         """获取所有配置"""
@@ -106,7 +111,8 @@ class RuntimeConfig:
             "max_pdf_pages": self.max_pdf_pages,
             "api_timeout": self.api_timeout,
             "api_request_timeout": self.api_request_timeout,
-            "frontend_poll_timeout": self.frontend_poll_timeout
+            "frontend_poll_timeout": self.frontend_poll_timeout,
+            "image_compression_ratio": self.image_compression_ratio
         }
 
     def update(self, config: dict):
@@ -138,6 +144,11 @@ class RuntimeConfig:
         if "frontend_poll_timeout" in config:
             self.frontend_poll_timeout = int(config["frontend_poll_timeout"])
             logger.info(f"更新前端轮询超时配置: {self.frontend_poll_timeout}秒")
+        if "image_compression_ratio" in config:
+            ratio = float(config["image_compression_ratio"])
+            # 限制在0.1-1.0范围内
+            self.image_compression_ratio = max(0.1, min(1.0, ratio))
+            logger.info(f"更新图片压缩比例配置: {self.image_compression_ratio}")
 
 # 创建全局运行时配置实例
 runtime_config = RuntimeConfig()
@@ -254,10 +265,10 @@ async def lifespan(app: FastAPI):
             'image_concurrency': runtime_config.image_concurrency,
             'pdf_concurrency': runtime_config.pdf_concurrency,
             'max_retries': runtime_config.max_retries,
-            'retry_delay': RETRY_DELAY,
-            'pdf_dpi': runtime_config.pdf_dpi,
-            'api_timeout': runtime_config.api_timeout
-        }
+        'retry_delay': RETRY_DELAY,
+        'pdf_dpi': runtime_config.pdf_dpi,
+        'api_timeout': runtime_config.api_timeout,
+    }
 
         # 初始化页面处理器
         from core.page_processor import init_page_processor, is_page_processor_ready, shutdown_page_processor
@@ -269,10 +280,10 @@ async def lifespan(app: FastAPI):
             'api_key': API_KEY,
             'model': MODEL,
             'concurrency': runtime_config.concurrency,
-            'batch_size': 4,
-            'retry_delay': RETRY_DELAY,
-            'health_check_interval': 300
-        }
+        'batch_size': 4,
+        'retry_delay': RETRY_DELAY,
+        'health_check_interval': 300,
+    }
 
         # 先检查是否已经初始化，避免重复初始化
         if is_page_processor_ready():

@@ -444,6 +444,23 @@
             <p class="text-xs text-gray-500 mt-1">PDF转图片的分辨率</p>
           </div>
 
+          <!-- 图片压缩配置 -->
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="block text-sm font-semibold text-gray-800 mb-2">
+              图片压缩比例
+              <span id="compression_ratio_display" class="text-blue-600 font-mono ml-2">0.20</span>
+            </label>
+            <input id="image_compression_ratio" type="range" min="0.1" max="1.0" step="0.05" value="0.2"
+                   oninput="updateCompressionDisplay(this.value)"
+                   onchange="saveRuntimeConfig()"
+                   class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>10% (最小)</span>
+              <span>100% (原图)</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">OCR前将图片压缩到原尺寸的指定比例，降低API调用成本</p>
+          </div>
+
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">批处理大小</label>
             <input id="batch_size" type="number" min="1" max="50" onchange="saveRuntimeConfig()" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
@@ -610,9 +627,22 @@
           document.getElementById('api_timeout').value = config.api_timeout || 300;
           document.getElementById('api_request_timeout').value = config.api_request_timeout || 300;
           document.getElementById('frontend_poll_timeout').value = config.frontend_poll_timeout || 300;
+
+          // 加载图片压缩比例
+          const compressionRatio = config.image_compression_ratio || 0.2;
+          document.getElementById('image_compression_ratio').value = compressionRatio;
+          updateCompressionDisplay(compressionRatio);
         }
       } catch (err) {
         console.error("加载运行时配置失败:", err);
+      }
+    }
+
+    // 更新压缩比例显示
+    function updateCompressionDisplay(value) {
+      const display = document.getElementById('compression_ratio_display');
+      if (display) {
+        display.textContent = parseFloat(value).toFixed(2);
       }
     }
 
@@ -631,7 +661,8 @@
           max_pdf_pages: parseInt(document.getElementById('max_pdf_pages').value),
           api_timeout: parseInt(document.getElementById('api_timeout').value),
           api_request_timeout: parseInt(document.getElementById('api_request_timeout').value),
-          frontend_poll_timeout: parseInt(document.getElementById('frontend_poll_timeout').value)
+          frontend_poll_timeout: parseInt(document.getElementById('frontend_poll_timeout').value),
+          image_compression_ratio: parseFloat(document.getElementById('image_compression_ratio').value)
         };
 
         const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/config`, {

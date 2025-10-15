@@ -23,6 +23,7 @@ class SystemIntegration:
         :param runtime_config: 运行时配置对象引用
         :param websocket_manager: WebSocket管理器，用于发送通知
         """
+        self._runtime_config = runtime_config
         self.websocket_manager = websocket_manager
         self.timeout_manager = TimeoutManager(runtime_config, websocket_manager)
         self.error_handler = ErrorHandler()
@@ -56,6 +57,22 @@ class SystemIntegration:
         # self.recovery_manager.set_notification_callback(self._on_recovery_notification)
         
         logger.warning("组件回调机制暂时禁用，需要根据实际组件接口实现")
+    
+    def _resolve_max_retries(self, max_retries: Optional[int]) -> int:
+        """解析最大重试次数配置，确保返回有效值"""
+        if max_retries is not None:
+            candidate = max_retries
+        elif self._runtime_config is not None and hasattr(self._runtime_config, 'max_retries'):
+            candidate = getattr(self._runtime_config, 'max_retries')
+        else:
+            candidate = 3
+
+        try:
+            resolved = int(candidate)
+        except (TypeError, ValueError):
+            resolved = 3
+
+        return max(1, resolved)
     
     async def initialize(self):
         """初始化所有组件"""
@@ -119,7 +136,7 @@ class SystemIntegration:
                                     operation: Callable,
                                     timeout_level: TimeoutLevel = TimeoutLevel.API_REQUEST,
                                     recovery_strategy: str = "auto",
-                                    max_retries: int = 3,
+                                    max_retries: Optional[int] = None,
                                     **kwargs) -> Any:
         """
         执行受保护的操作 - 包含超时、错误处理和恢复机制
@@ -127,19 +144,22 @@ class SystemIntegration:
         :param operation: 要执行的操作
         :param timeout_level: 超时级别
         :param recovery_strategy: 恢复策略
-        :param max_retries: 最大重试次数
+        :param max_retries: 最大重试次数（总尝试次数）
         :param kwargs: 操作参数
         :return: 操作结果
         """
         checkpoint_id = None
         last_error = None
+        attempts_allowed = self._resolve_max_retries(max_retries)
         
         try:
             # 使用非递归的重试机制
-            for retry_count in range(max_retries + 1):  # +1 包括第一次尝试
+            for attempt in range(attempts_allowed):
+                timeout_context = None
+                timeout_stopped = False
                 try:
                     # 创建检查点（仅在第一次尝试时创建）
-                    if retry_count == 0:
+                    if attempt == 0:
                         from .recovery_manager import CheckpointType
                         checkpoint_id = await self.recovery_manager.create_checkpoint(
                             task_id=task_id,
@@ -150,7 +170,10 @@ class SystemIntegration:
                     
                     # 启动超时保护
                     timeout_context = await self.timeout_manager.start_timeout(
-                        task_id, timeout_level, operation.__name__
+                        timeout_id=f"{task_id}:{operation.__name__}:{attempt}",
+                        level=timeout_level,
+                        task_id=task_id,
+                        metadata={"operation": operation.__name__, "attempt": attempt}
                     )
                     
                     try:
@@ -159,6 +182,7 @@ class SystemIntegration:
                         
                         # 停止超时保护
                         await self.timeout_manager.stop_timeout(timeout_context.timeout_id)
+                        timeout_stopped = True
                         
                         # 清理检查点
                         if checkpoint_id:
@@ -179,21 +203,21 @@ class SystemIntegration:
 
                         last_error = e
                         # 处理其他错误
-                        if retry_count < max_retries:
+                        if attempt < attempts_allowed - 1:
                             recovery_result = await self.error_handler.handle_error(
                                 e, task_id, recovery_strategy
                             )
 
                             if recovery_result.should_retry:
                                 # 计算退避延迟
-                                retry_delay = min(1.0 * (2 ** retry_count), 30.0)  # 指数退避，最大30秒
-                                logger.info(f"任务 {task_id} 准备第 {retry_count + 1} 次重试，延迟 {retry_delay:.1f} 秒")
+                                retry_delay = min(1.0 * (2 ** attempt), 30.0)  # 指数退避，最大30秒
+                                logger.info(f"任务 {task_id} 准备第 {attempt + 1} 次重试，延迟 {retry_delay:.1f} 秒")
                                 await asyncio.sleep(retry_delay)
                                 continue  # 继续下一次重试
 
                         # 如果是最后一次重试或者不需要重试，抛出异常
                         raise
-                
+
                 except Exception as e:
                     # 审查失败异常直接传播，不判断重试次数
                     from core.content_moderator import ModerationFailedException
@@ -201,8 +225,14 @@ class SystemIntegration:
                         raise
 
                     # 如果所有重试都失败了，抛出最后的错误
-                    if retry_count == max_retries:
+                    if attempt == attempts_allowed - 1:
                         raise
+                finally:
+                    if timeout_context and not timeout_stopped:
+                        try:
+                            await self.timeout_manager.stop_timeout(timeout_context.timeout_id)
+                        except Exception as stop_error:
+                            logger.warning(f"ֹͣ��ʱ����ʧ�� {timeout_context.timeout_id}: {stop_error}")
             
         except Exception as e:
             # 最终异常处理
@@ -227,7 +257,10 @@ class SystemIntegration:
             
             # 启动任务级超时保护
             timeout_context = await self.timeout_manager.start_timeout(
-                task_id, TimeoutLevel.TASK_EXECUTION, f"task_{task_id}"
+                timeout_id=f"task_execution:{task_id}",
+                level=TimeoutLevel.TASK_EXECUTION,
+                task_id=task_id,
+                metadata={"total_pages": total_pages}
             )
             
             return timeout_context
@@ -256,7 +289,12 @@ class SystemIntegration:
     
     # ========== API调用保护 ==========
     
-    async def protected_api_call(self, task_id: str, api_func: Callable, *args, **kwargs):
+    async def protected_api_call(self,
+                                task_id: str,
+                                api_func: Callable,
+                                *args,
+                                max_retries: Optional[int] = None,
+                                **kwargs):
         """
         受保护的API调用 - 包含超时和重试机制
         :param task_id: 任务ID
@@ -265,11 +303,15 @@ class SystemIntegration:
         :param kwargs: 关键字参数
         :return: API调用结果
         """
+        resolved_retries = self._resolve_max_retries(
+            1 if max_retries is None else max_retries
+        )
         return await self.execute_with_protection(
             task_id=task_id,
             operation=api_func,
             timeout_level=TimeoutLevel.API_REQUEST,
             recovery_strategy="auto",
+            max_retries=resolved_retries,
             *args,
             **kwargs
         )

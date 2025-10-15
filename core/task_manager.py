@@ -126,6 +126,18 @@ class TaskManager:
         self.pdf_worker_pool.set_task_processor(self._process_task)
 
         logger.info("任务管理器初始化完成（双队列模式）")
+
+    def _get_configured_max_retries(self) -> int:
+        """获取实际生效的最大重试次数配置"""
+        if self.runtime_config is not None and hasattr(self.runtime_config, 'max_retries'):
+            try:
+                value = int(self.runtime_config.max_retries)
+            except (TypeError, ValueError):
+                value = 3
+        else:
+            value = 3
+
+        return max(1, value)
     
     async def initialize(self):
         """初始化任务管理器"""
@@ -906,7 +918,8 @@ class TaskManager:
                 task_id=task_item.task_id,
                 operation=_process_image_operation,
                 timeout_level=TimeoutLevel.PAGE_PROCESSING,
-                recovery_strategy=RecoveryStrategy.RETRY
+                recovery_strategy=RecoveryStrategy.RETRY,
+                max_retries=self._get_configured_max_retries()
             )
         else:
             return await self._process_image_task(task_item)
@@ -931,6 +944,15 @@ class TaskManager:
 
             if not image_data:
                 raise Exception('image data is empty')
+
+            # 压缩图片（如果配置了压缩比例）
+            # 只压缩大于1MB的图片，避免对小图片的无谓开销
+            MIN_COMPRESS_SIZE = 1 * 1024 * 1024  # 1MB
+            if (hasattr(self, 'runtime_config') and self.runtime_config and
+                len(image_data) > MIN_COMPRESS_SIZE):
+                compression_ratio = getattr(self.runtime_config, 'image_compression_ratio', 1.0)
+                if compression_ratio < 1.0:
+                    image_data = self._compress_image(image_data, compression_ratio)
 
             content = await self._call_ocr_api_protected(task_item.task_id, image_data)
             processing_time = time.time() - start_time
@@ -1085,7 +1107,8 @@ class TaskManager:
                 task_id=task_item.task_id,
                 operation=_process_pdf_operation,
                 timeout_level=TimeoutLevel.TASK_EXECUTION,
-                recovery_strategy=RecoveryStrategy.RETRY
+                recovery_strategy=RecoveryStrategy.RETRY,
+                max_retries=self._get_configured_max_retries()
             )
         else:
             return await self._process_pdf_task(task_item)
@@ -1738,20 +1761,63 @@ class TaskManager:
         # 获取页面尺寸
         rect = page.rect
         width, height = rect.width, rect.height
-        
+
         # 基础DPI
         base_dpi = self.api_config.get('pdf_dpi', 200)
-        
+
         # 根据页面大小调整DPI
         page_area = width * height
-        
+
         if page_area > 500000:  # 大页面
             return max(150, base_dpi - 50)  # 降低DPI
         elif page_area < 100000:  # 小页面
             return min(300, base_dpi + 50)  # 提高DPI
         else:
             return base_dpi
-    
+
+    def _compress_image(self, image_data: bytes, compression_ratio: float) -> bytes:
+        """
+        压缩图片到指定比例
+        :param image_data: 原始图片数据
+        :param compression_ratio: 压缩比例(0.1-1.0)，如0.2表示压缩到原尺寸的20%
+        :return: 压缩后的图片数据
+        """
+        try:
+            # 如果压缩比例为1.0，直接返回原图
+            if compression_ratio >= 1.0:
+                return image_data
+
+            # 限制压缩比例范围
+            compression_ratio = max(0.1, min(1.0, compression_ratio))
+
+            # 打开图片
+            with BytesIO(image_data) as input_buffer:
+                img = Image.open(input_buffer)
+
+                # 计算新尺寸
+                original_width, original_height = img.size
+                new_width = int(original_width * compression_ratio)
+                new_height = int(original_height * compression_ratio)
+
+                # 压缩图片（使用LANCZOS算法保证质量）
+                compressed_img = img.resize((new_width, new_height), Image.LANCZOS)
+
+                # 转换为字节
+                with BytesIO() as output_buffer:
+                    compressed_img.save(output_buffer, format='PNG')
+                    compressed_data = output_buffer.getvalue()
+
+                size_saved_percent = (1 - len(compressed_data) / len(image_data)) * 100
+                logger.info(f"图片压缩完成: {original_width}x{original_height} -> {new_width}x{new_height}, "
+                           f"原大小: {len(image_data)//1024}KB, 压缩后: {len(compressed_data)//1024}KB, "
+                           f"节省: {size_saved_percent:.1f}%")
+
+                return compressed_data
+
+        except Exception as e:
+            logger.warning(f"图片压缩失败，使用原图: {e}")
+            return image_data
+
     async def _call_ocr_api_protected(self, task_id: str, image_data: bytes,
                                     semaphore: Optional[asyncio.Semaphore] = None) -> str:
         """调用受保护的OCR API"""
@@ -1762,7 +1828,7 @@ class TaskManager:
 
         if system_integration:
             return await system_integration.protected_api_call(
-                task_id, _api_call_operation
+                task_id, _api_call_operation, max_retries=1
             )
         else:
             return await self._call_ocr_api(task_id, image_data, semaphore)
@@ -1833,47 +1899,70 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
 
         encoded_image = base64.b64encode(image_data).decode('utf-8')
 
+        payload: Dict[str, Any] = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Analyze the provided image and output a JSON object with a single string field named \"content\". The value must contain the recognized Markdown-formatted text without additional commentary."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{encoded_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "stream": False,
+            "model": model,
+            "temperature": 0.0,
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_p": 1,
+        }
+
         async with aiohttp.ClientSession() as session:
             response = await session.post(
                 f"{api_base_url}/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": system_prompt
-                        },
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "Analyze the provided image and output a JSON object with a single string field named \"content\". The value must contain the recognized Markdown-formatted text without additional commentary."
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/png;base64,{encoded_image}"
-                                    }
-                                }
-                            ]
-                        }
-                    ],
-                    "stream": False,
-                    "model": model,
-                    "temperature": 0.0,
-                    "presence_penalty": 0,
-                    "frequency_penalty": 0,
-                    "top_p": 1,
-                }
+                json=payload,
             )
 
             if response.status == 200:
                 result = await response.json()
-                content = result['choices'][0]['message']['content']
+                message = None
+                choices = result.get('choices')
+                if isinstance(choices, list) and choices:
+                    message = choices[0].get('message') if isinstance(choices[0], dict) else None
+
+                raw_content: Optional[str] = None
+                if isinstance(message, dict):
+                    content_field = message.get('content')
+                    if isinstance(content_field, list):
+                        text_parts: List[str] = []
+                        for block in content_field:
+                            if not isinstance(block, dict):
+                                continue
+                            block_type = block.get('type')
+                            if block_type in ('text', 'output_text') and isinstance(block.get('text'), str):
+                                text_parts.append(block['text'])
+                        raw_content = ''.join(text_parts) if text_parts else None
+                    elif isinstance(content_field, str):
+                        raw_content = content_field
+
+                if not raw_content:
+                    raise Exception("OCR模型返回内容为空或结构不支持")
 
                 # 解析返回内容
-                parsed_content = _extract_markdown_from_response(content)
+                parsed_content = _extract_markdown_from_response(raw_content)
                 if not parsed_content:
                     raise Exception("OCR返回内容为空或格式不正确")
 
@@ -1890,7 +1979,7 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
                         from models.database import task_model, db_manager
                         task_data = await task_model.get_task(task_id)
                         if task_data and task_data.get('user_id'):
-                            # 直接查询数据库获取用户信息
+                            # 直接查询数据库获取用户信�?
                             async with db_manager.get_connection() as db:
                                 async with db.execute(
                                     "SELECT is_admin FROM users WHERE id = ?",
@@ -1899,7 +1988,7 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
                                     user_row = await cursor.fetchone()
                                     user_is_admin = bool(user_row[0]) if user_row else False
                     except Exception as e:
-                        logger.warning(f"查询用户管理员权限失败 {task_id}: {e}")
+                        logger.warning(f"查询用户管理员权限失�?{task_id}: {e}")
 
                 # 执行审查
                 action, moderated_content, details = await moderator.moderate_content(
@@ -1907,13 +1996,34 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
                     task_id=task_id,
                     user_is_admin=user_is_admin
                 )
-                # 审查通过，返回内容
+                # 审查通过，返回内�?
                 return moderated_content
                 # 注意：ModerationFailedException会直接向上传播，由_process_image_task捕获处理
                 # ==================================
 
             else:
-                raise Exception(f"API请求失败, 状态码: {response.status}")
+                error_detail = ""
+                try:
+                    error_payload = await response.text()
+                    if error_payload:
+                        try:
+                            error_json = json.loads(error_payload)
+                            if isinstance(error_json, dict):
+                                error_obj = error_json.get('error')
+                                if isinstance(error_obj, dict):
+                                    message = error_obj.get('message')
+                                    if isinstance(message, str):
+                                        error_detail = message.strip()
+                                if not error_detail and isinstance(error_json.get('message'), str):
+                                    error_detail = error_json['message'].strip()
+                        except json.JSONDecodeError:
+                            error_detail = error_payload.strip()
+                except Exception as error_read_exc:
+                    logger.warning(f"读取API错误响应失败 {task_id}: {error_read_exc}")
+
+                detail_suffix = f"，错误信�? {error_detail}" if error_detail else ""
+                raise Exception(f"API请求失败, 状态码: {response.status}{detail_suffix}")
+
     
     async def _refund_task_quota(self, task: Optional[Dict[str, Any]]):
         """根据任务信息返还未消耗的配额"""

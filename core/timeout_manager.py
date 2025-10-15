@@ -3,7 +3,7 @@ import time
 import logging
 from typing import Dict, Any, Optional, Callable, Set, List
 from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import weakref
 
@@ -135,9 +135,17 @@ class TimeoutManager:
     def _get_api_request_timeout(self) -> int:
         """动态获取API请求超时时间"""
         if self._runtime_config:
-            timeout = getattr(self._runtime_config, 'api_timeout', 300)
-            logger.debug(f"从runtime_config读取api_timeout: {timeout}")
-            return timeout
+            timeout = getattr(self._runtime_config, 'api_request_timeout', None)
+            if timeout is None:
+                timeout = getattr(self._runtime_config, 'api_timeout', 300)
+                logger.debug(f"runtime_config未配置api_request_timeout，回退使用api_timeout: {timeout}")
+            else:
+                logger.debug(f"从runtime_config读取api_request_timeout: {timeout}")
+            try:
+                return int(timeout)
+            except (TypeError, ValueError):
+                logger.warning(f"api_request_timeout值无效({timeout})，使用默认值300")
+                return 300
         return 300
     
     async def start(self):
@@ -196,7 +204,20 @@ class TimeoutManager:
         :param metadata: 元数据
         :return: 超时上下文
         """
-        config = custom_config or self._default_configs[level]
+        if custom_config:
+            config = custom_config
+        else:
+            if level == TimeoutLevel.API_REQUEST:
+                # 按需刷新 API 请求级别的默认超时时间，支持运行时动态配置
+                current_timeout = float(self._get_api_request_timeout())
+                default_config = self._default_configs[level]
+                if current_timeout != default_config.timeout_seconds:
+                    default_config = replace(default_config, timeout_seconds=current_timeout)
+                    self._default_configs[level] = default_config
+            else:
+                default_config = self._default_configs[level]
+            # 为每个上下文复制一份默认配置，避免后续修改影响全局默认值
+            config = replace(self._default_configs[level])
         
         context = TimeoutContext(
             timeout_id=timeout_id,
@@ -329,7 +350,10 @@ class TimeoutManager:
                 
                 # 检查是否超时
                 if context.is_timeout:
-                    await self._handle_timeout_action(context)
+                    should_continue = await self._handle_timeout_action(context)
+                    if should_continue:
+                        # 已执行重试逻辑，重新进入下一轮监控
+                        continue
                     break
 
         except asyncio.CancelledError:
@@ -385,31 +409,35 @@ class TimeoutManager:
         try:
             self._stats['timeouts_by_level'][context.level.value] += 1
             
+            should_continue = False
+
             if context.config.action == TimeoutAction.RETRY:
-                await self._handle_timeout_retry(context)
+                should_continue = await self._handle_timeout_retry(context)
             elif context.config.action == TimeoutAction.WARNING:
                 await self._handle_timeout_warning_only(context)
             elif context.config.action == TimeoutAction.CANCEL:
                 await self._handle_timeout_cancellation(context)
             elif context.config.action == TimeoutAction.ESCALATE:
                 await self._handle_timeout_escalation(context)
-            
+
             # 调用自定义回调
             if context.config.callback:
                 try:
                     await context.config.callback(context, 'timeout')
                 except Exception as e:
                     logger.error(f"超时处理回调异常: {e}")
+
+            return should_continue
                     
         except Exception as e:
             logger.error(f"处理超时动作失败 {context.timeout_id}: {e}")
     
-    async def _handle_timeout_retry(self, context: TimeoutContext):
+    async def _handle_timeout_retry(self, context: TimeoutContext) -> bool:
         """处理超时重试"""
         if context.retry_count >= context.config.max_retries:
             logger.error(f"超时重试次数已达上限: {context.timeout_id}")
             await self._handle_timeout_cancellation(context)
-            return
+            return False
         
         context.retry_count += 1
         self._stats['retries_performed'] += 1
@@ -439,6 +467,8 @@ class TimeoutManager:
         # 重置超时时间
         context.start_time = time.time()
         context.warning_sent = False
+        logger.info(f"执行超时重试: {context.timeout_id} (第{context.retry_count}次)")
+        return True
         
         logger.info(f"执行超时重试: {context.timeout_id} (第{context.retry_count}次)")
     
