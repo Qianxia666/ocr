@@ -10,7 +10,7 @@ import asyncio
 from fastapi import FastAPI, Request, UploadFile, Query, HTTPException, WebSocket, WebSocketDisconnect, Response
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from typing import Optional
+from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 import os
 import json
@@ -150,41 +150,234 @@ class RuntimeConfig:
             self.image_compression_ratio = max(0.1, min(1.0, ratio))
             logger.info(f"更新图片压缩比例配置: {self.image_compression_ratio}")
 
+
 # 创建全局运行时配置实例
 runtime_config = RuntimeConfig()
 
-# Cloudflare Turnstile 配置读取函数
-async def get_turnstile_enabled_status() -> tuple[bool, str]:
-    """
-    获取 Turnstile 验证开关状态
-    返回: (是否启用, 配置来源)
+def _mask_secret(value: str, visible: int = 4) -> str:
+    """对敏感信息进行脱敏展示"""
+    if not value:
+        return ""
+    value = value.strip()
+    if len(value) <= visible * 2:
+        return "*" * len(value)
+    return f"{value[:visible]}****{value[-visible:]}"
 
-    优先级: 数据库 > .env > 默认值(禁用) - 运行时设置优先
-    """
-    import os
 
-    # 1. 优先检查数据库配置（运行时设置）
+class ApiRuntimeConfig:
+    """API配置管理器 - ENV默认 + 运行时覆盖"""
+
+    def __init__(self):
+        self.env_config = {
+            'api_base_url': API_BASE_URL.strip(),
+            'api_key': API_KEY.strip(),
+            'model': MODEL.strip(),
+        }
+        self.runtime_config: Dict[str, str] = {}
+        logger.info(
+            "API配置初始化 - ENV: base_url=%s, model=%s",
+            self.env_config.get('api_base_url'),
+            self.env_config.get('model')
+        )
+
+    def _normalize(self, key: str, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip()
+        return str(value)
+
+    def get_config(self, key: str) -> str:
+        value = self.runtime_config.get(key)
+        if value is not None:
+            return value
+        return self.env_config.get(key, "")
+
+    def has_runtime_override(self, key: str) -> bool:
+        return key in self.runtime_config
+
+    def update_runtime(self, config: Dict[str, Any]):
+        updates: Dict[str, str] = {}
+        for key in ('api_base_url', 'api_key', 'model'):
+            if key in config:
+                normalized = self._normalize(key, config.get(key))
+                if normalized is None:
+                    continue
+                if key == 'api_key' and normalized == "":
+                    continue
+                updates[key] = normalized
+
+        if config.get('clear_api_key'):
+            updates['api_key'] = ""
+
+        if updates:
+            self.runtime_config.update(updates)
+            safe_updates = {k: ('***' if k == 'api_key' else v) for k, v in updates.items()}
+            logger.info("运行时API配置已更新: %s", safe_updates)
+
+    def reset_runtime(self):
+        self.runtime_config = {}
+        logger.info("运行时API配置已重置为ENV默认值")
+
+    def get_effective_config(self, include_sensitive: bool = True) -> Dict[str, str]:
+        config = self.env_config.copy()
+        config.update(self.runtime_config)
+        if not include_sensitive:
+            config.pop('api_key', None)
+        return config
+
+    def get_sources(self) -> Dict[str, str]:
+        sources = {}
+        for key in ('api_base_url', 'api_key', 'model'):
+            if key in self.runtime_config:
+                sources[key] = 'runtime'
+            else:
+                sources[key] = 'env'
+        return sources
+
+
+def _parse_bool(value) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    value_str = str(value).strip().lower()
+    if value_str in ('true', '1', 'yes', 'on'):
+        return True
+    if value_str in ('false', '0', 'no', 'off'):
+        return False
+    return None
+
+
+class TurnstileRuntimeConfig:
+    """Turnstile配置管理器 - ENV默认 + 运行时覆盖"""
+
+    def __init__(self):
+        env_enabled_raw = os.getenv("TURNSTILE_ENABLED")
+        parsed_env_enabled = _parse_bool(env_enabled_raw)
+
+        self.env_enabled_source = 'env' if env_enabled_raw is not None else 'default'
+        self.env_config = {
+            'enabled': parsed_env_enabled if parsed_env_enabled is not None else False,
+            'site_key': TURNSTILE_SITE_KEY.strip(),
+            'secret_key': TURNSTILE_SECRET_KEY.strip(),
+        }
+        self.runtime_config: Dict[str, Any] = {}
+
+        logger.info(
+            "Turnstile配置初始化 - ENV: enabled=%s, site_key=%s, secret_configured=%s",
+            self.env_config['enabled'],
+            bool(self.env_config['site_key']),
+            bool(self.env_config['secret_key'])
+        )
+
+    def update_runtime(self, config: Dict[str, Any]):
+        updates: Dict[str, Any] = {}
+
+        if 'enabled' in config:
+            parsed = _parse_bool(config.get('enabled'))
+            if parsed is not None:
+                updates['enabled'] = parsed
+
+        if 'site_key' in config and config['site_key'] is not None:
+            updates['site_key'] = str(config['site_key']).strip()
+
+        if 'secret_key' in config and config['secret_key'] is not None:
+            secret_value = str(config['secret_key']).strip()
+            if secret_value:
+                updates['secret_key'] = secret_value
+
+        if config.get('clear_secret_key'):
+            updates['secret_key'] = ""
+
+        if updates:
+            safe_updates = updates.copy()
+            if 'secret_key' in safe_updates:
+                safe_updates['secret_key'] = "***"
+            self.runtime_config.update(updates)
+            logger.info("运行时Turnstile配置已更新: %s", safe_updates)
+
+    def reset_runtime(self):
+        self.runtime_config = {}
+        logger.info("运行时Turnstile配置已重置为ENV默认值")
+
+    def get_config(self, key: str):
+        if key in self.runtime_config:
+            return self.runtime_config[key]
+        return self.env_config.get(key)
+
+    def has_runtime_override(self, key: str) -> bool:
+        return key in self.runtime_config
+
+    def get_enabled_with_source(self) -> tuple[bool, str]:
+        if 'enabled' in self.runtime_config:
+            return bool(self.runtime_config['enabled']), 'runtime'
+
+        if self.env_enabled_source == 'env':
+            return bool(self.env_config.get('enabled', False)), 'env'
+
+        return bool(self.env_config.get('enabled', False)), 'default'
+
+    def get_effective_config(self, include_sensitive: bool = True) -> Dict[str, Any]:
+        config = self.env_config.copy()
+        config.update(self.runtime_config)
+        if not include_sensitive:
+            config.pop('secret_key', None)
+        return config
+
+    def get_sources(self) -> Dict[str, str]:
+        sources = {}
+        for key in ('enabled', 'site_key', 'secret_key'):
+            if key in self.runtime_config:
+                sources[key] = 'runtime'
+            else:
+                sources[key] = 'env' if self.env_config.get(key) else 'default'
+        return sources
+
+    def has_secret_key(self) -> bool:
+        if 'secret_key' in self.runtime_config:
+            return bool(self.runtime_config['secret_key'])
+        return bool(self.env_config.get('secret_key'))
+
+
+api_runtime_config = ApiRuntimeConfig()
+turnstile_config = TurnstileRuntimeConfig()
+
+
+def get_current_api_settings() -> Dict[str, str]:
+    """获取当前生效的API配置（包含敏感信息）"""
+    return api_runtime_config.get_effective_config(include_sensitive=True)
+
+
+def apply_api_runtime_config():
+    """将最新的API运行时配置应用到任务管理器和页面处理器"""
+    effective = get_current_api_settings()
+
     try:
-        from models.database import db_manager
-        async with db_manager.get_connection() as db:
-            async with db.execute(
-                "SELECT value FROM system_settings WHERE key = 'turnstile_enabled'"
-            ) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    enabled = row[0].lower() == 'true'
-                    return enabled, 'database'
+        if task_manager:
+            task_manager.api_config.update({
+                'api_base_url': effective.get('api_base_url'),
+                'api_key': effective.get('api_key'),
+                'model': effective.get('model'),
+            })
     except Exception as e:
-        logger.error(f"读取 Turnstile 数据库配置失败: {e}")
+        logger.warning(f"更新任务管理器API配置失败: {e}")
 
-    # 2. 检查 .env 环境变量（重启后的默认值）
-    env_value = os.getenv('TURNSTILE_ENABLED', '').lower()
-    if env_value in ('true', 'false'):
-        enabled = env_value == 'true'
-        return enabled, 'env'
+    try:
+        from core.page_processor import page_processor
+        if page_processor:
+            page_processor.api_config.update({
+                'api_base_url': effective.get('api_base_url'),
+                'api_key': effective.get('api_key'),
+                'model': effective.get('model'),
+            })
+    except Exception as e:
+        logger.warning(f"更新页面处理器API配置失败: {e}")
 
-    # 3. 默认值(禁用)
-    return False, 'default'
+
+async def get_turnstile_enabled_status() -> tuple[bool, str]:
+    """获取 Turnstile 验证开关状态"""
+    return turnstile_config.get_enabled_with_source()
 
 # Cloudflare Turnstile 验证函数
 async def verify_turnstile_token(token: str, remote_ip: str = None) -> tuple[bool, str]:
@@ -200,7 +393,8 @@ async def verify_turnstile_token(token: str, remote_ip: str = None) -> tuple[boo
         return True, "验证已跳过"
 
     # 检查必要的密钥配置
-    if not TURNSTILE_SECRET_KEY:
+    secret_key = turnstile_config.get_config('secret_key')
+    if not secret_key:
         logger.warning("Turnstile Secret Key 未配置,无法验证")
         return False, "人机验证配置错误,请联系管理员"
 
@@ -209,7 +403,7 @@ async def verify_turnstile_token(token: str, remote_ip: str = None) -> tuple[boo
 
     url = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
     data = {
-        "secret": TURNSTILE_SECRET_KEY,
+        "secret": secret_key,
         "response": token
     }
     if remote_ip:
@@ -257,18 +451,21 @@ async def lifespan(app: FastAPI):
         logger.info("WebSocket管理器初始化完成")
 
         # 准备API配置
+
+        effective_api_config = api_runtime_config.get_effective_config(include_sensitive=True)
+
         api_config = {
-            'api_base_url': API_BASE_URL,
-            'api_key': API_KEY,
-            'model': MODEL,
+            'api_base_url': effective_api_config.get('api_base_url', API_BASE_URL),
+            'api_key': effective_api_config.get('api_key', API_KEY),
+            'model': effective_api_config.get('model', MODEL),
             'concurrency': runtime_config.concurrency,
             'image_concurrency': runtime_config.image_concurrency,
             'pdf_concurrency': runtime_config.pdf_concurrency,
             'max_retries': runtime_config.max_retries,
-        'retry_delay': RETRY_DELAY,
-        'pdf_dpi': runtime_config.pdf_dpi,
-        'api_timeout': runtime_config.api_timeout,
-    }
+            'retry_delay': RETRY_DELAY,
+            'pdf_dpi': runtime_config.pdf_dpi,
+            'api_timeout': runtime_config.api_timeout,
+        }
 
         # 初始化页面处理器
         from core.page_processor import init_page_processor, is_page_processor_ready, shutdown_page_processor
@@ -276,14 +473,14 @@ async def lifespan(app: FastAPI):
 
         # 准备静态API配置(不会变化的配置)
         static_api_config = {
-            'api_base_url': API_BASE_URL,
-            'api_key': API_KEY,
-            'model': MODEL,
+            'api_base_url': effective_api_config.get('api_base_url', API_BASE_URL),
+            'api_key': effective_api_config.get('api_key', API_KEY),
+            'model': effective_api_config.get('model', MODEL),
             'concurrency': runtime_config.concurrency,
-        'batch_size': 4,
-        'retry_delay': RETRY_DELAY,
-        'health_check_interval': 300,
-    }
+            'batch_size': 4,
+            'retry_delay': RETRY_DELAY,
+            'health_check_interval': 300,
+        }
 
         # 先检查是否已经初始化，避免重复初始化
         if is_page_processor_ready():
@@ -509,6 +706,13 @@ async def process_image(session, image_data, semaphore, max_retries=None):
     if max_retries is None:
         max_retries = runtime_config.max_retries
 
+    api_base_url = api_runtime_config.get_config('api_base_url') or API_BASE_URL
+    api_key = api_runtime_config.get_config('api_key') or API_KEY
+    api_model = api_runtime_config.get_config('model') or MODEL
+
+    if not api_key:
+        raise Exception('API密钥未配置')
+
     system_prompt = """
 You are an expert OCR assistant. Your job is to extract all text from the provided image and convert it into a well-structured, easy-to-read Markdown document that mirrors the intended structure of the original. Follow these precise guidelines:
 
@@ -526,8 +730,8 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
             async with semaphore:
                 encoded_image = base64.b64encode(image_data).decode('utf-8')
                 response = await session.post(
-                    f"{API_BASE_URL}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {API_KEY}"},
+                    f"{api_base_url}/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
                     json={
                         "messages": [
                             {
@@ -551,7 +755,7 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
                             }
                         ],
                         "stream": False,
-                        "model": MODEL,
+                        "model": api_model,
                         "temperature": 0.5,
                         "presence_penalty": 0,
                         "frequency_penalty": 0,
@@ -914,6 +1118,8 @@ async def root_page(request: Request, response: Response):
             logger.error(f"获取注册状态失败: {e}")
             registration_enabled = False
 
+        current_model = api_runtime_config.get_config('model') or MODEL
+
         return templates.TemplateResponse(
             "landing.html",
             {
@@ -921,7 +1127,7 @@ async def root_page(request: Request, response: Response):
                 "favicon_url": FAVICON_URL,
                 "title": TITLE,
                 "registration_enabled": registration_enabled,
-                "model": MODEL,
+                "model": current_model,
                 "max_image_size_mb": runtime_config.max_image_size_mb,
                 "max_pdf_size_mb": runtime_config.max_pdf_size_mb,
                 "max_pdf_pages": runtime_config.max_pdf_pages,
@@ -1480,12 +1686,14 @@ async def login_page(request: Request):
     # 获取 Turnstile 验证开关状态
     turnstile_enabled, _ = await get_turnstile_enabled_status()
 
+    turnstile_site_key = turnstile_config.get_config('site_key')
+
     return templates.TemplateResponse("login.html", {
         "request": request,
         "favicon_url": FAVICON_URL,
         "title": TITLE,
         "registration_enabled": registration_enabled,
-        "turnstile_site_key": TURNSTILE_SITE_KEY,
+        "turnstile_site_key": turnstile_site_key,
         "turnstile_enabled": turnstile_enabled
     })
 
@@ -2111,6 +2319,8 @@ async def get_turnstile_settings_api(request: Request):
 
         # 计算最终生效状态
         enabled, source = await get_turnstile_enabled_status()
+        effective_config = turnstile_config.get_effective_config(include_sensitive=False)
+        config_sources = turnstile_config.get_sources()
 
         return JSONResponse({
             "status": "success",
@@ -2119,8 +2329,9 @@ async def get_turnstile_settings_api(request: Request):
             "env_forced": env_forced,
             "env_value": env_value if env_forced else None,
             "db_value": db_enabled,
-            "has_secret_key": bool(TURNSTILE_SECRET_KEY),
-            "site_key": TURNSTILE_SITE_KEY
+            "site_key": effective_config.get('site_key', ''),
+            "has_secret_key": turnstile_config.has_secret_key(),
+            "config_sources": config_sources
         })
     except HTTPException:
         raise
@@ -2137,7 +2348,11 @@ async def update_turnstile_settings_api(request: Request, settings_data: dict):
         from models.database import db_manager
         from datetime import datetime, timezone
 
-        enabled = settings_data.get('enabled', False)
+        enabled_raw = settings_data.get('enabled', False)
+        parsed_enabled = _parse_bool(enabled_raw)
+        if parsed_enabled is None:
+            raise HTTPException(status_code=400, detail="enabled 参数无效")
+        enabled = parsed_enabled
 
         # 更新数据库配置（运行时立即生效）
         async with db_manager.get_connection() as db:
@@ -2148,7 +2363,9 @@ async def update_turnstile_settings_api(request: Request, settings_data: dict):
             """, ('true' if enabled else 'false', datetime.now(timezone.utc).isoformat()))
             await db.commit()
 
-        logger.info(f"管理员 {admin['username']} 更新 Turnstile 验证: {enabled} (运行时生效)")
+        turnstile_config.update_runtime({'enabled': enabled})
+
+        logger.info(f"管理员{admin['username']} 更新 Turnstile 验证: {enabled} (运行时生效)")
 
         return JSONResponse({
             "status": "success",
@@ -2159,6 +2376,224 @@ async def update_turnstile_settings_api(request: Request, settings_data: dict):
         raise
     except Exception as e:
         logger.error(f"更新 Turnstile 配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== API 配置管理API ====================
+
+@app.get(f"/{PASSWORD}/api/admin/settings/api-config" if PASSWORD else "/api/admin/settings/api-config")
+async def get_api_runtime_settings_api(request: Request):
+    """获取 OCR API 运行时配置(仅管理员)"""
+    try:
+        await auth_manager_instance.require_admin(request)
+
+        config = api_runtime_config.get_effective_config(include_sensitive=True)
+        sources = api_runtime_config.get_sources()
+
+        return JSONResponse({
+            "status": "success",
+            "data": {
+                "api_base_url": config.get('api_base_url', ''),
+                "api_key": config.get('api_key', ''),
+                "model": config.get('model', '')
+            },
+            "sources": sources,
+            "masked": {
+                "api_key": _mask_secret(config.get('api_key', ''))
+            }
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取 API 配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(f"/{PASSWORD}/api/admin/settings/api-config" if PASSWORD else "/api/admin/settings/api-config")
+async def update_api_runtime_settings_api(request: Request, config_data: dict):
+    """更新 OCR API 运行时配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        data = config_data or {}
+        update_payload = {}
+
+        for key in ('api_base_url', 'api_key', 'model'):
+            if key in data and data[key] is not None:
+                update_payload[key] = data[key]
+
+        if data.get('clear_api_key'):
+            update_payload['clear_api_key'] = True
+
+        if not update_payload:
+            raise HTTPException(status_code=400, detail="没有可更新的配置项")
+
+        api_runtime_config.update_runtime(update_payload)
+        apply_api_runtime_config()
+
+        safe_payload = update_payload.copy()
+        if 'api_key' in safe_payload:
+            safe_payload['api_key'] = "***"
+        logger.info(f"管理员{admin['username']} 更新 API 配置: {safe_payload}")
+
+        config = api_runtime_config.get_effective_config(include_sensitive=True)
+
+        return JSONResponse({
+            "status": "success",
+            "message": "API 配置已更新（仅本次运行有效，重启后恢复ENV默认值）",
+            "data": {
+                "api_base_url": config.get('api_base_url', ''),
+                "api_key": config.get('api_key', ''),
+                "model": config.get('model', '')
+            },
+            "sources": api_runtime_config.get_sources()
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新 API 配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(f"/{PASSWORD}/api/admin/settings/api-config/reset" if PASSWORD else "/api/admin/settings/api-config/reset")
+async def reset_api_runtime_settings_api(request: Request):
+    """重置 OCR API 运行时配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        api_runtime_config.reset_runtime()
+        apply_api_runtime_config()
+
+        config = api_runtime_config.get_effective_config(include_sensitive=True)
+
+        logger.info(f"管理员{admin['username']} 重置 API 配置为 ENV 默认值")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "API 配置已重置为ENV默认值",
+            "data": {
+                "api_base_url": config.get('api_base_url', ''),
+                "api_key": config.get('api_key', ''),
+                "model": config.get('model', '')
+            },
+            "sources": api_runtime_config.get_sources()
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重置 API 配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Turnstile 运行时配置管理API ====================
+
+@app.get(f"/{PASSWORD}/api/admin/settings/turnstile/config" if PASSWORD else "/api/admin/settings/turnstile/config")
+async def get_turnstile_runtime_config_api(request: Request):
+    """获取 Turnstile 运行时配置(仅管理员)"""
+    try:
+        await auth_manager_instance.require_admin(request)
+
+        config = turnstile_config.get_effective_config(include_sensitive=True)
+        sources = turnstile_config.get_sources()
+
+        return JSONResponse({
+            "status": "success",
+            "data": {
+                "enabled": bool(config.get('enabled', False)),
+                "site_key": config.get('site_key', ''),
+                "secret_key": config.get('secret_key', '')
+            },
+            "sources": sources,
+            "masked": {
+                "secret_key": _mask_secret(config.get('secret_key', ''))
+            }
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取 Turnstile 运行时配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(f"/{PASSWORD}/api/admin/settings/turnstile/config" if PASSWORD else "/api/admin/settings/turnstile/config")
+async def update_turnstile_runtime_config_api(request: Request, config_data: dict):
+    """更新 Turnstile 运行时配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        data = config_data or {}
+        update_payload = {}
+
+        if 'enabled' in data:
+            parsed = _parse_bool(data.get('enabled'))
+            if parsed is None:
+                raise HTTPException(status_code=400, detail="enabled 参数无效")
+            update_payload['enabled'] = parsed
+
+        if 'site_key' in data and data['site_key'] is not None:
+            update_payload['site_key'] = str(data['site_key']).strip()
+
+        if 'secret_key' in data and data['secret_key'] is not None:
+            update_payload['secret_key'] = str(data['secret_key']).strip()
+
+        if data.get('clear_secret_key'):
+            update_payload['clear_secret_key'] = True
+
+        if not update_payload:
+            raise HTTPException(status_code=400, detail="没有可更新的配置项")
+
+        turnstile_config.update_runtime(update_payload)
+
+        safe_payload = update_payload.copy()
+        if 'secret_key' in safe_payload:
+            safe_payload['secret_key'] = "***"
+        logger.info(f"管理员{admin['username']} 更新 Turnstile 运行时配置: {safe_payload}")
+
+        config = turnstile_config.get_effective_config(include_sensitive=True)
+
+        return JSONResponse({
+            "status": "success",
+            "message": "Turnstile 配置已更新（仅本次运行有效，重启后恢复ENV默认值）",
+            "data": {
+                "enabled": bool(config.get('enabled', False)),
+                "site_key": config.get('site_key', ''),
+                "secret_key": config.get('secret_key', '')
+            },
+            "sources": turnstile_config.get_sources()
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新 Turnstile 运行时配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(f"/{PASSWORD}/api/admin/settings/turnstile/config/reset" if PASSWORD else "/api/admin/settings/turnstile/config/reset")
+async def reset_turnstile_runtime_config_api(request: Request):
+    """重置 Turnstile 运行时配置(仅管理员)"""
+    try:
+        admin = await auth_manager_instance.require_admin(request)
+
+        turnstile_config.reset_runtime()
+
+        logger.info(f"管理员{admin['username']} 重置 Turnstile 运行时配置为 ENV 默认值")
+
+        config = turnstile_config.get_effective_config(include_sensitive=True)
+
+        return JSONResponse({
+            "status": "success",
+            "message": "Turnstile 配置已重置为ENV默认值",
+            "data": {
+                "enabled": bool(config.get('enabled', False)),
+                "site_key": config.get('site_key', ''),
+                "secret_key": config.get('secret_key', '')
+            },
+            "sources": turnstile_config.get_sources()
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重置 Turnstile 运行时配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(f"/{PASSWORD}/api/admin/settings/ip-abuse" if PASSWORD else "/api/admin/settings/ip-abuse")

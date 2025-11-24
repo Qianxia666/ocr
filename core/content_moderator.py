@@ -14,6 +14,59 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 
+def _normalize_multiline_prompt(prompt: str) -> str:
+    """
+    规范化多行提示词，确保格式正确
+
+    Args:
+        prompt: 原始提示词（可能来自环境变量或配置）
+
+    Returns:
+        规范化后的提示词
+    """
+    if not prompt:
+        return DEFAULT_MODERATION_SYSTEM_PROMPT
+
+    # 移除开头和结尾的空白，但保留中间的换行
+    prompt = prompt.strip()
+
+    # 确保提示词不为空
+    if not prompt:
+        return DEFAULT_MODERATION_SYSTEM_PROMPT
+
+    # 如果提示词没有以标点符号结尾，添加句号
+    if not prompt.endswith(('.', '。', '!', '！', '?', '？')):
+        prompt += '。'
+
+    logger.debug(f"多行提示词已规范化，长度: {len(prompt)} 字符")
+    return prompt
+
+# 默认的审查提示词（可通过环境变量覆盖）
+DEFAULT_MODERATION_SYSTEM_PROMPT = """
+你是一个严格遵循中国法律法规的内容审查专家，请审查以下OCR识别的文本内容，判断是否违规内容。
+
+1.你认为违规的内容
+2.成段或整篇出现政治内容
+
+**返回格式（JSON）：**
+{
+    "is_safe": false,
+    "violation_types": ["政治内容", "违法内容"],
+    "risk_level": "high",
+    "reason": "检测到政治相关内容：[具体内容片段]",
+    "evidence": "具体违规文本片段（引用原文前50字）"
+}
+
+**注意事项：**
+- is_safe: true表示内容安全，false表示包含禁止内容
+- violation_types: 违规类型列表（可多个）
+- risk_level: 固定为 "high"（所有违规内容都是高风险）
+- reason: 详细说明违规原因
+- evidence: 引用具体违规片段（不超过50字）
+
+请严格按照上述标准审查内容，确保符合中国法律法规要求。
+"""
+
 class ModerationAction(Enum):
     """审查动作枚举"""
     ALLOW = "allow"          # 允许
@@ -33,23 +86,37 @@ class ModerationConfig:
 
     def __init__(self):
         # 从环境变量加载默认配置（持久化）
+        raw_system_prompt = os.getenv('MODERATION_SYSTEM_PROMPT', DEFAULT_MODERATION_SYSTEM_PROMPT)
+
         self.env_config = {
             'enabled': os.getenv('MODERATION_ENABLED', 'true').lower() == 'true',
             'api_base_url': os.getenv('MODERATION_API_BASE_URL', os.getenv('API_BASE_URL', 'https://api.openai.com')),
             'api_key': os.getenv('MODERATION_API_KEY', os.getenv('OPENAI_API_KEY', '')),
             'model': os.getenv('MODERATION_MODEL', 'gpt-4o-mini'),
+            'system_prompt': raw_system_prompt
         }
 
         # 运行时配置（临时，重启失效）
         self.runtime_config = {}
 
+        # 记录多行提示词加载情况
+        prompt_length = len(raw_system_prompt)
+        line_count = len(raw_system_prompt.split('\n'))
         logger.info(f"审查配置初始化 - ENV配置: enabled={self.env_config['enabled']}, model={self.env_config['model']}")
+        logger.debug(f"系统提示词加载完成: {prompt_length} 字符, {line_count} 行")
 
     def get_config(self, key: str) -> Any:
         """获取配置值 - 优先使用运行时配置"""
         if key in self.runtime_config:
-            return self.runtime_config[key]
-        return self.env_config.get(key)
+            value = self.runtime_config[key]
+        else:
+            value = self.env_config.get(key)
+
+        if key == 'system_prompt':
+            # 对多行提示词进行规范化处理
+            return _normalize_multiline_prompt(value or DEFAULT_MODERATION_SYSTEM_PROMPT)
+
+        return value
 
     def update_runtime(self, config: Dict[str, Any]):
         """更新运行时配置（仅存内存，重启失效）"""
@@ -67,32 +134,6 @@ class ModerationConfig:
         config.update(self.runtime_config)
         return config
 
-
-# 严格的审查提示词 - 遵循中国法律法规
-MODERATION_SYSTEM_PROMPT = """
-你是一个严格遵循中国法律法规的内容审查专家，请审查以下OCR识别的文本内容，判断是否违规内容：
-
-1.你认为违规的内容
-2.成段或整篇出现政治内容
-
-**返回格式（JSON）：**
-{
-    "is_safe": false,
-    "violation_types": ["政治内容", "违法内容"],
-    "risk_level": "high",
-    "reason": "检测到政治相关内容：[具体内容片段]",
-    "evidence": "具体违规文本片段（引用原文前50字）"
-}
-
-**注意事项：**
-- is_safe: true表示内容安全，false表示包含禁止内容
-- violation_types: 违规类型列表（可多个）
-- risk_level: 固定为"high"（所有违规内容都是高风险）
-- reason: 详细说明违规原因
-- evidence: 引用具体违规片段（不超过50字）
-
-请严格按照上述标准审查内容，确保符合中国法律法规要求。
-"""
 
 
 class ContentModerator:
@@ -188,6 +229,7 @@ class ContentModerator:
         api_base_url = self.config.get_config('api_base_url')
         api_key = self.config.get_config('api_key')
         model = self.config.get_config('model')
+        system_prompt = self.config.get_config('system_prompt')
 
         # 限制审查内容长度（降低成本）
         max_length = 4000
@@ -211,7 +253,7 @@ class ContentModerator:
                     json={
                         "model": model,
                         "messages": [
-                            {"role": "system", "content": MODERATION_SYSTEM_PROMPT},
+                            {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt}
                         ],
                         "temperature": 0.0,

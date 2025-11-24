@@ -228,6 +228,37 @@
                 <span id="turnstile-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
               </div>
             </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">Site Key</label>
+                <input id="turnstile-site-key"
+                       type="text"
+                       placeholder="例如：0x4AAAAAA..."
+                       autocomplete="off"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <p class="text-xs text-gray-500 mt-1">前端页面引用的人机验证公钥，修改后无需重启即生效。</p>
+              </div>
+              <div>
+                <label class="block text-sm font-semibold text-gray-800 mb-2">Secret Key</label>
+                <input id="turnstile-secret-key"
+                       type="text"
+                       placeholder="例如：0x4AAAAAA..."
+                       autocomplete="off"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <p class="text-xs text-gray-500 mt-1">用于服务端校验的密钥，留空并保存将清除运行时覆盖值。</p>
+              </div>
+            </div>
+            <div class="flex flex-col md:flex-row gap-3 mt-4">
+              <button onclick="saveTurnstileConfig()"
+                      class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                保存Turnstile配置
+              </button>
+              <button onclick="resetTurnstileConfig()"
+                      class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
+                重置为ENV默认
+              </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">仅影响当前运行实例，重启后回到 .env 中的配置，建议与开关配合使用。</p>
           </div>
 
           <!-- IP滥用检测功能 -->
@@ -506,6 +537,124 @@
           </div>
         </div>
       </div>
+
+      <!-- OCR API 配置 -->
+      <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+        <h2 class="text-2xl font-bold text-gray-800 mb-4">OCR API 配置</h2>
+        <p class="text-sm text-gray-600 mb-6">管理OCR主接口地址、密钥以及默认模型，调整后立即生效，重启后恢复为 .env 默认值。</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-semibold text-gray-800 mb-2">API 地址</label>
+            <input id="api-base-url"
+                   type="text"
+                   placeholder="https://api.openai.com"
+                   autocomplete="off"
+                   class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <p class="text-xs text-gray-500 mt-1">用于 OCR 字识别请求的主接口地址。</p>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-800 mb-2">API Key</label>
+            <input id="api-key"
+                   type="text"
+                   placeholder="sk-..."
+                   autocomplete="off"
+                   class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <p class="text-xs text-gray-500 mt-1">留空并保存可清除运行时密钥，系统将回退到 ENV 配置。</p>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-800 mb-2">默认模型</label>
+            <input id="api-model"
+                   type="text"
+                   placeholder="例如：gpt-4o"
+                   autocomplete="off"
+                   class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <p class="text-xs text-gray-500 mt-1">影响 OCR 任务默认调用的模型名称。</p>
+          </div>
+        </div>
+        <div class="flex flex-col md:flex-row gap-3 mt-4">
+          <button onclick="saveApiConfig()"
+                  class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+            保存API配置
+          </button>
+          <button onclick="resetApiConfig()"
+                  class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
+            重置为ENV默认
+          </button>
+        </div>
+      </div>
+
+      <!-- 内容审查配置 -->
+      <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-2xl font-bold text-gray-800">内容审查配置</h2>
+            <p class="text-sm text-gray-600 mt-1">管理内容审查开关、接口配置以及系统提示词。修改后立即生效，重启后恢复为 .env 默认值。</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <button id="moderation-toggle"
+                    onclick="toggleModerationEnabled()"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                    data-enabled="false">
+              <span id="moderation-toggle-slider" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
+            </button>
+            <span id="moderation-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
+          </div>
+        </div>
+
+        <div id="moderation-settings" class="space-y-4 hidden">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-semibold text-gray-800 mb-2">审查 API 地址</label>
+              <input id="moderation-api-base-url"
+                     type="text"
+                     placeholder="https://example.com"
+                     autocomplete="off"
+                     class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+              <p class="text-xs text-gray-500 mt-1">留空时默认使用 OCR API 地址。</p>
+            </div>
+
+            <div>
+              <label class="block text-sm font-semibold text-gray-800 mb-2">审查 API Key</label>
+              <input id="moderation-api-key"
+                     type="text"
+                     placeholder="sk-..."
+                     autocomplete="off"
+                     class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+              <p class="text-xs text-gray-500 mt-1">留空时默认使用 OCR 的密钥。</p>
+            </div>
+
+            <div>
+              <label class="block text-sm font-semibold text-gray-800 mb-2">审查模型</label>
+              <input id="moderation-model"
+                     type="text"
+                     placeholder="例如：Qwen/Qwen3-0.6B"
+                     autocomplete="off"
+                     class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+              <p class="text-xs text-gray-500 mt-1">建议使用轻量模型以降低调用成本。</p>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-gray-800 mb-2">系统提示词</label>
+            <textarea id="moderation-system-prompt"
+                      rows="10"
+                      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+                      placeholder="请输入内容审查的系统提示词"></textarea>
+            <p class="text-xs text-gray-500 mt-1">该提示词仅在当前进程内存中生效，重启后恢复为 .env 配置。</p>
+          </div>
+
+          <div class="flex flex-col md:flex-row gap-3">
+            <button onclick="saveModerationConfig()"
+                    class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+              保存审查配置
+            </button>
+            <button onclick="resetModerationConfig()"
+                    class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
+              重置为 ENV 默认
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -684,7 +833,262 @@
       }
     }
 
-    // 加载IP滥用检测配置
+    // OCR API 配置
+    async function loadApiConfig() {
+      const baseUrlInput = document.getElementById("api-base-url");
+      const apiKeyInput = document.getElementById("api-key");
+      const modelInput = document.getElementById("api-model");
+
+      if (!baseUrlInput || !apiKeyInput || !modelInput) {
+        return;
+      }
+
+      apiKeyInput.dataset.hasValue = "false";
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/api-config`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          const config = data.data || {};
+          baseUrlInput.value = config.api_base_url || "";
+          apiKeyInput.value = config.api_key || "";
+          apiKeyInput.dataset.hasValue = config.api_key ? "true" : "false";
+          modelInput.value = config.model || "";
+        }
+      } catch (err) {
+        console.error("Failed to load API config:", err);
+      }
+    }
+
+    async function saveApiConfig() {
+      const baseUrlInput = document.getElementById("api-base-url");
+      const apiKeyInput = document.getElementById("api-key");
+      const modelInput = document.getElementById("api-model");
+
+      if (!baseUrlInput || !apiKeyInput || !modelInput) {
+        return;
+      }
+
+      const baseUrlValue = baseUrlInput.value.trim();
+      const modelValue = modelInput.value.trim();
+
+      if (!baseUrlValue) {
+        showNotification("API address required", "error");
+        return;
+      }
+
+      if (!modelValue) {
+        showNotification("Model name required", "error");
+        return;
+      }
+
+      const payload = {
+        api_base_url: baseUrlValue,
+        model: modelValue
+      };
+
+      const apiKeyValue = apiKeyInput.value.trim();
+      if (apiKeyValue) {
+        payload.api_key = apiKeyValue;
+      } else if (apiKeyInput.dataset.hasValue === "true") {
+        payload.clear_api_key = true;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/api-config`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          showNotification("API config saved", "success");
+          await loadApiConfig();
+        } else {
+          showNotification("Save failed: " + (data.message || data.detail || "unknown error"), "error");
+        }
+      } catch (err) {
+        console.error("Failed to save API config:", err);
+        showNotification("Save failed, please retry", "error");
+      }
+    }
+
+    async function resetApiConfig() {
+      const confirmed = confirm("Reset OCR API config to ENV defaults?");
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/api-config/reset`, {
+          method: "POST"
+        });
+        const data = await response.json();
+
+        if (data.status === "success") {
+          showNotification("API config reset to ENV defaults", "success");
+          await loadApiConfig();
+        } else {
+          showNotification("Reset failed: " + (data.message || data.detail || "unknown error"), "error");
+        }
+      } catch (err) {
+        console.error("Failed to reset API config:", err);
+        showNotification("Reset failed, please retry", "error");
+      }
+    }
+
+// 加载IP滥用检测配置
+    // 内容审查配置
+    async function loadModerationConfig() {
+      const settings = document.getElementById('moderation-settings');
+      if (!settings) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/moderation/config`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          const config = data.data || {};
+          const enabled = config.enabled !== false;
+          updateModerationToggle(enabled);
+
+          document.getElementById('moderation-api-base-url').value = config.api_base_url || "";
+          document.getElementById('moderation-api-key').value = config.api_key || "";
+          document.getElementById('moderation-model').value = config.model || "";
+          document.getElementById('moderation-system-prompt').value = config.system_prompt || "";
+        }
+      } catch (error) {
+        console.error("加载内容审查配置失败:", error);
+      }
+    }
+
+    function updateModerationToggle(enabled) {
+      const toggle = document.getElementById('moderation-toggle');
+      const slider = document.getElementById('moderation-toggle-slider');
+      const status = document.getElementById('moderation-status');
+      const settings = document.getElementById('moderation-settings');
+
+      if (!toggle || !slider || !status || !settings) {
+        return;
+      }
+
+      toggle.dataset.enabled = enabled ? "true" : "false";
+
+      if (enabled) {
+        toggle.classList.add('bg-blue-500');
+        toggle.classList.remove('bg-gray-300');
+        slider.classList.add('translate-x-6');
+        slider.classList.remove('translate-x-1');
+        status.textContent = '已启用';
+        status.classList.add('text-blue-600');
+        status.classList.remove('text-gray-600');
+        settings.classList.remove('hidden');
+      } else {
+        toggle.classList.add('bg-gray-300');
+        toggle.classList.remove('bg-blue-500');
+        slider.classList.add('translate-x-1');
+        slider.classList.remove('translate-x-6');
+        status.textContent = '已禁用';
+        status.classList.add('text-gray-600');
+        status.classList.remove('text-blue-600');
+        settings.classList.add('hidden');
+      }
+    }
+
+    async function saveModerationConfig(showMessage = true) {
+      const toggle = document.getElementById('moderation-toggle');
+      const baseUrlInput = document.getElementById('moderation-api-base-url');
+      const apiKeyInput = document.getElementById('moderation-api-key');
+      const modelInput = document.getElementById('moderation-model');
+      const promptInput = document.getElementById('moderation-system-prompt');
+
+      if (!toggle || !baseUrlInput || !apiKeyInput || !modelInput || !promptInput) {
+        return false;
+      }
+
+      const payload = {
+        enabled: toggle.dataset.enabled === "true",
+        api_base_url: baseUrlInput.value.trim(),
+        api_key: apiKeyInput.value.trim(),
+        model: modelInput.value.trim(),
+        system_prompt: promptInput.value
+      };
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/moderation/config`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+          await loadModerationConfig();
+          if (showMessage) {
+            showNotification('内容审查配置已保存', 'success');
+          }
+          return true;
+        }
+
+        showNotification('保存失败: ' + (data.message || data.detail || '未知错误'), 'error');
+      } catch (error) {
+        console.error('保存内容审查配置失败:', error);
+        showNotification('保存失败，请重试', 'error');
+      }
+
+      return false;
+    }
+
+    async function toggleModerationEnabled() {
+      const toggle = document.getElementById('moderation-toggle');
+      if (!toggle) {
+        return;
+      }
+
+      const currentEnabled = toggle.dataset.enabled === "true";
+      const newEnabled = !currentEnabled;
+
+      updateModerationToggle(newEnabled);
+
+      const success = await saveModerationConfig(false);
+      if (success) {
+        showNotification(`内容审查已${newEnabled ? '启用' : '禁用'}`, 'success');
+      } else {
+        updateModerationToggle(currentEnabled);
+      }
+    }
+
+    async function resetModerationConfig() {
+      const confirmed = confirm('确认将内容审查配置重置为ENV默认值吗？');
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/moderation/config/reset`, {
+          method: 'POST'
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+          showNotification('内容审查配置已重置为ENV默认值', 'success');
+          await loadModerationConfig();
+        } else {
+          showNotification('重置失败: ' + (data.message || data.detail || '未知错误'), 'error');
+        }
+      } catch (error) {
+        console.error('重置内容审查配置失败:', error);
+        showNotification('重置失败，请重试', 'error');
+      }
+    }
+
     async function loadIpAbuseSettings() {
       try {
         const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/ip-abuse`);
@@ -807,6 +1211,7 @@
         if (data.status === "success") {
           updateTurnstileUI(data);
         }
+        await loadTurnstileRuntimeConfig();
       } catch (err) {
         console.error("加载 Turnstile 配置失败:", err);
       }
@@ -871,7 +1276,96 @@
       }
     }
 
-    // ==================== 用户协议管理功能 ====================
+    async function loadTurnstileRuntimeConfig() {
+      const siteKeyInput = document.getElementById("turnstile-site-key");
+      const secretKeyInput = document.getElementById("turnstile-secret-key");
+
+      if (!siteKeyInput || !secretKeyInput) {
+        return;
+      }
+
+      secretKeyInput.dataset.hasValue = "false";
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/turnstile/config`);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          const config = data.data || {};
+          siteKeyInput.value = config.site_key || "";
+          secretKeyInput.value = config.secret_key || "";
+          secretKeyInput.dataset.hasValue = config.secret_key ? "true" : "false";
+        }
+      } catch (err) {
+        console.error("Failed to load Turnstile runtime config:", err);
+      }
+    }
+
+    async function saveTurnstileConfig() {
+      const siteKeyInput = document.getElementById("turnstile-site-key");
+      const secretKeyInput = document.getElementById("turnstile-secret-key");
+
+      if (!siteKeyInput || !secretKeyInput) {
+        return;
+      }
+
+      const payload = {
+        site_key: siteKeyInput.value.trim()
+      };
+
+      const secretValue = secretKeyInput.value.trim();
+      if (secretValue) {
+        payload.secret_key = secretValue;
+      } else if (secretKeyInput.dataset.hasValue === "true") {
+        payload.clear_secret_key = true;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/turnstile/config`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          showNotification("Turnstile config saved", "success");
+          await loadTurnstileRuntimeConfig();
+        } else {
+          showNotification("Save failed: " + (data.message || data.detail || "unknown error"), "error");
+        }
+      } catch (err) {
+        console.error("Failed to save Turnstile config:", err);
+        showNotification("Save failed, please retry", "error");
+      }
+    }
+
+    async function resetTurnstileConfig() {
+      const confirmed = confirm("Reset Turnstile config to ENV defaults?");
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/turnstile/config/reset`, {
+          method: "POST"
+        });
+        const data = await response.json();
+
+        if (data.status === "success") {
+          showNotification("Turnstile config reset to ENV defaults", "success");
+          await loadTurnstileRuntimeConfig();
+        } else {
+          showNotification("Reset failed: " + (data.message || data.detail || "unknown error"), "error");
+        }
+      } catch (err) {
+        console.error("Failed to reset Turnstile config:", err);
+        showNotification("Reset failed, please retry", "error");
+      }
+    }
+
+// ==================== 用户协议管理功能 ====================
 
     async function loadAgreement() {
       try {
@@ -1268,6 +1762,8 @@
     window.addEventListener('load', () => {
       loadRegistrationStatus();
       loadRuntimeConfig();
+      loadApiConfig();
+      loadModerationConfig();
       loadIpAbuseSettings();
       loadTurnstileSettings();
       loadAnnouncementSettings();  // 加载公告设置
