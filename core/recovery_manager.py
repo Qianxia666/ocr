@@ -15,6 +15,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Callable, Set, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
+from contextlib import contextmanager
 from enum import Enum
 import hashlib
 
@@ -171,10 +172,23 @@ class RecoveryManager:
         # 这里可以添加异步初始化逻辑
         logger.info("恢复管理器异步组件初始化完成")
     
+    @contextmanager
+    def _get_db_connection(self):
+        """????????SQLite??"""
+        conn = sqlite3.connect(self.recovery_db_path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _init_database(self):
         """初始化恢复数据库"""
         try:
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 
                 # 创建检查点表
@@ -600,7 +614,7 @@ class RecoveryManager:
     async def _save_checkpoint_to_db(self, checkpoint: TaskCheckpoint):
         """保存检查点到数据库"""
         try:
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR REPLACE INTO checkpoints 
@@ -632,7 +646,7 @@ class RecoveryManager:
                 return self._active_checkpoints[checkpoint_id]
             
             # 从数据库查找
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT * FROM checkpoints WHERE checkpoint_id = ?
@@ -665,7 +679,7 @@ class RecoveryManager:
     async def _find_latest_checkpoint(self, task_id: str) -> Optional[TaskCheckpoint]:
         """查找最新检查点"""
         try:
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT * FROM checkpoints 
@@ -701,7 +715,7 @@ class RecoveryManager:
         try:
             checkpoints = []
             
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT * FROM checkpoints 
@@ -825,7 +839,7 @@ class RecoveryManager:
         """删除检查点"""
         try:
             # 从数据库删除
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('DELETE FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,))
                 conn.commit()
@@ -868,7 +882,7 @@ class RecoveryManager:
             if task_id in self._recovery_jobs:
                 del self._recovery_jobs[task_id]
             
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('DELETE FROM recovery_jobs WHERE task_id = ?', (task_id,))
                 conn.commit()
@@ -881,7 +895,7 @@ class RecoveryManager:
     async def _save_recovery_job_to_db(self, recovery_job: RecoveryJob):
         """保存恢复任务到数据库"""
         try:
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR REPLACE INTO recovery_jobs 
@@ -914,7 +928,7 @@ class RecoveryManager:
     async def _load_recovery_jobs(self):
         """加载恢复任务"""
         try:
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('SELECT * FROM recovery_jobs')
                 
@@ -993,7 +1007,7 @@ class RecoveryManager:
             # 清理过期检查点
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=self._checkpoint_retention_hours)
             
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT checkpoint_id FROM checkpoints 
@@ -1015,7 +1029,7 @@ class RecoveryManager:
             for job in completed_jobs:
                 del self._recovery_jobs[job.task_id]
                 
-                with sqlite3.connect(self.recovery_db_path) as conn:
+                with self._get_db_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute('DELETE FROM recovery_jobs WHERE task_id = ?', (job.task_id,))
                     conn.commit()
@@ -1093,7 +1107,7 @@ class RecoveryManager:
         try:
             checkpoints = []
             
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT checkpoint_id, checkpoint_type, timestamp, progress 
@@ -1147,7 +1161,7 @@ class RecoveryManager:
         """标记检查点为失败状态"""
         try:
             # 更新检查点元数据
-            with sqlite3.connect(self.recovery_db_path) as conn:
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 # 获取检查点信息
                 cursor.execute('SELECT * FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,))

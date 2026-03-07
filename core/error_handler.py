@@ -14,37 +14,37 @@ import re
 logger = logging.getLogger(__name__)
 
 class ErrorType(Enum):
-    """错误类型枚举"""
-    NETWORK_ERROR = "network_error"          # 网络错误
-    API_ERROR = "api_error"                  # API错误
-    SYSTEM_ERROR = "system_error"            # 系统错误
-    BUSINESS_ERROR = "business_error"        # 业务错误
-    TIMEOUT_ERROR = "timeout_error"          # 超时错误
-    RESOURCE_ERROR = "resource_error"        # 资源错误
-    AUTHENTICATION_ERROR = "auth_error"      # 认证错误
-    RATE_LIMIT_ERROR = "rate_limit_error"    # 限流错误
-    UNKNOWN_ERROR = "unknown_error"          # 未知错误
+    """閿欒绫诲瀷鏋氫妇"""
+    NETWORK_ERROR = "network_error"          # 缃戠粶閿欒
+    API_ERROR = "api_error"                  # API閿欒
+    SYSTEM_ERROR = "system_error"            # 绯荤粺閿欒
+    BUSINESS_ERROR = "business_error"        # 涓氬姟閿欒
+    TIMEOUT_ERROR = "timeout_error"          # 瓒呮椂閿欒
+    RESOURCE_ERROR = "resource_error"        # 璧勬簮閿欒
+    AUTHENTICATION_ERROR = "auth_error"      # 璁よ瘉閿欒
+    RATE_LIMIT_ERROR = "rate_limit_error"    # 闄愭祦閿欒
+    UNKNOWN_ERROR = "unknown_error"          # 鏈煡閿欒
 
 class ErrorSeverity(Enum):
-    """错误严重程度"""
-    LOW = "low"          # 低级错误，可以忽略或简单重试
-    MEDIUM = "medium"    # 中级错误，需要处理但不影响整个系统
-    HIGH = "high"        # 高级错误，需要立即处理
-    CRITICAL = "critical" # 严重错误，可能导致系统不可用
+    """閿欒涓ラ噸绋嬪害"""
+    LOW = "low"          # 浣庣骇閿欒锛屽彲浠ュ拷鐣ユ垨绠€鍗曢噸璇?
+    MEDIUM = "medium"    # 涓骇閿欒锛岄渶瑕佸鐞嗕絾涓嶅奖鍝嶆暣涓郴缁?
+    HIGH = "high"        # 楂樼骇閿欒锛岄渶瑕佺珛鍗冲鐞?
+    CRITICAL = "critical" # 涓ラ噸閿欒锛屽彲鑳藉鑷寸郴缁熶笉鍙敤
 
 class RecoveryStrategy(Enum):
-    """恢复策略"""
-    RETRY = "retry"                    # 重试
-    EXPONENTIAL_BACKOFF = "exp_backoff" # 指数退避重试
-    CIRCUIT_BREAKER = "circuit_breaker" # 熔断器
-    FALLBACK = "fallback"              # 降级处理
-    ESCALATE = "escalate"              # 升级处理
-    IGNORE = "ignore"                  # 忽略错误
-    ABORT = "abort"                    # 中止操作
+    """鎭㈠绛栫暐"""
+    RETRY = "retry"                    # 閲嶈瘯
+    EXPONENTIAL_BACKOFF = "exp_backoff" # 鎸囨暟閫€閬块噸璇?
+    CIRCUIT_BREAKER = "circuit_breaker" # 鐔旀柇鍣?
+    FALLBACK = "fallback"              # 闄嶇骇澶勭悊
+    ESCALATE = "escalate"              # 鍗囩骇澶勭悊
+    IGNORE = "ignore"                  # 蹇界暐閿欒
+    ABORT = "abort"                    # 涓鎿嶄綔
 
 @dataclass
 class ErrorContext:
-    """错误上下文"""
+    """閿欒涓婁笅鏂?"""
     error_id: str
     error_type: ErrorType
     severity: ErrorSeverity
@@ -55,24 +55,24 @@ class ErrorContext:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     retry_count: int = 0
     max_retries: int = 3
-    should_retry: bool = True
+    should_retry: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     @property
     def error_message(self) -> str:
-        """获取错误消息"""
+        """鑾峰彇閿欒娑堟伅"""
         return str(self.exception)
     
     @property
     def error_traceback(self) -> str:
-        """获取错误堆栈"""
+        """鑾峰彇閿欒鍫嗘爤"""
         return traceback.format_exception(
             type(self.exception), self.exception, self.exception.__traceback__
         )
 
 @dataclass
 class RecoveryConfig:
-    """恢复配置"""
+    """鎭㈠閰嶇疆"""
     strategy: RecoveryStrategy
     max_retries: int = 3
     base_delay: float = 1.0
@@ -85,10 +85,10 @@ class RecoveryConfig:
     custom_handler: Optional[Callable] = None
 
 class ErrorClassifier:
-    """错误分类器"""
+    """閿欒鍒嗙被鍣?"""
     
     def __init__(self):
-        # 错误模式匹配规则
+        # 閿欒妯″紡鍖归厤瑙勫垯
         self._error_patterns = {
             ErrorType.NETWORK_ERROR: [
                 r'connection.*error',
@@ -159,15 +159,15 @@ class ErrorClassifier:
     def classify_error(self, exception: Exception, 
                       operation: Optional[str] = None) -> tuple[ErrorType, ErrorSeverity]:
         """
-        分类错误
-        :param exception: 异常对象
-        :param operation: 操作类型
-        :return: (错误类型, 严重程度)
+        鍒嗙被閿欒
+        :param exception: 寮傚父瀵硅薄
+        :param operation: 鎿嶄綔绫诲瀷
+        :return: (閿欒绫诲瀷, 涓ラ噸绋嬪害)
         """
         error_message = str(exception).lower()
         exception_type = type(exception)
         
-        # 匹配错误类型
+        # 鍖归厤閿欒绫诲瀷
         classified_type = ErrorType.UNKNOWN_ERROR
         for error_type, patterns in self._error_patterns.items():
             for pattern in patterns:
@@ -177,7 +177,7 @@ class ErrorClassifier:
                 elif isinstance(pattern, str) and re.search(pattern, error_message):
                     classified_type = error_type
                     break
-                elif callable(pattern):
+                elif callable(pattern) and not isinstance(pattern, type):
                     try:
                         if pattern(exception):
                             classified_type = error_type
@@ -187,7 +187,7 @@ class ErrorClassifier:
             if classified_type != ErrorType.UNKNOWN_ERROR:
                 break
         
-        # 确定严重程度
+        # 纭畾涓ラ噸绋嬪害
         severity = self._determine_severity(classified_type, exception, operation)
         
         return classified_type, severity
@@ -195,8 +195,8 @@ class ErrorClassifier:
     def _determine_severity(self, error_type: ErrorType, 
                           exception: Exception, 
                           operation: Optional[str]) -> ErrorSeverity:
-        """确定错误严重程度"""
-        # 基于错误类型的基础严重程度
+        """纭畾閿欒涓ラ噸绋嬪害"""
+        # 鍩轰簬閿欒绫诲瀷鐨勫熀纭€涓ラ噸绋嬪害
         base_severity_map = {
             ErrorType.NETWORK_ERROR: ErrorSeverity.MEDIUM,
             ErrorType.API_ERROR: ErrorSeverity.MEDIUM,
@@ -211,16 +211,16 @@ class ErrorClassifier:
         
         severity = base_severity_map.get(error_type, ErrorSeverity.MEDIUM)
         
-        # 基于操作类型调整严重程度
+        # 鍩轰簬鎿嶄綔绫诲瀷璋冩暣涓ラ噸绋嬪害
         if operation:
             if operation in ['task_initialization', 'system_startup']:
-                # 提升系统关键操作的严重程度
+                # 鎻愬崌绯荤粺鍏抽敭鎿嶄綔鐨勪弗閲嶇▼搴?
                 if severity == ErrorSeverity.LOW:
                     severity = ErrorSeverity.MEDIUM
                 elif severity == ErrorSeverity.MEDIUM:
                     severity = ErrorSeverity.HIGH
         
-        # 基于异常属性调整严重程度
+        # 鍩轰簬寮傚父灞炴€ц皟鏁翠弗閲嶇▼搴?
         if hasattr(exception, 'status'):
             status_code = exception.status
             if status_code >= 500:
@@ -231,7 +231,7 @@ class ErrorClassifier:
         return severity
 
 class CircuitBreaker:
-    """熔断器"""
+    """鐔旀柇鍣?"""
     
     def __init__(self, threshold: int = 5, timeout: float = 60.0):
         self.threshold = threshold
@@ -241,7 +241,7 @@ class CircuitBreaker:
         self.state = 'closed'  # closed, open, half_open
     
     def can_execute(self) -> bool:
-        """检查是否可以执行操作"""
+        """妫€鏌ユ槸鍚﹀彲浠ユ墽琛屾搷浣?"""
         current_time = time.time()
         
         if self.state == 'open':
@@ -253,12 +253,12 @@ class CircuitBreaker:
         return True
     
     def record_success(self):
-        """记录成功"""
+        """璁板綍鎴愬姛"""
         self.failure_count = 0
         self.state = 'closed'
     
     def record_failure(self):
-        """记录失败"""
+        """璁板綍澶辫触"""
         self.failure_count += 1
         self.last_failure_time = time.time()
         
@@ -266,19 +266,19 @@ class CircuitBreaker:
             self.state = 'open'
 
 class ErrorHandler:
-    """智能错误处理器"""
+    """鏅鸿兘閿欒澶勭悊鍣?"""
     
     def __init__(self, websocket_manager=None, timeout_manager=None):
         """
-        初始化错误处理器
-        :param websocket_manager: WebSocket管理器
-        :param timeout_manager: 超时管理器
+        鍒濆鍖栭敊璇鐞嗗櫒
+        :param websocket_manager: WebSocket绠＄悊鍣?
+        :param timeout_manager: 瓒呮椂绠＄悊鍣?
         """
         self.websocket_manager = websocket_manager
         self.timeout_manager = timeout_manager
         self.classifier = ErrorClassifier()
         
-        # 错误统计
+        # 閿欒缁熻
         self._error_stats = {
             'total_errors': 0,
             'errors_by_type': {error_type.value: 0 for error_type in ErrorType},
@@ -288,10 +288,10 @@ class ErrorHandler:
             'failed_recoveries': 0,
         }
         
-        # 熔断器实例
+        # 鐔旀柇鍣ㄥ疄渚?
         self._circuit_breakers: Dict[str, CircuitBreaker] = {}
         
-        # 默认恢复配置
+        # 榛樿鎭㈠閰嶇疆
         self._default_recovery_configs = {
             ErrorType.NETWORK_ERROR: RecoveryConfig(
                 strategy=RecoveryStrategy.EXPONENTIAL_BACKOFF,
@@ -344,13 +344,13 @@ class ErrorHandler:
             )
         }
         
-        logger.info("错误处理器初始化完成")
+        logger.info("閿欒澶勭悊鍣ㄥ垵濮嬪寲瀹屾垚")
     
     async def initialize(self):
-        """初始化错误处理器的异步组件"""
-        logger.info("开始初始化错误处理器异步组件...")
-        # 这里可以添加异步初始化逻辑
-        logger.info("错误处理器异步组件初始化完成")
+        """鍒濆鍖栭敊璇鐞嗗櫒鐨勫紓姝ョ粍浠?"""
+        logger.info("寮€濮嬪垵濮嬪寲閿欒澶勭悊鍣ㄥ紓姝ョ粍浠?..")
+        # 杩欓噷鍙互娣诲姞寮傛鍒濆鍖栭€昏緫
+        logger.info("閿欒澶勭悊鍣ㄥ紓姝ョ粍浠跺垵濮嬪寲瀹屾垚")
     
     async def handle_error(self, 
                           exception: Exception,
@@ -360,19 +360,19 @@ class ErrorHandler:
                           custom_config: Optional[RecoveryConfig] = None,
                           metadata: Optional[Dict[str, Any]] = None) -> ErrorContext:
         """
-        处理错误
-        :param exception: 异常对象
-        :param task_id: 任务ID
-        :param page_number: 页面编号
-        :param operation: 操作名称
-        :param custom_config: 自定义恢复配置
-        :param metadata: 元数据
-        :return: 错误上下文
+        澶勭悊閿欒
+        :param exception: 寮傚父瀵硅薄
+        :param task_id: 浠诲姟ID
+        :param page_number: 椤甸潰缂栧彿
+        :param operation: 鎿嶄綔鍚嶇О
+        :param custom_config: 鑷畾涔夋仮澶嶉厤缃?
+        :param metadata: 鍏冩暟鎹?
+        :return: 閿欒涓婁笅鏂?
         """
-        # 分类错误
+        # 鍒嗙被閿欒
         error_type, severity = self.classifier.classify_error(exception, operation)
         
-        # 创建错误上下文
+        # 鍒涘缓閿欒涓婁笅鏂?
         error_context = ErrorContext(
             error_id=f"err_{int(time.time() * 1000)}_{random.randint(1000, 9999)}",
             error_type=error_type,
@@ -384,20 +384,23 @@ class ErrorHandler:
             metadata=metadata or {}
         )
         
-        # 更新统计
+        # 鏇存柊缁熻
         self._update_error_stats(error_type, severity)
         
-        # 记录错误
+        # 璁板綍閿欒
         await self._log_error(error_context)
         
-        # 发送错误通知
+        # 鍙戦€侀敊璇€氱煡
         await self._send_error_notification(error_context)
         
-        # 执行恢复策略
+        # 鎵ц鎭㈠绛栫暐
         recovery_config = custom_config or self._default_recovery_configs.get(
             error_type, self._default_recovery_configs[ErrorType.UNKNOWN_ERROR]
         )
-        
+
+        error_context.max_retries = recovery_config.max_retries
+        error_context.should_retry = False
+
         await self._execute_recovery_strategy(error_context, recovery_config)
         
         return error_context
@@ -405,7 +408,7 @@ class ErrorHandler:
     async def _execute_recovery_strategy(self, 
                                        error_context: ErrorContext, 
                                        config: RecoveryConfig):
-        """执行恢复策略"""
+        """鎵ц鎭㈠绛栫暐"""
         try:
             self._error_stats['recovery_attempts'] += 1
             
@@ -424,20 +427,21 @@ class ErrorHandler:
             elif config.strategy == RecoveryStrategy.ABORT:
                 await self._handle_abort(error_context, config)
             
-            # 调用自定义处理器
+            # 璋冪敤鑷畾涔夊鐞嗗櫒
             if config.custom_handler:
                 await config.custom_handler(error_context, config)
                 
         except Exception as e:
-            logger.error(f"执行恢复策略失败: {e}")
+            logger.error(f"鎵ц鎭㈠绛栫暐澶辫触: {e}")
             self._error_stats['failed_recoveries'] += 1
     
     async def _handle_retry(self, error_context: ErrorContext, config: RecoveryConfig):
-        """处理简单重试"""
+        """澶勭悊绠€鍗曢噸璇?"""
         if error_context.retry_count < config.max_retries:
             error_context.retry_count += 1
-            
-            # 计算延迟时间
+            error_context.should_retry = True
+
+            # 璁＄畻寤惰繜鏃堕棿
             delay = config.base_delay
             if config.jitter:
                 delay += random.uniform(0, config.base_delay * 0.1)
@@ -447,75 +451,53 @@ class ErrorHandler:
             if delay > 0:
                 await asyncio.sleep(delay)
             
-            logger.info(f"执行重试: {error_context.error_id} (第{error_context.retry_count}次)")
+            logger.info("retrying error %s attempt %s", error_context.error_id, error_context.retry_count)
             self._error_stats['successful_recoveries'] += 1
         else:
+            error_context.should_retry = False
             await self._handle_max_retries_exceeded(error_context)
-    
+
     async def _handle_exponential_backoff(self, error_context: ErrorContext, config: RecoveryConfig):
         """处理指数退避重试"""
         if error_context.retry_count < config.max_retries:
             error_context.retry_count += 1
-            
-            # 计算指数退避延迟
+            error_context.should_retry = True
+
             delay = min(
                 config.base_delay * (config.backoff_multiplier ** (error_context.retry_count - 1)),
-                config.max_delay
+                config.max_delay,
             )
-            
-            # 添加随机抖动
+
             if config.jitter:
                 jitter_range = delay * 0.1
                 delay += random.uniform(-jitter_range, jitter_range)
                 delay = max(0, delay)
-            
+
             await self._send_retry_notification(error_context, delay)
-            
+
             if delay > 0:
                 await asyncio.sleep(delay)
-            
-            logger.info(f"执行指数退避重试: {error_context.error_id} "
-                       f"(第{error_context.retry_count}次, 延迟{delay:.2f}s)")
+
+            logger.info(
+                "执行指数退避重试: %s (第%s次, 延迟%.2fs)",
+                error_context.error_id,
+                error_context.retry_count,
+                delay,
+            )
             self._error_stats['successful_recoveries'] += 1
         else:
+            error_context.should_retry = False
             await self._handle_max_retries_exceeded(error_context)
     
-    async def _handle_circuit_breaker(self, error_context: ErrorContext, config: RecoveryConfig):
-        """处理熔断器策略"""
-        breaker_key = f"{error_context.operation or 'default'}"
-        
-        if breaker_key not in self._circuit_breakers:
-            self._circuit_breakers[breaker_key] = CircuitBreaker(
-                threshold=config.circuit_breaker_threshold,
-                timeout=config.circuit_breaker_timeout
-            )
-        
-        circuit_breaker = self._circuit_breakers[breaker_key]
-        
-        if not circuit_breaker.can_execute():
-            await self._send_circuit_breaker_notification(error_context, 'open')
-            logger.warning(f"熔断器开启，跳过操作: {error_context.error_id}")
-            return
-        
-        # 记录失败
-        circuit_breaker.record_failure()
-        
-        if circuit_breaker.state == 'open':
-            await self._send_circuit_breaker_notification(error_context, 'triggered')
-            logger.error(f"熔断器触发: {error_context.error_id}")
-        else:
-            # 尝试重试
-            await self._handle_retry(error_context, config)
-    
     async def _handle_fallback(self, error_context: ErrorContext, config: RecoveryConfig):
-        """处理降级策略"""
+        """澶勭悊闄嶇骇绛栫暐"""
         fallback_message = {
             'type': 'fallback_activated',
             'error_id': error_context.error_id,
             'task_id': error_context.task_id,
             'page_number': error_context.page_number,
             'operation': error_context.operation,
-            'message': '启用降级处理模式',
+            'message': '鍚敤闄嶇骇澶勭悊妯″紡',
             'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
@@ -524,19 +506,19 @@ class ErrorHandler:
                 error_context.task_id, fallback_message
             )
         
-        # 执行降级处理器
+        # 鎵ц闄嶇骇澶勭悊鍣?
         if config.fallback_handler:
             try:
                 await config.fallback_handler(error_context)
                 self._error_stats['successful_recoveries'] += 1
             except Exception as e:
-                logger.error(f"降级处理失败: {e}")
+                logger.error(f"闄嶇骇澶勭悊澶辫触: {e}")
                 self._error_stats['failed_recoveries'] += 1
         
-        logger.info(f"执行降级处理: {error_context.error_id}")
+        logger.info(f"鎵ц闄嶇骇澶勭悊: {error_context.error_id}")
     
     async def _handle_escalation(self, error_context: ErrorContext, config: RecoveryConfig):
-        """处理升级策略"""
+        """澶勭悊鍗囩骇绛栫暐"""
         escalation_message = {
             'type': 'error_escalation',
             'error_id': error_context.error_id,
@@ -546,7 +528,7 @@ class ErrorHandler:
             'error_type': error_context.error_type.value,
             'severity': error_context.severity.value,
             'error_message': error_context.error_message,
-            'message': '错误需要人工干预',
+            'message': 'error requires escalation',
             'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
@@ -555,15 +537,15 @@ class ErrorHandler:
                 error_context.task_id, escalation_message
             )
         
-        logger.critical(f"错误升级处理: {error_context.error_id} - {error_context.error_message}")
+        logger.critical(f"閿欒鍗囩骇澶勭悊: {error_context.error_id} - {error_context.error_message}")
     
     async def _handle_ignore(self, error_context: ErrorContext, config: RecoveryConfig):
-        """处理忽略策略"""
-        logger.info(f"忽略错误: {error_context.error_id}")
+        """澶勭悊蹇界暐绛栫暐"""
+        logger.info(f"蹇界暐閿欒: {error_context.error_id}")
         self._error_stats['successful_recoveries'] += 1
     
     async def _handle_abort(self, error_context: ErrorContext, config: RecoveryConfig):
-        """处理中止策略"""
+        """澶勭悊涓绛栫暐"""
         abort_message = {
             'type': 'operation_aborted',
             'error_id': error_context.error_id,
@@ -571,7 +553,7 @@ class ErrorHandler:
             'page_number': error_context.page_number,
             'operation': error_context.operation,
             'error_type': error_context.error_type.value,
-            'message': '操作已中止',
+            'message': 'operation aborted',
             'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
@@ -580,11 +562,12 @@ class ErrorHandler:
                 error_context.task_id, abort_message
             )
         
-        logger.error(f"中止操作: {error_context.error_id}")
+        logger.error(f"涓鎿嶄綔: {error_context.error_id}")
         self._error_stats['failed_recoveries'] += 1
     
     async def _handle_max_retries_exceeded(self, error_context: ErrorContext):
-        """处理重试次数超限"""
+        """澶勭悊閲嶈瘯娆℃暟瓒呴檺"""
+        error_context.should_retry = False
         max_retries_message = {
             'type': 'max_retries_exceeded',
             'error_id': error_context.error_id,
@@ -592,7 +575,7 @@ class ErrorHandler:
             'page_number': error_context.page_number,
             'operation': error_context.operation,
             'retry_count': error_context.retry_count,
-            'message': '重试次数已达上限',
+            'message': '閲嶈瘯娆℃暟宸茶揪涓婇檺',
             'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
@@ -601,19 +584,19 @@ class ErrorHandler:
                 error_context.task_id, max_retries_message
             )
         
-        logger.error(f"重试次数已达上限: {error_context.error_id}")
+        logger.error(f"閲嶈瘯娆℃暟宸茶揪涓婇檺: {error_context.error_id}")
         self._error_stats['failed_recoveries'] += 1
     
     async def _log_error(self, error_context: ErrorContext):
-        """记录错误日志"""
+        """璁板綍閿欒鏃ュ織"""
         log_message = (
-            f"错误处理 - ID: {error_context.error_id}, "
-            f"类型: {error_context.error_type.value}, "
-            f"严重程度: {error_context.severity.value}, "
-            f"任务: {error_context.task_id}, "
-            f"页面: {error_context.page_number}, "
-            f"操作: {error_context.operation}, "
-            f"消息: {error_context.error_message}"
+            f"閿欒澶勭悊 - ID: {error_context.error_id}, "
+            f"绫诲瀷: {error_context.error_type.value}, "
+            f"涓ラ噸绋嬪害: {error_context.severity.value}, "
+            f"浠诲姟: {error_context.task_id}, "
+            f"椤甸潰: {error_context.page_number}, "
+            f"鎿嶄綔: {error_context.operation}, "
+            f"娑堟伅: {error_context.error_message}"
         )
         
         if error_context.severity == ErrorSeverity.CRITICAL:
@@ -626,7 +609,7 @@ class ErrorHandler:
             logger.info(log_message)
     
     async def _send_error_notification(self, error_context: ErrorContext):
-        """发送错误通知"""
+        """鍙戦€侀敊璇€氱煡"""
         try:
             error_message = {
                 'type': 'error_occurred',
@@ -647,10 +630,10 @@ class ErrorHandler:
                 )
                 
         except Exception as e:
-            logger.error(f"发送错误通知失败: {e}")
+            logger.error(f"鍙戦€侀敊璇€氱煡澶辫触: {e}")
     
     async def _send_retry_notification(self, error_context: ErrorContext, delay: float):
-        """发送重试通知"""
+        """鍙戦€侀噸璇曢€氱煡"""
         try:
             retry_message = {
                 'type': 'error_retry',
@@ -661,7 +644,7 @@ class ErrorHandler:
                 'retry_count': error_context.retry_count,
                 'max_retries': error_context.max_retries,
                 'delay_seconds': delay,
-                'message': f'第{error_context.retry_count}次重试',
+                'message': f'retry attempt {error_context.retry_count}',
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
@@ -671,10 +654,10 @@ class ErrorHandler:
                 )
                 
         except Exception as e:
-            logger.error(f"发送重试通知失败: {e}")
+            logger.error(f"鍙戦€侀噸璇曢€氱煡澶辫触: {e}")
     
     async def _send_circuit_breaker_notification(self, error_context: ErrorContext, state: str):
-        """发送熔断器通知"""
+        """鍙戦€佺啍鏂櫒閫氱煡"""
         try:
             cb_message = {
                 'type': 'circuit_breaker_state',
@@ -682,7 +665,7 @@ class ErrorHandler:
                 'task_id': error_context.task_id,
                 'operation': error_context.operation,
                 'state': state,
-                'message': f'熔断器状态: {state}',
+                'message': f'鐔旀柇鍣ㄧ姸鎬? {state}',
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
@@ -692,16 +675,16 @@ class ErrorHandler:
                 )
                 
         except Exception as e:
-            logger.error(f"发送熔断器通知失败: {e}")
+            logger.error(f"鍙戦€佺啍鏂櫒閫氱煡澶辫触: {e}")
     
     def _update_error_stats(self, error_type: ErrorType, severity: ErrorSeverity):
-        """更新错误统计"""
+        """鏇存柊閿欒缁熻"""
         self._error_stats['total_errors'] += 1
         self._error_stats['errors_by_type'][error_type.value] += 1
         self._error_stats['errors_by_severity'][severity.value] += 1
     
     def get_error_stats(self) -> Dict[str, Any]:
-        """获取错误统计信息"""
+        """鑾峰彇閿欒缁熻淇℃伅"""
         return {
             'error_statistics': dict(self._error_stats),
             'circuit_breakers': {
@@ -725,34 +708,34 @@ class ErrorHandler:
         }
     
     def get_statistics(self) -> Dict[str, Any]:
-        """获取错误处理器统计信息（get_stats的别名）"""
+        """鑾峰彇閿欒澶勭悊鍣ㄧ粺璁′俊鎭紙get_stats鐨勫埆鍚嶏級"""
         return self.get_error_stats()
 
     def update_recovery_config(self, error_type: ErrorType, config: RecoveryConfig):
-        """更新恢复配置"""
+        """鏇存柊鎭㈠閰嶇疆"""
         self._default_recovery_configs[error_type] = config
-        logger.info(f"更新恢复配置: {error_type.value}")
+        logger.info(f"鏇存柊鎭㈠閰嶇疆: {error_type.value}")
     
     def reset_circuit_breaker(self, operation: str):
-        """重置熔断器"""
+        """閲嶇疆鐔旀柇鍣?"""
         if operation in self._circuit_breakers:
             self._circuit_breakers[operation].failure_count = 0
             self._circuit_breakers[operation].state = 'closed'
-            logger.info(f"重置熔断器: {operation}")
+            logger.info(f"閲嶇疆鐔旀柇鍣? {operation}")
 
-# 全局错误处理器实例
+# 鍏ㄥ眬閿欒澶勭悊鍣ㄥ疄渚?
 error_handler: Optional[ErrorHandler] = None
 
 async def init_error_handler(websocket_manager=None, timeout_manager=None):
-    """初始化全局错误处理器"""
+    """鍒濆鍖栧叏灞€閿欒澶勭悊鍣?"""
     global error_handler
     if error_handler is None:
         error_handler = ErrorHandler(websocket_manager, timeout_manager)
-        logger.info("全局错误处理器初始化完成")
+        logger.info("鍏ㄥ眬閿欒澶勭悊鍣ㄥ垵濮嬪寲瀹屾垚")
 
 async def shutdown_error_handler():
-    """关闭全局错误处理器"""
+    """鍏抽棴鍏ㄥ眬閿欒澶勭悊鍣?"""
     global error_handler
     if error_handler:
         error_handler = None
-        logger.info("全局错误处理器已关闭")
+        logger.info("鍏ㄥ眬閿欒澶勭悊鍣ㄥ凡鍏抽棴")

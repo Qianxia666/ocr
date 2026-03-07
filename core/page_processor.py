@@ -5,18 +5,22 @@ import time
 import fitz  # PyMuPDF
 from typing import Dict, Any, Optional, List, AsyncGenerator, Tuple
 from datetime import datetime, timezone
-from io import BytesIO
-from PIL import Image
 import aiohttp
 import json
-import base64
 from enum import Enum
 
 from models.database import (
     TaskStatus, TaskType, task_model, page_result_model,
     task_progress_model, page_batch_model
 )
-from core.content_moderator import ContentModerator, ModerationFailedException, get_moderation_config
+from core.image_utils import compress_image_to_target_ratio
+from core.ocr_client import OCRServiceError, request_ocr_markdown
+from core.ocr_policy import (
+    OCR_SYSTEM_PROMPT,
+    OCR_USER_PROMPT,
+    build_ocr_request_config,
+    resolve_timeout_seconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,22 +44,57 @@ class PageProcessor:
         # 保存静态API配置
         self.api_config = api_config or {}
 
-        # 初始化内容审查器
-        self.moderator = ContentModerator(get_moderation_config())
+        self._fallback_max_concurrent_pages = self.api_config.get('concurrency', 5)
+        self._fallback_batch_size = self.api_config.get('batch_size', 4)
+        self._fallback_pdf_dpi = self.api_config.get('pdf_dpi', 200)
 
         # 固定配置(不会变化的)
-        self.max_concurrent_pages = self.api_config.get('concurrency', 5)
-        self.default_batch_size = self.api_config.get('batch_size', 4)
-        self.retry_delay = self.api_config.get('retry_delay', 0.5)
+        try:
+            self.retry_delay = max(float(self.api_config.get('retry_delay', 0.5)), 0.1)
+        except (TypeError, ValueError):
+            self.retry_delay = 0.5
         self.health_check_interval = self.api_config.get('health_check_interval', 300)
 
         # 会话管理
         self._session = None  # 延迟创建 aiohttp.ClientSession
         self._session_lock = asyncio.Lock()
+        self._pdf_render_lock = asyncio.Lock()
         self._last_health_check_ts = 0.0
         self._last_health_check_ok = True
 
         logger.info(f"分页处理器初始化完成 - 并发: {self.max_concurrent_pages}, 批次: {self.default_batch_size}")
+
+    def _get_runtime_positive_int(self, field_name: str, fallback: int, minimum: int = 1) -> int:
+        if self._runtime_config is not None and hasattr(self._runtime_config, field_name):
+            try:
+                value = int(getattr(self._runtime_config, field_name))
+            except (TypeError, ValueError):
+                value = fallback
+        else:
+            value = fallback
+        return max(minimum, value)
+
+    @property
+    def max_concurrent_pages(self) -> int:
+        return self._get_runtime_positive_int(
+            'concurrency',
+            int(self.api_config.get('concurrency', self._fallback_max_concurrent_pages)),
+        )
+
+    @property
+    def default_batch_size(self) -> int:
+        return self._get_runtime_positive_int(
+            'batch_size',
+            int(self.api_config.get('batch_size', self._fallback_batch_size)),
+        )
+
+    @property
+    def pdf_dpi(self) -> int:
+        return self._get_runtime_positive_int(
+            'pdf_dpi',
+            int(self.api_config.get('pdf_dpi', self._fallback_pdf_dpi)),
+            minimum=72,
+        )
 
     @property
     def max_retries(self) -> int:
@@ -69,11 +108,9 @@ class PageProcessor:
     @property
     def api_timeout(self) -> int:
         """动态获取API超时时间"""
-        if self._runtime_config:
-            timeout = getattr(self._runtime_config, 'api_timeout', 120)
-            logger.debug(f"从runtime_config读取api_timeout: {timeout}")
-            return timeout
-        return 120
+        timeout = resolve_timeout_seconds(self._runtime_config, 120)
+        logger.debug(f"从runtime_config读取api_timeout: {timeout}")
+        return timeout
 
     async def _get_log_prefix_for_task(self, task_id: str) -> str:
         """获取任务的日志前缀（包含文件名）"""
@@ -237,7 +274,7 @@ class PageProcessor:
             pdf_document = None
             try:
                 # 从文件路径打开PDF,而非内存
-                pdf_document = fitz.open(file_path)
+                pdf_document = await self._open_pdf_document_from_file(file_path)
                 logger.info(f"从临时文件打开PDF: {file_path}")
 
                 # 使用信号量控制并发批次
@@ -272,7 +309,7 @@ class PageProcessor:
 
             finally:
                 if pdf_document:
-                    pdf_document.close()
+                    await self._close_pdf_document(pdf_document)
 
             # 计算最终结果
             total_time = time.time() - start_time
@@ -332,7 +369,7 @@ class PageProcessor:
 
             pdf_document = None
             try:
-                pdf_document = fitz.open(stream=file_data, filetype="pdf")
+                pdf_document = await self._open_pdf_document_from_bytes(file_data)
                 
                 # 使用信号量控制并发批次
                 batch_semaphore = asyncio.Semaphore(strategy['max_concurrent_batches'])
@@ -367,7 +404,7 @@ class PageProcessor:
                 
             finally:
                 if pdf_document:
-                    pdf_document.close()
+                    await self._close_pdf_document(pdf_document)
             
             # 计算最终结果
             total_time = time.time() - start_time
@@ -527,23 +564,7 @@ class PageProcessor:
                 batch_id=batch_id
             )
             
-            # 转换页面为图片
-            page = pdf_document.load_page(page_number - 1)
-            
-            # 根据策略优化DPI
-            dpi = self._calculate_optimal_dpi(page, strategy)
-            pix = page.get_pixmap(dpi=dpi)
-            
-            # 流式转换图片数据
-            image_data = None
-            with BytesIO() as buffer:
-                png_data = pix.tobytes("png")
-                buffer.write(png_data)
-                image_data = buffer.getvalue()
-
-            # 立即释放内存
-            pix = None
-            page = None
+            image_data = await self._render_page_to_png(pdf_document, page_number, strategy)
 
             # 压缩图片（如果配置了压缩比例）
             # 只压缩大于1MB的图片，避免对小图片的无谓开销
@@ -553,9 +574,9 @@ class PageProcessor:
                 len(image_data) > MIN_COMPRESS_SIZE):
                 compression_ratio = self._runtime_config.image_compression_ratio
                 if compression_ratio < 1.0:
-                    image_data = self._compress_image(image_data, compression_ratio)
+                    image_data = await self._compress_image_async(image_data, compression_ratio)
 
-            # 调用OCR API，支持重试（传递task_id用于审查）
+            # 调用 OCR API 并支持重试
             content = await self._call_ocr_api_with_retry(image_data, semaphore, task_id=task_id)
             processing_time = time.time() - page_start_time
             
@@ -574,35 +595,6 @@ class PageProcessor:
                 'success': True,
                 'page_number': page_number,
                 'content_length': len(content) if content else 0,
-                'processing_time': processing_time
-            }
-
-        except ModerationFailedException as moderation_exc:
-            # 审查失败 - 特殊处理
-            processing_time = time.time() - page_start_time
-            logger.warning(f"页面内容审查未通过 {task_id}-{page_number}: {moderation_exc.details}")
-
-            # 保存原始内容(仅后端可见)
-            await page_result_model.update_page_result(
-                task_id, page_number, 'cancelled',
-                content=moderation_exc.original_content,
-                error_message='内容道德审查未通过',
-                processing_time=processing_time,
-                batch_id=batch_id
-            )
-
-            # 保存审查日志
-            await self._save_moderation_log(
-                task_id, page_number, 'block',
-                moderation_exc.details,
-                moderation_exc.original_content
-            )
-
-            return {
-                'success': False,
-                'moderation_failed': True,  # 特殊标记
-                'page_number': page_number,
-                'error': '内容道德审查未通过',
                 'processing_time': processing_time
             }
 
@@ -625,14 +617,12 @@ class PageProcessor:
                 'processing_time': processing_time
             }
     
-    def _calculate_optimal_dpi(self, page, strategy: Dict[str, Any]) -> int:
-        """根据页面大小和策略计算最优DPI"""
-        rect = page.rect
-        width, height = rect.width, rect.height
+    def _calculate_optimal_dpi(self, width: float, height: float, strategy: Dict[str, Any]) -> int:
+        """根据页面尺寸和策略计算最优 DPI。"""
         page_area = width * height
 
         # 基础DPI
-        base_dpi = self.api_config.get('pdf_dpi', 200)
+        base_dpi = self.pdf_dpi
 
         # 根据内存优化策略调整
         if strategy.get('memory_optimization', False):
@@ -646,210 +636,126 @@ class PageProcessor:
         else:
             return base_dpi
 
+    @staticmethod
+    def _open_pdf_document_from_file_sync(file_path: str):
+        """同步打开 PDF 文件，供线程池调用。"""
+        return fitz.open(file_path)
+
+    @staticmethod
+    def _open_pdf_document_from_bytes_sync(file_data: bytes):
+        """同步从字节流打开 PDF，供线程池调用。"""
+        return fitz.open(stream=file_data, filetype="pdf")
+
+    @staticmethod
+    def _close_pdf_document_sync(pdf_document) -> None:
+        """同步关闭 PDF 文档，供线程池调用。"""
+        pdf_document.close()
+
+    def _render_page_to_png_sync(self, pdf_document, page_number: int, strategy: Dict[str, Any]) -> bytes:
+        """CPU 密集型 PDF 渲染（同步函数，供线程池调用）。"""
+        page = pdf_document.load_page(page_number - 1)
+        dpi = self._calculate_optimal_dpi(page.rect.width, page.rect.height, strategy)
+        pix = page.get_pixmap(dpi=dpi)
+        return pix.tobytes("png")
+
+    async def _open_pdf_document_from_file(self, file_path: str):
+        """在线程池中打开 PDF 文件，避免阻塞事件循环。"""
+        async with self._pdf_render_lock:
+            return await asyncio.to_thread(self._open_pdf_document_from_file_sync, file_path)
+
+    async def _open_pdf_document_from_bytes(self, file_data: bytes):
+        """在线程池中从字节流打开 PDF，避免阻塞事件循环。"""
+        async with self._pdf_render_lock:
+            return await asyncio.to_thread(self._open_pdf_document_from_bytes_sync, file_data)
+
+    async def _close_pdf_document(self, pdf_document) -> None:
+        """在线程池中关闭 PDF 文档，避免阻塞事件循环。"""
+        async with self._pdf_render_lock:
+            await asyncio.to_thread(self._close_pdf_document_sync, pdf_document)
+
+    async def _render_page_to_png(self, pdf_document, page_number: int, strategy: Dict[str, Any]) -> bytes:
+        """在线程池中执行 PDF 渲染，避免阻塞事件循环。"""
+        async with self._pdf_render_lock:
+            return await asyncio.to_thread(
+                self._render_page_to_png_sync,
+                pdf_document,
+                page_number,
+                strategy,
+            )
+
     def _compress_image(self, image_data: bytes, compression_ratio: float) -> bytes:
         """
-        压缩图片到指定比例
+        按目标输出体积比例压缩图片
         :param image_data: 原始图片数据
-        :param compression_ratio: 压缩比例(0.1-1.0)，如0.2表示压缩到原尺寸的20%
+        :param compression_ratio: 目标输出体积比例(0.1-1.0)，如0.5表示目标为原文件大小的50%
         :return: 压缩后的图片数据
         """
-        try:
-            # 如果压缩比例为1.0，直接返回原图
-            if compression_ratio >= 1.0:
-                return image_data
+        return compress_image_to_target_ratio(image_data, compression_ratio)
 
-            # 限制压缩比例范围
-            compression_ratio = max(0.1, min(1.0, compression_ratio))
-
-            # 打开图片
-            with BytesIO(image_data) as input_buffer:
-                img = Image.open(input_buffer)
-
-                # 计算新尺寸
-                original_width, original_height = img.size
-                new_width = int(original_width * compression_ratio)
-                new_height = int(original_height * compression_ratio)
-
-                # 压缩图片（使用LANCZOS算法保证质量）
-                compressed_img = img.resize((new_width, new_height), Image.LANCZOS)
-
-                # 转换为字节
-                with BytesIO() as output_buffer:
-                    compressed_img.save(output_buffer, format='PNG')
-                    compressed_data = output_buffer.getvalue()
-
-                size_saved_percent = (1 - len(compressed_data) / len(image_data)) * 100
-                logger.info(f"图片压缩完成: {original_width}x{original_height} -> {new_width}x{new_height}, "
-                           f"原大小: {len(image_data)//1024}KB, 压缩后: {len(compressed_data)//1024}KB, "
-                           f"节省: {size_saved_percent:.1f}%")
-
-                return compressed_data
-
-        except Exception as e:
-            logger.warning(f"图片压缩失败，使用原图: {e}")
-            return image_data
-    
+    async def _compress_image_async(self, image_data: bytes, compression_ratio: float) -> bytes:
+        """在线程池中执行图片压缩，避免阻塞事件循环"""
+        return await asyncio.to_thread(self._compress_image, image_data, compression_ratio)
     async def _call_ocr_api_with_retry(self, image_data: bytes, semaphore: asyncio.Semaphore, task_id: str = None) -> str:
-        """调用OCR API，包含增强的重试与诊断信息"""
-        last_exception: Optional[Exception] = None
-        retry_count = 0
-        attempt_errors = []
-
-        for attempt in range(self.max_retries):
-            retry_count = attempt + 1
-            try:
-                if attempt > 0:
-                    should_continue = await self._should_continue_retry(last_exception, attempt)
-                    if not should_continue:
-                        logger.info('根据错误类型停止继续重试')
-                        break
-
-                async with semaphore:
-                    content = await self._make_ocr_request(image_data, task_id=task_id)
-                    return content
-            except ModerationFailedException:
-                # 审查失败异常不重试，直接抛出
-                raise
-            except Exception as exc:
-                last_exception = exc
-                attempt_errors.append({
-                    'attempt': retry_count,
-                    'error': str(exc),
-                    'type': type(exc).__name__
-                })
-                logger.warning(f'OCR API调用失败 (尝试 {retry_count}/{self.max_retries}): {exc}')
-                await self._log_error_details(exc, attempt, image_data)
-
-                if attempt < self.max_retries - 1:
-                    delay = await self._calculate_retry_delay(attempt, exc)
-                    logger.info(f'等待 {delay:.2f} 秒后重试...')
-                    await asyncio.sleep(delay)
-                else:
-                    logger.warning(f'已达到最大重试次数 {self.max_retries}')
-
-        error_message = f'OCR API调用最终失败，已尝试 {retry_count} 次: {last_exception}'
-        logger.warning(error_message)
-
-        fallback_context = {
-            'retries': retry_count,
-            'last_error': str(last_exception) if last_exception else None,
-            'attempt_errors': attempt_errors
-        }
-        fallback_content = await self._generate_fallback_content(fallback_context)
-        if fallback_content:
-            logger.info('使用备用内容继续处理')
-            return fallback_content
-
-        raise Exception(error_message)
-    async def _should_continue_retry(self, exception: Exception, attempt: int) -> bool:
-        """根据错误类型决定是否应该继续重试"""
-        error_str = str(exception).lower()
-        
-        # 不重试的错误类型
-        no_retry_errors = [
-            "api密钥未配置",
-            "api基础url未配置",
-            "api模型未配置",
-            "图片数据为空",
-            "认证失败",
-            "invalid api key",
-            "unauthorized",
-            "forbidden",
-            "401",
-            "403"
-        ]
-        
-        for error in no_retry_errors:
-            if error in error_str:
-                logger.warning(f"错误类型不支持重试: {error}")
-                return False
-        
-        # 重试次数过多时，对于某些错误停止重试
-        if attempt >= 3:
-            # 对于网络错误，可以继续重试
-            if any(net_error in error_str for net_error in ["网络错误", "连接超时", "timeout", "connection"]):
-                logger.info("网络错误，继续重试")
-                return True
-            else:
-                logger.warning("重试次数过多，停止重试")
-                return False
-        
-        return True
-    
-    async def _calculate_retry_delay(self, attempt: int, exception: Exception) -> float:
-        """计算重试延迟时间"""
-        import random
-        
-        # 基础延迟
-        base_delay = self.retry_delay
-        
-        # 根据错误类型调整延迟
-        error_str = str(exception).lower()
-        
-        # 网络错误使用较短的延迟
-        if any(net_error in error_str for net_error in ["网络错误", "连接超时", "timeout", "connection"]):
-            base_delay = base_delay * 0.5
-        
-        # 服务器错误使用较长的延迟
-        if any(server_error in error_str for server_error in ["服务器错误", "server error", "502", "503", "504"]):
-            base_delay = base_delay * 2.0
-        
-        # 指数退避
-        delay = base_delay * (2 ** attempt)
-        
-        # 添加随机抖动
-        jitter = random.uniform(0, base_delay)
-        delay = delay + jitter
-        
-        # 最大延迟限制
-        max_delay = min(60, self.retry_delay * 10)  # 最大60秒或基础延迟的10倍
-        delay = min(delay, max_delay)
-        
-        return delay
-    
-    async def _log_error_details(self, exception: Exception, attempt: int, image_data: bytes):
-        """记录详细的错误信息"""
+        """Call OCR API with retry-aware error recovery."""
         try:
-            error_details = {
-                "attempt": attempt + 1,
-                "error_type": type(exception).__name__,
-                "error_message": str(exception),
-                "image_size_mb": len(image_data) / (1024 * 1024),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "max_retries": self.max_retries,
-                "retry_delay": self.retry_delay
+            async with semaphore:
+                return await self._make_ocr_request(image_data, task_id=task_id)
+        except OCRServiceError as exc:
+            return await self._recover_from_ocr_error(task_id, exc)
+        except Exception as exc:
+            wrapped = OCRServiceError(
+                "OCR_UNEXPECTED_ERROR",
+                f"OCR????: {exc}",
+                retryable=True,
+                details={"exception": repr(exc)},
+            )
+            return await self._recover_from_ocr_error(task_id, wrapped)
+
+    async def _recover_from_ocr_error(self, task_id: Optional[str], error: OCRServiceError) -> str:
+        logger.warning(
+            "ocr_request_failed task=%s code=%s retryable=%s detail=%s",
+            task_id,
+            error.code,
+            error.retryable,
+            str(error),
+        )
+        fallback_content = await self._generate_fallback_content(
+            {
+                "error_code": error.code,
+                "retryable": error.retryable,
+                "details": error.to_dict(),
             }
-            
-            logger.warning(f"OCR API调用错误详情: {error_details}")
-            
-        except Exception as log_error:
-            logger.debug(f"记录错误详情失败: {log_error}")
-    
+        )
+        if fallback_content:
+            logger.info("OCR failed and fallback content was used")
+            return fallback_content
+        raise error
+
     async def _generate_fallback_content(self, context: Optional[Dict[str, Any]] = None) -> Optional[str]:
-        """生成备用内容，在API完全失败时使用"""
-        logger.info("尝试生成备用内容...")
+        """Generate fallback content when OCR is fully unavailable."""
+        logger.info("Attempting to generate fallback OCR content...")
 
         try:
-            diagnostics = "无更多诊断信息"
+            diagnostics = "???????"
             if context:
                 try:
                     diagnostics = json.dumps(context, ensure_ascii=False, indent=2)
                 except Exception:
                     diagnostics = str(context)
             fallback_text = (
-                "[系统通知] OCR 服务暂时不可用。\n\n"
-                "由于外部识别服务暂时无法返回有效结果，当前页面未能完成识别，请稍后重试或联系系统管理员协助排查。\n\n"
-                "诊断信息:\n"
+                "[????] OCR ????????\n\n"
+                "????????????????????????????????????????????????\n\n"
+                "????:\n"
                 f"{diagnostics}"
             )
-            logger.warning("使用备用内容")
+            logger.warning("Using fallback OCR content")
             return fallback_text
-        except Exception as e:
-            logger.error(f"生成备用内容失败: {e}")
+        except Exception as exc:
+            logger.error(f"Failed to generate fallback content: {exc}")
             return None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """获取或创建共享的 aiohttp 会话"""
+        """Get or create a shared aiohttp session."""
         if self._session and not self._session.closed:
             return self._session
 
@@ -860,170 +766,41 @@ class PageProcessor:
             self._session = aiohttp.ClientSession(timeout=timeout)
             return self._session
 
-    async def _get_user_is_admin_from_task(self, task_id: str) -> bool:
-        """通过task_id查询用户是否为管理员"""
-        try:
-            task_data = await task_model.get_task(task_id)
-            if not task_data or not task_data.get('user_id'):
-                return False
-
-            # 直接查询数据库获取用户信息
-            from models.database import db_manager
-            async with db_manager.get_connection() as db:
-                async with db.execute(
-                    "SELECT is_admin FROM users WHERE id = ?",
-                    (task_data['user_id'],)
-                ) as cursor:
-                    user_row = await cursor.fetchone()
-                    return bool(user_row[0]) if user_row else False
-        except Exception as e:
-            logger.warning(f"查询用户管理员权限失败 {task_id}: {e}")
-            return False
-
     async def _make_ocr_request(self, image_data: bytes, task_id: str = None) -> str:
-        """Send OCR request with shared session, response validation and content moderation"""
-        api_base_url = self.api_config.get('api_base_url', 'https://api.openai.com')
-        api_key = self.api_config.get('api_key')
-        model = self.api_config.get('model', 'gpt-4o')
-
-        if not api_key:
-            raise Exception('API密钥未配置')
-
-        if not api_base_url:
-            raise Exception('API基础URL未配置')
-
-        if not model:
-            raise Exception('API模型未配置')
-
-        if not image_data:
-            raise Exception('图片数据为空')
-
-        precheck_ok = await self._precheck_api_connection(api_base_url, api_key)
-        if not precheck_ok:
-            logger.warning('API precheck did not succeed; continuing with request')
-
-        system_prompt = (
-            'You are an expert OCR assistant. Extract all textual information from the image and '
-            'return it as clean Markdown. The final answer MUST be valid JSON with the structure '
-            '{"content": "..."}. Do not wrap the JSON in code fences.'
+        """Send OCR request with shared session and response validation."""
+        request_config = build_ocr_request_config(
+            self.api_config,
+            self._runtime_config,
+            max_retries=self.max_retries,
         )
 
-        user_prompt = (
-            'Analyze the provided image and output a JSON object with a single string field named "content". '
-            'The value should contain the recognized Markdown-formatted text. Avoid any additional commentary.'
-        )
-
-        encoded_image = base64.b64encode(image_data).decode("utf-8")
-
-        payload = {
-            'messages': [
-                {'role': 'system', 'content': system_prompt},
-                {
-                    'role': 'user',
-                    'content': [
-                        {'type': 'text', 'text': user_prompt},
-                        {'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{encoded_image}'}}
-                    ],
-                },
-            ],
-            'stream': False,
-            'model': model,
-            'temperature': 0.0,
-            'top_p': 1,
-        }
+        if request_config.api_key:
+            precheck_ok = await self._precheck_api_connection(
+                request_config.api_base_url,
+                request_config.api_key,
+            )
+            if not precheck_ok:
+                logger.warning("API precheck did not succeed; continuing with request")
+        else:
+            logger.debug("skip API precheck because API key is empty")
 
         session = await self._get_session()
-
-        try:
-            response = await session.post(
-                f"{api_base_url}/v1/chat/completions",
-                headers={'Authorization': f'Bearer {api_key}'},
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.api_timeout)
-            )
-
-            if response.status == 200:
-                result = await response.json()
-
-                if not self._validate_api_response(result):
-                    raise Exception('API响应格式验证失败')
-
-                content = result['choices'][0]['message']['content']
-                parsed_content = self._parse_api_response(content)
-
-                if not parsed_content:
-                    logger.warning('OCR返回内容为空')
-                    raise Exception('OCR返回内容为空')
-
-                # ========== 内容道德审查 ==========
-                # 查询用户是否为管理员
-                user_is_admin = False
-                if task_id:
-                    user_is_admin = await self._get_user_is_admin_from_task(task_id)
-
-                try:
-                    action, moderated_content, details = await self.moderator.moderate_content(
-                        content=parsed_content,
-                        task_id=task_id,
-                        user_is_admin=user_is_admin
-                    )
-                    # 审查通过，返回内容
-                    return moderated_content
-                except ModerationFailedException as e:
-                    # 审查未通过，直接向上抛出异常（包含原始内容）
-                    raise
-                # ==================================
-
-            error_text = (await response.text())[:500]
-            if response.status in (401, 403):
-                raise Exception(f'认证失败, 状态码: {response.status}, 响应: {error_text}')
-            raise Exception(f'API请求失败, 状态码: {response.status}, 响应: {error_text}')
-        except ModerationFailedException:
-            # 审查失败异常直接向上抛出
-            raise
-        except asyncio.TimeoutError as exc:
-            logger.warning('API请求超时: %s', exc)
-            raise Exception('API请求超时') from exc
-        except aiohttp.ClientError as exc:
-            logger.warning('API请求网络错误: %s', exc)
-            raise Exception(f'API请求网络错误: {exc}') from exc
-
-    async def _save_moderation_log(self, task_id: str, page_number: int,
-                                   action: str, details: Dict[str, Any],
-                                   original_content: str = None):
-        """保存审查日志到数据库"""
-        try:
-            from models.database import db_manager
-            from datetime import datetime, timezone
-            import json
-
-            async with db_manager.get_connection() as db:
-                await db.execute("""
-                    INSERT INTO moderation_logs
-                    (task_id, page_number, action, risk_level, violation_types, reason, original_content, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    task_id,
-                    page_number,
-                    action,
-                    details.get('risk_level', 'high'),
-                    json.dumps(details.get('violation_types', []), ensure_ascii=False),
-                    details.get('reason', ''),
-                    original_content,
-                    datetime.now(timezone.utc).isoformat()
-                ))
-                await db.commit()
-                logger.info(f"审查日志已保存 {task_id}-{page_number}")
-        except Exception as e:
-            logger.error(f"保存审查日志失败 {task_id}: {e}")
+        parsed_content = await request_ocr_markdown(
+            request_config,
+            image_data,
+            system_prompt=OCR_SYSTEM_PROMPT,
+            user_prompt=OCR_USER_PROMPT,
+            shared_session=session,
+            logger=logger,
+            task_id=task_id,
+        )
+        return parsed_content
 
     async def close(self) -> None:
-        """关闭内部持有的 HTTP 会话"""
+        """Close the shared HTTP session held by the page processor."""
         if self._session and not self._session.closed:
             await self._session.close()
         self._session = None
-
-
     
     async def _precheck_api_connection(self, api_base_url: str, api_key: str, force: bool = False) -> bool:
         """Run a cached health check against the OCR API"""
@@ -1053,106 +830,6 @@ class PageProcessor:
             logger.debug('API预检查异常: %s', exc)
             return False
 
-    def _validate_api_response(self, response: Dict[str, Any]) -> bool:
-        """验证API响应格式"""
-        try:
-            if 'choices' not in response:
-                logger.error('API响应缺少choices字段')
-                return False
-
-            choices = response['choices']
-            if not isinstance(choices, list) or len(choices) == 0:
-                logger.error('API响应choices字段格式错误')
-                return False
-
-            choice = choices[0]
-            if 'message' not in choice:
-                logger.error('API响应缺少message字段')
-                return False
-
-            message = choice['message']
-            if 'content' not in message:
-                logger.error('API响应缺少content字段')
-                return False
-
-            content = message['content']
-            if not isinstance(content, str):
-                logger.error('API响应content字段格式错误')
-                return False
-
-            return True
-        except Exception as e:
-            logger.error(f'API响应验证异常: {e}')
-            return False
-
-    def _parse_api_response(self, content: str) -> str:
-        """Parse LLM response, preferring JSON payloads"""
-        if not content:
-            logger.warning('API响应内容为空字符串')
-            return ''
-
-        cleaned = content.strip()
-
-        if cleaned.startswith('```') and cleaned.endswith('```'):
-            cleaned = cleaned.strip('`')
-            if cleaned.lower().startswith('json'):
-                cleaned = cleaned[4:]
-            cleaned = cleaned.strip()
-
-        try:
-            data = json.loads(cleaned)
-            if isinstance(data, dict):
-                text_value = data.get('content') or data.get('text')
-                if isinstance(text_value, str) and text_value.strip():
-                    return text_value.strip()
-            elif isinstance(data, str) and data.strip():
-                return data.strip()
-        except json.JSONDecodeError as exc:
-            logger.debug('API响应JSON解析失败: %s', exc)
-
-        return self._parse_api_response_fallback(cleaned)
-    def _parse_api_response_fallback(self, content: str) -> str:
-        """Fallback parsing strategy when structured formats fail"""
-        logger.info('Fallback OCR response parsing engaged')
-
-        try:
-            possible_markers = ['This is the content:', 'this is the content:', 'Content:', 'content:', 'OCR result:', 'Recognized text:', 'Text:', 'text:', 'Result:', 'result:', 'Output:', 'output:']
-            for marker in possible_markers:
-                if marker in content:
-                    start_index = content.find(marker) + len(marker)
-                    extracted = content[start_index:].strip()
-
-                    end_markers = ['this is the end of the content', 'end of content', 'End']
-                    for end_marker in end_markers:
-                        if end_marker in extracted:
-                            extracted = extracted[:extracted.find(end_marker)].strip()
-                            break
-
-                    if extracted:
-                        return extracted
-
-            lines = [line.strip() for line in content.split('\n') if line.strip()]
-            skip_patterns = ["I'm sorry", 'I cannot', 'As an AI', 'Here is', 'The content', 'I understand', 'I can see']
-            filtered_lines = [line for line in lines if not any(pat in line for pat in skip_patterns)]
-            fallback_content = '\n'.join(filtered_lines).strip()
-            if fallback_content:
-                return fallback_content
-
-            cleaned = content.replace('```markdown', '').replace('```', '').strip()
-            cleaned_lines = [line.strip() for line in cleaned.split('\n') if line.strip()]
-            if cleaned_lines:
-                return '\n'.join(cleaned_lines)
-
-            logger.warning('Fallback解析失败，返回空字符串')
-            logger.debug('响应内容片段: %s', content[:300])
-            return ''
-        except Exception as exc:
-            logger.error('Fallback解析异常: %s', exc)
-            logger.debug('异常响应内容: %s', content[:300])
-            try:
-                return content.replace('```markdown', '').replace('```', '').strip()
-            except Exception:
-                return ''
 def create_page_processor(runtime_config, api_config: Dict[str, Any]) -> PageProcessor:
     """
     创建页面处理器实例

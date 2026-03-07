@@ -588,8 +588,10 @@
     });
 
     function handleFile(file) {
-      // 检查文件大小限制
-      const maxSizeMB = 50;
+      const isPdf = file.type.includes("pdf") || file.name.toLowerCase().endsWith('.pdf');
+      const maxSizeMB = isPdf
+        ? (frontendConfig.max_pdf_size_mb || 50)
+        : (frontendConfig.max_image_size_mb || 50);
       const fileSizeMB = file.size / (1024 * 1024);
       if (fileSizeMB > maxSizeMB) {
         alert(`文件大小 (${fileSizeMB.toFixed(2)} MB) 超过限制 (${maxSizeMB} MB)`);
@@ -601,7 +603,6 @@
 
       const backurl = "{{ backurl }}";
       const baseUrl = backurl || (window.location.origin + window.location.pathname.replace(/\/$/, ''));
-      const isPdf = file.type.includes("pdf");
       const url = isPdf ? `${baseUrl}/process/pdf` : `${baseUrl}/process/image`;
 
       console.log("上传URL:", url);

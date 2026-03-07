@@ -1,11 +1,10 @@
 import asyncio
-import uuid
 import logging
 from typing import Dict, Any, Optional, Callable, List
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import weakref
 import time
+import os
 
 from models.database import TaskStatus, TaskType, task_model, page_result_model
 
@@ -67,6 +66,16 @@ class TaskQueue:
                     return f"[{tasks_dict[task_id].file_name}] "
         return ''
 
+    def _contains_task_locked(self, task_id: str) -> bool:
+        """检查任务是否已存在于任意内存状态（调用方需持有锁）"""
+        return (
+            task_id in self._pending_tasks
+            or task_id in self._processing_tasks
+            or task_id in self._completed_tasks
+            or task_id in self._failed_tasks
+            or task_id in self._cancelled_tasks
+        )
+
     async def put(self, task_item: TaskItem) -> bool:
         """
         添加任务到队列
@@ -75,47 +84,62 @@ class TaskQueue:
         """
         try:
             async with self._lock:
-                # 检查任务是否已存在
-                if task_item.task_id in self._pending_tasks:
+                if self._contains_task_locked(task_item.task_id):
                     logger.warning(f"任务 {task_item.task_id} 已在队列中")
                     return False
-                
-                # 将任务添加到数据库
-                # 从metadata中提取user_id和client_ip
-                user_id = task_item.metadata.get('user_id') if task_item.metadata else None
-                client_ip = task_item.metadata.get('client_ip') if task_item.metadata else None
 
-                success = await task_model.create_task(
-                    task_id=task_item.task_id,
-                    task_type=task_item.task_type,
-                    file_name=task_item.file_name,
-                    file_size=task_item.file_size,
-                    total_pages=task_item.total_pages,
-                    user_id=user_id,
-                    client_ip=client_ip,
-                    metadata=task_item.metadata
-                )
-                
-                if not success:
-                    logger.error(f"任务 {task_item.task_id} 数据库创建失败")
+            # 持久化相关操作放到锁外，避免阻塞队列临界区
+            user_id = task_item.metadata.get('user_id') if task_item.metadata else None
+            client_ip = task_item.metadata.get('client_ip') if task_item.metadata else None
+
+            success = await task_model.create_task(
+                task_id=task_item.task_id,
+                task_type=task_item.task_type,
+                file_name=task_item.file_name,
+                file_size=task_item.file_size,
+                total_pages=task_item.total_pages,
+                user_id=user_id,
+                client_ip=client_ip,
+                metadata=task_item.metadata
+            )
+
+            if not success:
+                logger.error(f"任务 {task_item.task_id} 数据库创建失败")
+                return False
+
+            if task_item.task_type == TaskType.PDF_OCR:
+                for page_num in range(1, task_item.total_pages + 1):
+                    await page_result_model.create_page_result(
+                        task_item.task_id, page_num, "pending"
+                    )
+
+            queue_full = False
+            async with self._lock:
+                if self._contains_task_locked(task_item.task_id):
+                    logger.warning(f"任务 {task_item.task_id} 已存在于内存状态，跳过重复入队")
                     return False
-                
-                # 为PDF任务创建页面结果记录
-                if task_item.task_type == TaskType.PDF_OCR:
-                    for page_num in range(1, task_item.total_pages + 1):
-                        await page_result_model.create_page_result(
-                            task_item.task_id, page_num, "pending"
-                        )
-                
-                # 添加到队列和内存跟踪
+
                 priority_tuple = (task_item.priority, self._task_counter, task_item)
-                await self._queue.put(priority_tuple)
-                self._pending_tasks[task_item.task_id] = task_item
-                self._task_counter += 1
-                self._stats['total_added'] += 1
-                
-                logger.info(f"任务 {task_item.task_id} 已添加到队列 (优先级: {task_item.priority})")
-                return True
+                try:
+                    self._queue.put_nowait(priority_tuple)
+                except asyncio.QueueFull:
+                    queue_full = True
+                else:
+                    self._pending_tasks[task_item.task_id] = task_item
+                    self._task_counter += 1
+                    self._stats['total_added'] += 1
+
+            if queue_full:
+                await task_model.update_task_status(
+                    task_item.task_id,
+                    TaskStatus.FAILED,
+                    error_message="任务队列已满，提交失败"
+                )
+                logger.error(f"任务队列已满，无法入队 {task_item.task_id}")
+                return False
+
+            logger.info(f"任务 {task_item.task_id} 已添加到队列 (优先级: {task_item.priority})")
+            return True
                 
         except Exception as e:
             logger.error(f"添加任务到队列失败 {task_item.task_id}: {e}")
@@ -140,18 +164,19 @@ class TaskQueue:
                 if task_item.task_id in self._pending_tasks:
                     del self._pending_tasks[task_item.task_id]
                     self._processing_tasks[task_item.task_id] = task_item
-
-                    # 更新数据库状态
-                    await task_model.update_task_status(
-                        task_item.task_id,
-                        TaskStatus.PROCESSING
-                    )
-
-                    logger.info(f"[{task_item.file_name}] 任务 {task_item.task_id} 开始处理")
-                    return task_item
                 else:
+                    self._queue.task_done()
                     logger.warning(f"任务 {task_item.task_id} 不在pending状态")
                     return None
+
+            # 更新数据库状态（锁外I/O）
+            await task_model.update_task_status(
+                task_item.task_id,
+                TaskStatus.PROCESSING
+            )
+
+            logger.info(f"[{task_item.file_name}] 任务 {task_item.task_id} 开始处理")
+            return task_item
 
         except asyncio.TimeoutError:
             return None
@@ -172,19 +197,30 @@ class TaskQueue:
         :return: 是否标记成功
         """
         try:
+            task_item: Optional[TaskItem] = None
+            status: Optional[TaskStatus] = None
+            temp_file_path: Optional[str] = None
+
             async with self._lock:
                 # 首先检查任务是否在 processing 队列中
                 if task_id not in self._processing_tasks:
+                    if (task_id in self._completed_tasks
+                            or task_id in self._failed_tasks
+                            or task_id in self._cancelled_tasks):
+                        logger.debug(f"任务 {task_id} 已处于最终状态，忽略重复task_done")
+                        return True
                     logger.warning(f"任务 {task_id} 不在processing状态")
                     return False
 
-                task_item = self._processing_tasks[task_id]
-                del self._processing_tasks[task_id]
+                task_item = self._processing_tasks.pop(task_id)
+                temp_file_path = (
+                    task_item.metadata.get('temp_file_path')
+                    if task_item.metadata else None
+                )
 
-                if final_status is not None:
-                    status = final_status
-                else:
-                    status = TaskStatus.COMPLETED if success else TaskStatus.FAILED
+                status = final_status if final_status is not None else (
+                    TaskStatus.COMPLETED if success else TaskStatus.FAILED
+                )
 
                 if status == TaskStatus.COMPLETED:
                     self._completed_tasks[task_id] = task_item
@@ -198,31 +234,27 @@ class TaskQueue:
                     self._stats['total_failed'] += 1
                     logger.error(f"任务 {task_id} 处理失败: {error_message}")
 
-                # 更新数据库状态
-                await task_model.update_task_status(
-                    task_id, status, error_message,
-                    progress=100.0 if status == TaskStatus.COMPLETED else None
-                )
+            await task_model.update_task_status(
+                task_id, status, error_message,
+                progress=100.0 if status == TaskStatus.COMPLETED else None
+            )
 
-                # 更新结果摘要
-                if result_summary:
-                    await task_model.update_task_result_summary(task_id, result_summary)
+            if result_summary:
+                await task_model.update_task_result_summary(task_id, result_summary)
 
-                # 清理临时文件（如果存在）
-                if task_item.metadata and 'temp_file_path' in task_item.metadata:
-                    temp_file_path = task_item.metadata['temp_file_path']
-                    try:
-                        import os
-                        if os.path.exists(temp_file_path):
-                            os.unlink(temp_file_path)
-                            status_label = '成功' if status == TaskStatus.COMPLETED else ('取消' if status == TaskStatus.CANCELLED else '失败')
-                            logger.info(f"已清理临时文件 {temp_file_path} (任务{status_label})")
-                        else:
-                            logger.debug(f"临时文件已不存在: {temp_file_path}")
-                    except Exception as e:
-                        logger.warning(f"清理临时文件失败 {temp_file_path}: {e}")
+            if temp_file_path:
+                try:
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
+                        status_label = '成功' if status == TaskStatus.COMPLETED else ('取消' if status == TaskStatus.CANCELLED else '失败')
+                        logger.info(f"已清理临时文件 {temp_file_path} (任务{status_label})")
+                    else:
+                        logger.debug(f"临时文件已不存在: {temp_file_path}")
+                except Exception as e:
+                    logger.warning(f"清理临时文件失败 {temp_file_path}: {e}")
 
-                return True
+            self._queue.task_done()
+            return True
 
         except Exception as e:
             logger.error(f"标记任务完成失败 {task_id}: {e}")
@@ -254,7 +286,9 @@ class TaskQueue:
                 elif task_id in self._processing_tasks:
                     logger.info(f"任务 {task_id} 正在处理，等待工作线程取消")
                     return False
-                elif task_id in self._cancelled_tasks or task_id in self._failed_tasks or task_id in self._completed_tasks:
+                elif task_id in self._cancelled_tasks:
+                    return True
+                elif task_id in self._failed_tasks or task_id in self._completed_tasks:
                     return False
                 else:
                     return False
@@ -275,7 +309,6 @@ class TaskQueue:
 
             if cleanup_file:
                 try:
-                    import os
                     if os.path.exists(cleanup_file):
                         os.unlink(cleanup_file)
                         logger.info(f"取消pending任务清理临时文件: {cleanup_file} (任务: {task_id})")
@@ -302,10 +335,10 @@ class TaskQueue:
                 return "cancelled"
             elif task_id in self._failed_tasks:
                 return "failed"
-            else:
-                # 从数据库查询
-                task = await task_model.get_task(task_id)
-                return task['status'] if task else None
+
+        # 从数据库查询（锁外）
+        task = await task_model.get_task(task_id)
+        return task['status'] if task else None
     
     async def get_queue_stats(self) -> Dict[str, Any]:
         """获取队列统计信息"""
@@ -373,8 +406,6 @@ class TaskQueue:
         :return: 恢复的任务数量
         """
         try:
-            import os
-
             # 获取所有pending状态的任务
             pending_tasks = await task_model.get_tasks_by_status(TaskStatus.PENDING)
 
@@ -468,6 +499,7 @@ class WorkerPool:
         self._running = False
         self._lock = asyncio.Lock()
         self._task_processor: Optional[Callable] = None
+        self._desired_workers = min_workers
 
         self._log('info', f'worker pool ready (min={min_workers}, max={max_workers})')
 
@@ -489,6 +521,7 @@ class WorkerPool:
             raise ValueError('task processor must be set before starting the pool')
 
         self._running = True
+        self._desired_workers = self.min_workers
 
         for i in range(self.min_workers):
             await self._start_worker(f"worker-{i}")
@@ -529,110 +562,139 @@ class WorkerPool:
 
     async def _stop_worker(self, worker_id: str):
         """Cancel worker task"""
+        worker_task: Optional[asyncio.Task] = None
         async with self._lock:
             if worker_id in self._workers:
                 worker_task = self._workers[worker_id]
-                worker_task.cancel()
-                try:
-                    await worker_task
-                except asyncio.CancelledError:
-                    pass
 
-                del self._workers[worker_id]
-                del self._worker_stats[worker_id]
+        if not worker_task:
+            return
+
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+
+        async with self._lock:
+            self._workers.pop(worker_id, None)
+            self._worker_stats.pop(worker_id, None)
 
         self._log('info', f'worker {worker_id} stopped')
+
+    async def _should_retire_worker(self, worker_id: str) -> bool:
+        async with self._lock:
+            if worker_id not in self._workers:
+                return False
+
+            excess_workers = len(self._workers) - self._desired_workers
+            if excess_workers <= 0:
+                return False
+
+            idle_workers = [
+                current_worker_id
+                for current_worker_id, stats in self._worker_stats.items()
+                if stats.get('status') == 'idle'
+            ]
+
+        return worker_id in idle_workers[:excess_workers]
 
     async def _worker_loop(self, worker_id: str):
         """Worker loop"""
         self._log('info', f'worker {worker_id} loop started')
 
-        while self._running:
-            try:
-                task_item = await self.task_queue.get(timeout=5.0)
-
-                if task_item is None:
-                    continue
-
-                async with self._lock:
-                    if worker_id in self._worker_stats:
-                        self._worker_stats[worker_id]['status'] = 'processing'
-                        self._worker_stats[worker_id]['last_task_at'] = datetime.now(timezone.utc)
-
-                start_time = time.time()
-                processing_task = asyncio.create_task(self._task_processor(task_item))
-                async with self._lock:
-                    self._active_tasks[task_item.task_id] = processing_task
+        try:
+            while self._running:
                 try:
-                    result = await asyncio.wait_for(
-                        processing_task,
-                        timeout=self.worker_timeout
-                    )
+                    if await self._should_retire_worker(worker_id):
+                        self._log('info', f'worker {worker_id} retired after pool downscale')
+                        break
 
-                    processing_time = time.time() - start_time
+                    task_item = await self.task_queue.get(timeout=5.0)
 
-                    # 检查是否为审查失败
-                    is_moderation_failed = isinstance(result, dict) and result.get('moderation_failed') == True
-
-                    await self.task_queue.task_done(
-                        task_item.task_id,
-                        success=not is_moderation_failed,  # 审查失败标记为失败
-                        result_summary=result if isinstance(result, dict) else None,
-                        final_status=TaskStatus.CANCELLED if is_moderation_failed else None
-                    )
+                    if task_item is None:
+                        continue
 
                     async with self._lock:
                         if worker_id in self._worker_stats:
-                            self._worker_stats[worker_id]['tasks_processed'] += 1
-                            self._worker_stats[worker_id]['status'] = 'idle'
+                            self._worker_stats[worker_id]['status'] = 'processing'
+                            self._worker_stats[worker_id]['last_task_at'] = datetime.now(timezone.utc)
 
-                    self._log('info', f'worker {worker_id} completed {task_item.task_id} in {processing_time:.2f}s')
+                    start_time = time.time()
+                    processing_task = asyncio.create_task(self._task_processor(task_item))
+                    async with self._lock:
+                        self._active_tasks[task_item.task_id] = processing_task
+                    try:
+                        result = await asyncio.wait_for(
+                            processing_task,
+                            timeout=self.worker_timeout
+                        )
+
+                        processing_time = time.time() - start_time
+
+                        await self.task_queue.task_done(
+                            task_item.task_id,
+                            success=True,
+                            result_summary=result if isinstance(result, dict) else None,
+                        )
+
+                        async with self._lock:
+                            if worker_id in self._worker_stats:
+                                self._worker_stats[worker_id]['tasks_processed'] += 1
+                                self._worker_stats[worker_id]['status'] = 'idle'
+
+                        self._log('info', f'worker {worker_id} completed {task_item.task_id} in {processing_time:.2f}s')
+
+                    except asyncio.CancelledError:
+                        reason = self._cancellation_reasons.pop(task_item.task_id, "任务已取消")
+                        await self.task_queue.task_done(
+                            task_item.task_id,
+                            success=False,
+                            error_message=reason,
+                            final_status=TaskStatus.CANCELLED
+                        )
+                        self._log('info', f'worker {worker_id} cancelled task {task_item.task_id}: {reason}')
+                    except asyncio.TimeoutError:
+                        error_msg = f'task timeout (>{self.worker_timeout}s)'
+                        processing_task.cancel()
+                        try:
+                            await processing_task
+                        except Exception:
+                            pass
+                        await self.task_queue.task_done(
+                            task_item.task_id,
+                            success=False,
+                            error_message=error_msg
+                        )
+                        self._log('error', f'worker {worker_id} timeout on {task_item.task_id}')
+
+                    except Exception as e:
+                        error_msg = f'task error: {e}'
+                        await self.task_queue.task_done(
+                            task_item.task_id,
+                            success=False,
+                            error_message=error_msg
+                        )
+                        self._log('error', f'worker {worker_id} error on {task_item.task_id}: {e}')
+
+                    finally:
+                        async with self._lock:
+                            self._active_tasks.pop(task_item.task_id, None)
+                            if worker_id in self._worker_stats:
+                                self._worker_stats[worker_id]['status'] = 'idle'
+                        self._cancellation_reasons.pop(task_item.task_id, None)
 
                 except asyncio.CancelledError:
-                    reason = self._cancellation_reasons.pop(task_item.task_id, "任务已取消")
-                    await self.task_queue.task_done(
-                        task_item.task_id,
-                        success=False,
-                        error_message=reason,
-                        final_status=TaskStatus.CANCELLED
-                    )
-                    self._log('info', f'worker {worker_id} cancelled task {task_item.task_id}: {reason}')
-                except asyncio.TimeoutError:
-                    error_msg = f'task timeout (>{self.worker_timeout}s)'
-                    processing_task.cancel()
-                    try:
-                        await processing_task
-                    except Exception:
-                        pass
-                    await self.task_queue.task_done(
-                        task_item.task_id,
-                        success=False,
-                        error_message=error_msg
-                    )
-                    self._log('error', f'worker {worker_id} timeout on {task_item.task_id}')
-
+                    self._log('info', f'worker {worker_id} cancelled')
+                    break
                 except Exception as e:
-                    error_msg = f'task error: {e}'
-                    await self.task_queue.task_done(
-                        task_item.task_id,
-                        success=False,
-                        error_message=error_msg
-                    )
-                    self._log('error', f'worker {worker_id} error on {task_item.task_id}: {e}')
-
-                finally:
-                    async with self._lock:
-                        self._active_tasks.pop(task_item.task_id, None)
-                        if worker_id in self._worker_stats:
-                            self._worker_stats[worker_id]['status'] = 'idle'
-                    self._cancellation_reasons.pop(task_item.task_id, None)
-
-            except asyncio.CancelledError:
-                self._log('info', f'worker {worker_id} cancelled')
-                break
-            except Exception as e:
-                self._log('error', f'worker {worker_id} loop exception: {e}')
-                await asyncio.sleep(1)
+                    self._log('error', f'worker {worker_id} loop exception: {e}')
+                    await asyncio.sleep(1)
+        finally:
+            async with self._lock:
+                self._workers.pop(worker_id, None)
+                self._worker_stats.pop(worker_id, None)
+            self._log('info', f'worker {worker_id} loop exited')
 
     async def cancel_task(self, task_id: str, reason: str = "任务已取消") -> bool:
         """取消正在处理的任务"""
@@ -657,6 +719,7 @@ class WorkerPool:
             return False
 
         target_count = max(self.min_workers, min(target_count, self.max_workers))
+        self._desired_workers = target_count
 
         async with self._lock:
             current_count = len(self._workers)
@@ -670,12 +733,7 @@ class WorkerPool:
                     await self._start_worker(f"worker-{i}")
                 self._log('info', f'scaled up to {target_count} worker(s)')
             else:
-                async with self._lock:
-                    workers_to_stop = list(self._workers.keys())[target_count:]
-
-                for worker_id in workers_to_stop:
-                    await self._stop_worker(worker_id)
-                self._log('info', f'scaled down to {target_count} worker(s)')
+                self._log('info', f'scale down requested to {target_count} worker(s); idle workers will retire gracefully')
 
             return True
 

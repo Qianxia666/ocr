@@ -1,4 +1,3 @@
-import base64
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 import fitz  # PyMuPDF
@@ -7,7 +6,7 @@ from io import BytesIO
 from PIL import Image
 import aiohttp
 import asyncio
-from fastapi import FastAPI, Request, UploadFile, Query, HTTPException, WebSocket, WebSocketDisconnect, Response
+from fastapi import FastAPI, Request, UploadFile, Query, HTTPException, Response
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from typing import Optional, Dict, Any
@@ -17,6 +16,18 @@ import json
 from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from core.runtime_settings import (
+    RuntimeConfig,
+    ApiRuntimeConfig,
+    TurnstileRuntimeConfig,
+    _mask_secret,
+    _parse_bool,
+)
+from core.image_utils import build_image_data_url
+from core.routes.system_routes import register_system_routes
+from core.routes.ui_websocket_routes import register_ui_websocket_routes
+from core.routes.task_basic_routes import register_task_basic_routes
+from core.routes.task_advanced_routes import register_task_advanced_routes
 
 # 配置日志记录 - 支持UTF-8编码
 import sys
@@ -49,9 +60,9 @@ load_dotenv()
 
 # 从环境变量中读取配置
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com")
-API_KEY = os.getenv("OPENAI_API_KEY", "sk-111111111")
+API_KEY = os.getenv("OPENAI_API_KEY", "")
 MODEL = os.getenv("MODEL", "gpt-4o")
-PASSWORD = os.getenv("PASSWORD", "pwd")
+PASSWORD = os.getenv("PASSWORD", "")
 TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY", "")
 TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "")
 
@@ -74,274 +85,17 @@ MAX_PDF_SIZE_MB = int(os.getenv("MAX_PDF_SIZE_MB", 200))  # PDF文件最大大�
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 500))  # PDF最大页数限制
 
 # 图片压缩配置
-IMAGE_COMPRESSION_RATIO = float(os.getenv("IMAGE_COMPRESSION_RATIO", 0.2))  # 图片压缩比例(0.1-1.0)，默认0.2即20%
+IMAGE_COMPRESSION_RATIO = float(os.getenv("IMAGE_COMPRESSION_RATIO", 0.2))  # 图片目标体积比例(0.1-1.0)，默认0.2即目标为原文件20%
 
 # 运行时配置管理器
-class RuntimeConfig:
-    """运行时配置管理器 - 仅保存在内存中，重启后恢复默认值"""
-    def __init__(self):
-        # 从环境变量初始化默认值
-        self.concurrency = int(os.getenv("CONCURRENCY", 5))
-        self.max_retries = int(os.getenv("MAX_RETRIES", 5))
-        self.image_concurrency = int(os.getenv("IMAGE_CONCURRENCY", 5))
-        self.pdf_concurrency = int(os.getenv("PDF_CONCURRENCY", 5))
-        self.pdf_dpi = int(os.getenv("PDF_DPI", 200))
-        self.batch_size = int(os.getenv("BATCH_SIZE", 8))
-        self.max_image_size_mb = int(os.getenv("MAX_IMAGE_SIZE_MB", 50))
-        self.max_pdf_size_mb = int(os.getenv("MAX_PDF_SIZE_MB", 50))
-        self.max_pdf_pages = int(os.getenv("MAX_PDF_PAGES", 50))
-        # 超时配置
-        self.api_timeout = int(os.getenv("API_TIMEOUT", 300))
-        self.api_request_timeout = int(os.getenv("API_REQUEST_TIMEOUT", 300))
-        self.frontend_poll_timeout = int(os.getenv("FRONTEND_POLL_TIMEOUT", 300))
-        # 图片压缩配置
-        self.image_compression_ratio = float(os.getenv("IMAGE_COMPRESSION_RATIO", 0.2))
-
-    def get_all(self) -> dict:
-        """获取所有配置"""
-        return {
-            "concurrency": self.concurrency,
-            "max_retries": self.max_retries,
-            "image_concurrency": self.image_concurrency,
-            "pdf_concurrency": self.pdf_concurrency,
-            "pdf_dpi": self.pdf_dpi,
-            "batch_size": self.batch_size,
-            "max_image_size_mb": self.max_image_size_mb,
-            "max_pdf_size_mb": self.max_pdf_size_mb,
-            "max_pdf_pages": self.max_pdf_pages,
-            "api_timeout": self.api_timeout,
-            "api_request_timeout": self.api_request_timeout,
-            "frontend_poll_timeout": self.frontend_poll_timeout,
-            "image_compression_ratio": self.image_compression_ratio
-        }
-
-    def update(self, config: dict):
-        """更新配置"""
-        if "concurrency" in config:
-            self.concurrency = int(config["concurrency"])
-        if "max_retries" in config:
-            self.max_retries = int(config["max_retries"])
-        if "image_concurrency" in config:
-            self.image_concurrency = int(config["image_concurrency"])
-        if "pdf_concurrency" in config:
-            self.pdf_concurrency = int(config["pdf_concurrency"])
-        if "pdf_dpi" in config:
-            self.pdf_dpi = int(config["pdf_dpi"])
-        if "batch_size" in config:
-            self.batch_size = int(config["batch_size"])
-        if "max_image_size_mb" in config:
-            self.max_image_size_mb = int(config["max_image_size_mb"])
-        if "max_pdf_size_mb" in config:
-            self.max_pdf_size_mb = int(config["max_pdf_size_mb"])
-        if "max_pdf_pages" in config:
-            self.max_pdf_pages = int(config["max_pdf_pages"])
-        if "api_timeout" in config:
-            self.api_timeout = int(config["api_timeout"])
-            logger.info(f"更新API超时配置: {self.api_timeout}秒")
-        if "api_request_timeout" in config:
-            self.api_request_timeout = int(config["api_request_timeout"])
-            logger.info(f"更新API请求超时配置: {self.api_request_timeout}秒")
-        if "frontend_poll_timeout" in config:
-            self.frontend_poll_timeout = int(config["frontend_poll_timeout"])
-            logger.info(f"更新前端轮询超时配置: {self.frontend_poll_timeout}秒")
-        if "image_compression_ratio" in config:
-            ratio = float(config["image_compression_ratio"])
-            # 限制在0.1-1.0范围内
-            self.image_compression_ratio = max(0.1, min(1.0, ratio))
-            logger.info(f"更新图片压缩比例配置: {self.image_compression_ratio}")
-
-
-# 创建全局运行时配置实例
 runtime_config = RuntimeConfig()
 
-def _mask_secret(value: str, visible: int = 4) -> str:
-    """对敏感信息进行脱敏展示"""
-    if not value:
-        return ""
-    value = value.strip()
-    if len(value) <= visible * 2:
-        return "*" * len(value)
-    return f"{value[:visible]}****{value[-visible:]}"
-
-
-class ApiRuntimeConfig:
-    """API配置管理器 - ENV默认 + 运行时覆盖"""
-
-    def __init__(self):
-        self.env_config = {
-            'api_base_url': API_BASE_URL.strip(),
-            'api_key': API_KEY.strip(),
-            'model': MODEL.strip(),
-        }
-        self.runtime_config: Dict[str, str] = {}
-        logger.info(
-            "API配置初始化 - ENV: base_url=%s, model=%s",
-            self.env_config.get('api_base_url'),
-            self.env_config.get('model')
-        )
-
-    def _normalize(self, key: str, value):
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value.strip()
-        return str(value)
-
-    def get_config(self, key: str) -> str:
-        value = self.runtime_config.get(key)
-        if value is not None:
-            return value
-        return self.env_config.get(key, "")
-
-    def has_runtime_override(self, key: str) -> bool:
-        return key in self.runtime_config
-
-    def update_runtime(self, config: Dict[str, Any]):
-        updates: Dict[str, str] = {}
-        for key in ('api_base_url', 'api_key', 'model'):
-            if key in config:
-                normalized = self._normalize(key, config.get(key))
-                if normalized is None:
-                    continue
-                if key == 'api_key' and normalized == "":
-                    continue
-                updates[key] = normalized
-
-        if config.get('clear_api_key'):
-            updates['api_key'] = ""
-
-        if updates:
-            self.runtime_config.update(updates)
-            safe_updates = {k: ('***' if k == 'api_key' else v) for k, v in updates.items()}
-            logger.info("运行时API配置已更新: %s", safe_updates)
-
-    def reset_runtime(self):
-        self.runtime_config = {}
-        logger.info("运行时API配置已重置为ENV默认值")
-
-    def get_effective_config(self, include_sensitive: bool = True) -> Dict[str, str]:
-        config = self.env_config.copy()
-        config.update(self.runtime_config)
-        if not include_sensitive:
-            config.pop('api_key', None)
-        return config
-
-    def get_sources(self) -> Dict[str, str]:
-        sources = {}
-        for key in ('api_base_url', 'api_key', 'model'):
-            if key in self.runtime_config:
-                sources[key] = 'runtime'
-            else:
-                sources[key] = 'env'
-        return sources
-
-
-def _parse_bool(value) -> Optional[bool]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    value_str = str(value).strip().lower()
-    if value_str in ('true', '1', 'yes', 'on'):
-        return True
-    if value_str in ('false', '0', 'no', 'off'):
-        return False
-    return None
-
-
-class TurnstileRuntimeConfig:
-    """Turnstile配置管理器 - ENV默认 + 运行时覆盖"""
-
-    def __init__(self):
-        env_enabled_raw = os.getenv("TURNSTILE_ENABLED")
-        parsed_env_enabled = _parse_bool(env_enabled_raw)
-
-        self.env_enabled_source = 'env' if env_enabled_raw is not None else 'default'
-        self.env_config = {
-            'enabled': parsed_env_enabled if parsed_env_enabled is not None else False,
-            'site_key': TURNSTILE_SITE_KEY.strip(),
-            'secret_key': TURNSTILE_SECRET_KEY.strip(),
-        }
-        self.runtime_config: Dict[str, Any] = {}
-
-        logger.info(
-            "Turnstile配置初始化 - ENV: enabled=%s, site_key=%s, secret_configured=%s",
-            self.env_config['enabled'],
-            bool(self.env_config['site_key']),
-            bool(self.env_config['secret_key'])
-        )
-
-    def update_runtime(self, config: Dict[str, Any]):
-        updates: Dict[str, Any] = {}
-
-        if 'enabled' in config:
-            parsed = _parse_bool(config.get('enabled'))
-            if parsed is not None:
-                updates['enabled'] = parsed
-
-        if 'site_key' in config and config['site_key'] is not None:
-            updates['site_key'] = str(config['site_key']).strip()
-
-        if 'secret_key' in config and config['secret_key'] is not None:
-            secret_value = str(config['secret_key']).strip()
-            if secret_value:
-                updates['secret_key'] = secret_value
-
-        if config.get('clear_secret_key'):
-            updates['secret_key'] = ""
-
-        if updates:
-            safe_updates = updates.copy()
-            if 'secret_key' in safe_updates:
-                safe_updates['secret_key'] = "***"
-            self.runtime_config.update(updates)
-            logger.info("运行时Turnstile配置已更新: %s", safe_updates)
-
-    def reset_runtime(self):
-        self.runtime_config = {}
-        logger.info("运行时Turnstile配置已重置为ENV默认值")
-
-    def get_config(self, key: str):
-        if key in self.runtime_config:
-            return self.runtime_config[key]
-        return self.env_config.get(key)
-
-    def has_runtime_override(self, key: str) -> bool:
-        return key in self.runtime_config
-
-    def get_enabled_with_source(self) -> tuple[bool, str]:
-        if 'enabled' in self.runtime_config:
-            return bool(self.runtime_config['enabled']), 'runtime'
-
-        if self.env_enabled_source == 'env':
-            return bool(self.env_config.get('enabled', False)), 'env'
-
-        return bool(self.env_config.get('enabled', False)), 'default'
-
-    def get_effective_config(self, include_sensitive: bool = True) -> Dict[str, Any]:
-        config = self.env_config.copy()
-        config.update(self.runtime_config)
-        if not include_sensitive:
-            config.pop('secret_key', None)
-        return config
-
-    def get_sources(self) -> Dict[str, str]:
-        sources = {}
-        for key in ('enabled', 'site_key', 'secret_key'):
-            if key in self.runtime_config:
-                sources[key] = 'runtime'
-            else:
-                sources[key] = 'env' if self.env_config.get(key) else 'default'
-        return sources
-
-    def has_secret_key(self) -> bool:
-        if 'secret_key' in self.runtime_config:
-            return bool(self.runtime_config['secret_key'])
-        return bool(self.env_config.get('secret_key'))
-
-
-api_runtime_config = ApiRuntimeConfig()
-turnstile_config = TurnstileRuntimeConfig()
+api_runtime_config = ApiRuntimeConfig(API_BASE_URL, API_KEY, MODEL)
+turnstile_config = TurnstileRuntimeConfig(
+    TURNSTILE_SITE_KEY,
+    TURNSTILE_SECRET_KEY,
+    os.getenv("TURNSTILE_ENABLED")
+)
 
 
 def get_current_api_settings() -> Dict[str, str]:
@@ -373,6 +127,38 @@ def apply_api_runtime_config():
             })
     except Exception as e:
         logger.warning(f"更新页面处理器API配置失败: {e}")
+
+
+async def apply_runtime_settings():
+    """将运行时设置同步到当前内存对象。"""
+    effective = runtime_config.get_all()
+
+    try:
+        if task_manager:
+            if hasattr(task_manager, 'refresh_runtime_config'):
+                await task_manager.refresh_runtime_config()
+            else:
+                task_manager.api_config.update({
+                    'concurrency': effective.get('concurrency'),
+                    'image_concurrency': effective.get('image_concurrency'),
+                    'pdf_concurrency': effective.get('pdf_concurrency'),
+                    'batch_size': effective.get('batch_size'),
+                    'pdf_dpi': effective.get('pdf_dpi'),
+                    'max_retries': effective.get('max_retries'),
+                })
+    except Exception as e:
+        logger.warning(f"更新任务管理器运行时配置失败: {e}")
+
+    try:
+        from core.page_processor import page_processor
+        if page_processor:
+            page_processor.api_config.update({
+                'concurrency': effective.get('concurrency'),
+                'batch_size': effective.get('batch_size'),
+                'pdf_dpi': effective.get('pdf_dpi'),
+            })
+    except Exception as e:
+        logger.warning(f"更新页面处理器运行时配置失败: {e}")
 
 
 async def get_turnstile_enabled_status() -> tuple[bool, str]:
@@ -461,6 +247,7 @@ async def lifespan(app: FastAPI):
             'concurrency': runtime_config.concurrency,
             'image_concurrency': runtime_config.image_concurrency,
             'pdf_concurrency': runtime_config.pdf_concurrency,
+            'batch_size': runtime_config.batch_size,
             'max_retries': runtime_config.max_retries,
             'retry_delay': RETRY_DELAY,
             'pdf_dpi': runtime_config.pdf_dpi,
@@ -477,7 +264,8 @@ async def lifespan(app: FastAPI):
             'api_key': effective_api_config.get('api_key', API_KEY),
             'model': effective_api_config.get('model', MODEL),
             'concurrency': runtime_config.concurrency,
-            'batch_size': 4,
+            'batch_size': runtime_config.batch_size,
+            'pdf_dpi': runtime_config.pdf_dpi,
             'retry_delay': RETRY_DELAY,
             'health_check_interval': 300,
         }
@@ -728,7 +516,7 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
     for attempt in range(max_retries):
         try:
             async with semaphore:
-                encoded_image = base64.b64encode(image_data).decode('utf-8')
+                image_data_url = build_image_data_url(image_data)
                 response = await session.post(
                     f"{api_base_url}/v1/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}"},
@@ -743,12 +531,12 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
                                 "content": [
                                     {
                                         "type": "text",
-                                        "text": "Analyze the image and provide the content in the specified format, you only need to return the content, before returning the content you need to say: 'This is the content:', add 'this is the end of the content' at the end of the returned content, do not have any additional text other than these two sentences and the returned content, don't reply to me before I upload the image!"
+                                        "text": "Analyze the image and return the recognized content directly. Do not wrap the result in JSON and do not add any extra explanations."
                                     },
                                     {
                                         "type": "image_url",
                                         "image_url": {
-                                            "url": f"data:image/png;base64,{encoded_image}"
+                                            "url": image_data_url
                                         }
                                     }
                                 ]
@@ -772,24 +560,35 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
                 return f"识别失败: {str(e)}"
             await asyncio.sleep(2 * attempt)  # 指数退避
 
-def check_pdf_info(pdf_bytes: bytes) -> tuple[int, float]:
+def check_pdf_info(pdf_source: Any) -> tuple[int, float]:
     """
-    获取PDF文件的基本信息（页数和大小），不进行限制检查
-    :param pdf_bytes: PDF 文件的字节数据
-    :return: (页数, 文件大小MB)
+    Return basic PDF metadata.
+    :param pdf_source: PDF bytes or a local file path
+    :return: (page_count, file_size_mb)
     """
+    pdf_document = None
     try:
-        pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if isinstance(pdf_source, (str, os.PathLike)):
+            pdf_path = os.fspath(pdf_source)
+            pdf_document = fitz.open(pdf_path)
+            file_size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
+        elif isinstance(pdf_source, (bytes, bytearray, memoryview)):
+            pdf_bytes = bytes(pdf_source)
+            pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+            file_size_mb = len(pdf_bytes) / (1024 * 1024)
+        else:
+            raise TypeError("pdf_source must be bytes-like or a filesystem path")
+
         page_count = len(pdf_document)
-        file_size_mb = len(pdf_bytes) / (1024 * 1024)
-        pdf_document.close()
-        
-        logger.info(f"PDF 文件信息: {page_count} 页, {file_size_mb:.2f} MB")
-        
+        logger.info("pdf_info_ok pages=%s size_mb=%.2f", page_count, file_size_mb)
         return page_count, file_size_mb
-    except Exception as e:
-        logger.error(f"PDF 文件信息获取失败: {e}")
-        raise e
+    except Exception as exc:
+        logger.exception("pdf_info_failed source_type=%s error=%s", type(pdf_source).__name__, exc)
+        raise
+    finally:
+        if pdf_document:
+            pdf_document.close()
+
 
 def pdf_to_images_generator(pdf_bytes: bytes, dpi: int = None):
     """
@@ -850,22 +649,19 @@ async def process_single_page_ocr(session: aiohttp.ClientSession, image_data: by
                 logger.info(f"开始OCR处理第 {page_number} 页 (尝试 {attempt + 1}/{runtime_config.max_retries})")
                 result = await process_image(session, image_data, semaphore, max_retries=1)
 
-                if result and "This is the content:" in result:
-                    start_index = result.find("This is the content:") + len("This is the content:")
-                    end_index = result.find("this is the end of the content")
-                    if end_index == -1:
-                        end_index = len(result)
-
-                    content = result[start_index:end_index].strip()
-                    content = content.replace("```markdown", "").replace("```", "").strip()
-
-                    if content:
-                        logger.info(f"第 {page_number} 页OCR处理成功")
-                        return content
+                content = (result or "").strip()
+                if content.startswith("```") and content.endswith("```"):
+                    lines = content.splitlines()
+                    if len(lines) >= 2:
+                        content = "\n".join(lines[1:-1]).strip()
                     else:
-                        raise Exception("OCR返回内容为空")
-                else:
-                    raise Exception("OCR返回格式不正确")
+                        content = content.strip("`").strip()
+
+                if content:
+                    logger.info(f"第{page_number} 页OCR处理成功")
+                    return content
+
+                raise Exception("OCR返回内容为空")
 
         except Exception as e:
             logger.warning(f"第 {page_number} 页处理失败 (尝试 {attempt + 1}/{runtime_config.max_retries}): {e}")
@@ -905,715 +701,43 @@ async def process_pages_batch(session: aiohttp.ClientSession, pages_data: list, 
     
     return processed_results
 
-@app.post(f"/{PASSWORD}/process/image" if PASSWORD else "/process/image")
-async def process_image_endpoint(file: UploadFile, request: Request, response: Response):
-    """同步图片处理端点（保持兼容性）- 立即返回任务ID"""
-    import tempfile
-
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    if not file:
-        raise HTTPException(status_code=400, detail="未收到文件")
-
-    # 获取当前用户
-    user = await auth_manager_instance.get_current_user(request)
-
-    # 检查用户配额(图片算1页)
-    has_quota, quota_message = await auth_manager_instance.check_quota(user['id'], 1)
-    if not has_quota:
-        raise HTTPException(status_code=403, detail=f"配额不足: {quota_message}")
-
-    tmp_file_path = None
-    try:
-        # 创建临时文件保存图片
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.img') as tmp_file:
-            tmp_file_path = tmp_file.name
-
-            # 分块写入临时文件,避免内存占用
-            chunk_size = 1024 * 1024  # 1MB每块
-            while chunk := await file.read(chunk_size):
-                tmp_file.write(chunk)
-
-        logger.info(f"图片文件已写入临时文件: {tmp_file_path}")
-
-        # 获取文件大小
-        file_size_mb = os.path.getsize(tmp_file_path) / (1024 * 1024)
-
-        # 获取客户端IP
-        client_ip = get_client_ip(request)
-
-        # 提交异步任务(传递临时文件路径而非数据)
-        task_id = await task_manager.submit_image_task_from_file(
-            file_path=tmp_file_path,
-            file_name=file.filename or "image",
-            metadata={
-                "source": "sync_endpoint",
-                "sync_mode": True,
-                "file_size_mb": file_size_mb,
-                "user_id": user['id'],  # 添加用户ID用于配额扣除
-                "client_ip": client_ip  # 添加客户端IP
-            }
-        )
-
-        # 扣除用户配额(图片算1页)
-        await auth_manager_instance.deduct_quota(user['id'], 1)
-
-        # 立即返回任务ID，避免长时间等待
-        return JSONResponse({
-            "status": "accepted",
-            "task_id": task_id,
-            "message": "任务已提交，正在后台处理",
-            "estimated_time": 30,
-            "websocket_url": f"/ws?client_id=sync_{task_id}",
-            "status_url": f"/api/tasks/{task_id}",
-            "result_url": f"/api/tasks/{task_id}/result"
-        })
-
-    except HTTPException:
-        # HTTP异常时清理临时文件
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
-        raise
-    except Exception as e:
-        # 其他异常时清理临时文件
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
-        logger.error(f"图片任务提交失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post(f"/{PASSWORD}/process/pdf" if PASSWORD else "/process/pdf")
-async def process_pdf_endpoint(file: UploadFile, request: Request, response: Response):
-    """同步PDF处理端点（保持兼容性）- 立即返回任务ID"""
-    import tempfile
-
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    if not file:
-        raise HTTPException(status_code=400, detail="未收到文件")
-
-    # 获取当前用户
-    user = await auth_manager_instance.get_current_user(request)
-
-    tmp_file_path = None
-    try:
-        # 创建临时文件保存PDF
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file_path = tmp_file.name
-
-            # 分块写入临时文件,避免内存占用
-            chunk_size = 1024 * 1024  # 1MB每块
-            while chunk := await file.read(chunk_size):
-                tmp_file.write(chunk)
-
-        logger.info(f"PDF文件已写入临时文件: {tmp_file_path}")
-
-        # 获取PDF文件信息(从临时文件读取)
-        try:
-            with open(tmp_file_path, 'rb') as f:
-                pdf_bytes = f.read()
-                page_count, file_size_mb = check_pdf_info(pdf_bytes)
-                pdf_bytes = None  # 立即释放
-            logger.info(f"PDF文件信息: {page_count} 页, {file_size_mb:.2f} MB")
-        except Exception as e:
-            logger.error(f"PDF文件信息获取失败: {e}")
-            if tmp_file_path and os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
-            raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
-
-        # 页数限制检查（使用环境变量配置）
-        if page_count > runtime_config.max_pdf_pages:
-            if tmp_file_path and os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
-            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{runtime_config.max_pdf_pages}页")
-
-        # 检查用户配额
-        has_quota, quota_message = await auth_manager_instance.check_quota(user['id'], page_count)
-        if not has_quota:
-            if tmp_file_path and os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
-            raise HTTPException(status_code=403, detail=f"配额不足: {quota_message}")
-
-        # 获取客户端IP
-        client_ip = get_client_ip(request)
-
-        # 提交异步任务(传递临时文件路径而非数据)
-        task_id = await task_manager.submit_pdf_task_from_file(
-            file_path=tmp_file_path,
-            file_name=file.filename or "document.pdf",
-            metadata={
-                "source": "sync_endpoint",
-                "sync_mode": True,
-                "file_size_mb": file_size_mb,
-                "total_pages": page_count,
-                "user_id": user['id'],  # 添加用户ID用于配额扣除
-                "client_ip": client_ip  # 添加客户端IP
-            }
-        )
-
-        # 扣除用户配额
-        await auth_manager_instance.deduct_quota(user['id'], page_count)
-
-        # 估算处理时间
-        estimated_time = page_count * 3  # 每页约3秒
-
-        # 立即返回任务ID，避免长时间等待
-        return JSONResponse({
-            "status": "accepted",
-            "task_id": task_id,
-            "message": "任务已提交，正在后台处理",
-            "total_pages": page_count,
-            "file_size_mb": f"{file_size_mb:.2f}",
-            "estimated_time": estimated_time,
-            "websocket_url": f"/ws?client_id=sync_{task_id}",
-            "status_url": f"/api/tasks/{task_id}",
-            "result_url": f"/api/tasks/{task_id}/result"
-        })
-
-    except HTTPException:
-        # HTTP异常时清理临时文件
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
-        raise
-    except Exception as e:
-        # 其他异常时清理临时文件
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
-        logger.error(f"PDF任务提交失败: {e}")
-        raise HTTPException(status_code=500, detail=f"PDF任务提交失败: {str(e)}")
-
-
-@app.get("/", response_class=HTMLResponse)
-async def root_page(request: Request, response: Response):
-    """根路径 - 检查登录状态"""
-    # 检查用户是否已登录
-    user = await auth_manager_instance.get_current_user(request)
-
-    if not user:
-        # 未登录，显示开屏页面
-        # 获取注册开关状态
-        from models.database import db_manager
-        try:
-            async with db_manager.get_connection() as db:
-                async with db.execute(
-                    "SELECT value FROM system_settings WHERE key = 'registration_enabled'"
-                ) as cursor:
-                    row = await cursor.fetchone()
-                    registration_enabled = row[0] == 'true' if row else True
-        except Exception as e:
-            logger.error(f"获取注册状态失败: {e}")
-            registration_enabled = False
-
-        current_model = api_runtime_config.get_config('model') or MODEL
-
-        return templates.TemplateResponse(
-            "landing.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": TITLE,
-                "registration_enabled": registration_enabled,
-                "model": current_model,
-                "max_image_size_mb": runtime_config.max_image_size_mb,
-                "max_pdf_size_mb": runtime_config.max_pdf_size_mb,
-                "max_pdf_pages": runtime_config.max_pdf_pages,
-                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
-            }
-        )
-
-    if PASSWORD:
-        # 已登录但设置了密码，重定向到密码保护的主页
-        return RedirectResponse(url=f"/{PASSWORD}", status_code=302)
-    else:
-        # 没有设置密码，直接显示主页
-        return templates.TemplateResponse(
-            "web.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": TITLE,
-                "backurl": BACK_URL
-            }
-        )
-
-@app.get(f"/{PASSWORD}" if PASSWORD else "/main", response_class=HTMLResponse)
-async def access_with_password(request: Request, response: Response):
-    """受密码保护的主页"""
-    # 检查用户是否已登录
-    user = await auth_manager_instance.get_current_user(request)
-
-    if not user:
-        # 未登录，重定向到登录页面
-        return RedirectResponse(url="/login", status_code=302)
-
-    return templates.TemplateResponse(
-        "web.html",
-        {
-            "request": request,
-            "favicon_url": FAVICON_URL,
-            "title": TITLE,
-            "backurl": BACK_URL
-        }
-    )
-
-# 管理员页面路由 - 支持两种路径
-@app.get("/admin", response_class=HTMLResponse)
-@app.get(f"/{PASSWORD}/admin" if PASSWORD else "/admin-disabled", response_class=HTMLResponse)
-async def admin_page(request: Request, response: Response):
-    """管理员后台导航页面"""
-    try:
-        # 检查用户是否已登录
-        user = await auth_manager_instance.get_current_user(request)
-
-        if not user:
-            # 未登录，重定向到登录页面
-            return RedirectResponse(url="/login", status_code=302)
-
-        # 检查是否是管理员
-        if not user.get('is_admin'):
-            return HTMLResponse(
-                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
-                status_code=403
-            )
-
-        return templates.TemplateResponse(
-            "admin.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": f"{TITLE} - 管理后台",
-                "backurl": BACK_URL
-            }
-        )
-    except HTTPException as e:
-        if e.status_code == 403:
-            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
-        elif e.status_code == 401:
-            return RedirectResponse(url="/login", status_code=302)
-        raise
-
-# 兑换码管理页面路由
-@app.get("/admin/codes", response_class=HTMLResponse)
-@app.get(f"/{PASSWORD}/admin/codes" if PASSWORD else "/admin/codes-disabled", response_class=HTMLResponse)
-async def admin_codes_page(request: Request, response: Response):
-    """兑换码管理页面"""
-    try:
-        user = await auth_manager_instance.get_current_user(request)
-        if not user:
-            return RedirectResponse(url="/login", status_code=302)
-        if not user.get('is_admin'):
-            return HTMLResponse(
-                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
-                status_code=403
-            )
-        return templates.TemplateResponse(
-            "admin_codes.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": f"{TITLE} - 兑换码管理",
-                "password": PASSWORD
-            }
-        )
-    except HTTPException as e:
-        if e.status_code == 403:
-            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
-        elif e.status_code == 401:
-            return RedirectResponse(url="/login", status_code=302)
-        raise
-
-# 用户管理页面路由
-@app.get("/admin/users", response_class=HTMLResponse)
-@app.get(f"/{PASSWORD}/admin/users" if PASSWORD else "/admin/users-disabled", response_class=HTMLResponse)
-async def admin_users_page(request: Request, response: Response):
-    """用户管理页面"""
-    try:
-        user = await auth_manager_instance.get_current_user(request)
-        if not user:
-            return RedirectResponse(url="/login", status_code=302)
-        if not user.get('is_admin'):
-            return HTMLResponse(
-                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
-                status_code=403
-            )
-        return templates.TemplateResponse(
-            "admin_users.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": f"{TITLE} - 用户管理",
-                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
-            }
-        )
-    except HTTPException as e:
-        if e.status_code == 403:
-            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
-        elif e.status_code == 401:
-            return RedirectResponse(url="/login", status_code=302)
-        raise
-
-# 任务管理页面路由
-@app.get("/admin/tasks", response_class=HTMLResponse)
-@app.get(f"/{PASSWORD}/admin/tasks" if PASSWORD else "/admin/tasks-disabled", response_class=HTMLResponse)
-async def admin_tasks_page(request: Request, response: Response):
-    """任务管理页面"""
-    try:
-        user = await auth_manager_instance.get_current_user(request)
-        if not user:
-            return RedirectResponse(url="/login", status_code=302)
-        if not user.get('is_admin'):
-            return HTMLResponse(
-                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
-                status_code=403
-            )
-        return templates.TemplateResponse(
-            "admin_tasks.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": f"{TITLE} - 任务管理",
-                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
-            }
-        )
-    except HTTPException as e:
-        if e.status_code == 403:
-            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
-        elif e.status_code == 401:
-            return RedirectResponse(url="/login", status_code=302)
-        raise
-
-# 系统设置页面路由
-@app.get("/admin/settings", response_class=HTMLResponse)
-@app.get(f"/{PASSWORD}/admin/settings" if PASSWORD else "/admin/settings-disabled", response_class=HTMLResponse)
-async def admin_settings_page(request: Request, response: Response):
-    """系统设置页面"""
-    try:
-        user = await auth_manager_instance.get_current_user(request)
-        if not user:
-            return RedirectResponse(url="/login", status_code=302)
-        if not user.get('is_admin'):
-            return HTMLResponse(
-                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
-                status_code=403
-            )
-        return templates.TemplateResponse(
-            "admin_settings.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": f"{TITLE} - 系统设置",
-                "password_prefix": f"/{PASSWORD}" if PASSWORD else ""
-            }
-        )
-    except HTTPException as e:
-        if e.status_code == 403:
-            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
-        elif e.status_code == 401:
-            return RedirectResponse(url="/login", status_code=302)
-        raise
-
-# 令牌注册管理页面路由
-@app.get("/admin/registration-tokens", response_class=HTMLResponse)
-@app.get(f"/{PASSWORD}/admin/registration-tokens" if PASSWORD else "/admin/registration-tokens-disabled", response_class=HTMLResponse)
-async def admin_registration_tokens_page(request: Request, response: Response):
-    """令牌注册管理页面"""
-    try:
-        user = await auth_manager_instance.get_current_user(request)
-        if not user:
-            return RedirectResponse(url="/login", status_code=302)
-        if not user.get('is_admin'):
-            return HTMLResponse(
-                content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面。<br><a href='/'>返回主页</a></p>",
-                status_code=403
-            )
-        return templates.TemplateResponse(
-            "admin_registration_tokens.html",
-            {
-                "request": request,
-                "favicon_url": FAVICON_URL,
-                "title": f"{TITLE} - 令牌注册管理",
-                "password_prefix": f"/{PASSWORD}" if PASSWORD else "",
-                "password": PASSWORD
-            }
-        )
-    except HTTPException as e:
-        if e.status_code == 403:
-            return HTMLResponse(content="<h1>403 - 需要管理员权限</h1><p>只有管理员可以访问此页面</p>", status_code=403)
-        elif e.status_code == 401:
-            return RedirectResponse(url="/login", status_code=302)
-        raise
-
-# WebSocket路由
-@app.websocket(f"/{PASSWORD}/ws" if PASSWORD else "/ws")
-async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
-    """WebSocket连接端点"""
-    try:
-        await websocket.accept()
-        
-        # 建立WebSocket连接
-        actual_client_id = await websocket_manager.connect(websocket, client_id)
-        logger.info(f"WebSocket客户端连接: {actual_client_id}")
-        
-        try:
-            while True:
-                # 接收客户端消息
-                data = await websocket.receive_text()
-                await websocket_manager.handle_client_message(actual_client_id, data)
-                
-        except WebSocketDisconnect:
-            logger.info(f"WebSocket客户端断开连接: {actual_client_id}")
-
-        except (ConnectionResetError, ConnectionError) as e:
-            # Windows/Linux 连接重置错误,这是正常的客户端断开情况
-            logger.info(f"WebSocket客户端连接断开 {actual_client_id}: {type(e).__name__}")
-
-        except Exception as e:
-            logger.error(f"WebSocket连接异常 {actual_client_id}: {e}")
-            
-    except Exception as e:
-        logger.error(f"WebSocket连接失败: {e}")
-        
-    finally:
-        # 清理连接
-        if 'actual_client_id' in locals():
-            try:
-                await websocket_manager.disconnect(actual_client_id)
-            except Exception as e:
-                logger.debug(f"清理连接时发生错误 {actual_client_id}: {e}")
-
-# 任务管理API路由
-@app.post(f"/{PASSWORD}/api/tasks/image" if PASSWORD else "/api/tasks/image")
-async def submit_image_task_api(file: UploadFile, request: Request):
-    """提交图片OCR任务API"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    if not file:
-        raise HTTPException(status_code=400, detail="未收到文件")
-
-    try:
-        file_data = await file.read()
-        if not file_data:
-            raise HTTPException(status_code=400, detail="文件内容为空")
-
-        # 获取客户端IP
-        client_ip = get_client_ip(request)
-
-        task_id = await task_manager.submit_image_task(
-            file_data=file_data,
-            file_name=file.filename or "image",
-            metadata={"source": "api", "client_ip": client_ip}
-        )
-        
-        return JSONResponse({
-            "status": "success",
-            "task_id": task_id,
-            "message": "任务提交成功"
-        })
-        
-    except Exception as e:
-        logger.error(f"提交图片任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post(f"/{PASSWORD}/api/tasks/pdf" if PASSWORD else "/api/tasks/pdf")
-async def submit_pdf_task_api(file: UploadFile, request: Request):
-    """提交PDF OCR任务API"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    if not file:
-        raise HTTPException(status_code=400, detail="未收到文件")
-
-    try:
-        file_data = await file.read()
-        if not file_data:
-            raise HTTPException(status_code=400, detail="文件内容为空")
-
-        # 获取PDF文件信息
-        try:
-            page_count, file_size_mb = check_pdf_info(file_data)
-            logger.info(f"PDF文件信息: {page_count} 页, {file_size_mb:.2f} MB")
-        except Exception as e:
-            logger.error(f"PDF文件信息获取失败: {e}")
-            raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
-
-        # 页数限制检查（使用环境变量配置）
-        if page_count > runtime_config.max_pdf_pages:
-            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{runtime_config.max_pdf_pages}页")
-
-        # 获取客户端IP
-        client_ip = get_client_ip(request)
-
-        task_id = await task_manager.submit_pdf_task(
-            file_data=file_data,
-            file_name=file.filename or "document.pdf",
-            metadata={"source": "api", "client_ip": client_ip}
-        )
-        
-        return JSONResponse({
-            "status": "success",
-            "task_id": task_id,
-            "message": "任务提交成功"
-        })
-        
-    except Exception as e:
-        logger.error(f"提交PDF任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/tasks/{{task_id}}" if PASSWORD else "/api/tasks/{task_id}")
-async def get_task_info_api(task_id: str):
-    """获取任务信息API"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    try:
-        task_info = await task_manager.get_task_info(task_id)
-        if not task_info:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        
-        return JSONResponse({
-            "status": "success",
-            "data": task_info
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务信息失败 {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/tasks/{{task_id}}/result" if PASSWORD else "/api/tasks/{task_id}/result")
-async def get_task_result_api(task_id: str, request: Request):
-    """获取任务结果API"""
-    if not task_manager:
-        logger.error(f"任务管理器未初始化，无法获取任务结果: {task_id}")
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    try:
-        # 检查用户是否为管理员
-        user = await auth_manager_instance.require_user(request)
-        is_admin = user.get('is_admin', False)
-
-        task_result = await task_manager.get_task_result(task_id)
-
-        if not task_result:
-            logger.warning(f"任务不存在: {task_id}")
-            raise HTTPException(status_code=404, detail="任务不存在")
-
-        # 如果是管理员且任务审查失败，返回原始内容
-        if is_admin and task_result.get('status') == 'cancelled':
-            if task_result.get('error_message') == '内容道德审查未通过' or \
-               '所有页面内容道德审查未通过' in str(task_result.get('error_message', '')):
-                from models.database import page_result_model, task_model
-                task_data = await task_model.get_task(task_id)
-
-                if task_data:
-                    page_results = await page_result_model.get_task_page_results(task_id)
-
-                    if task_data['task_type'] == 'image_ocr':
-                        # 图片任务：返回原始内容
-                        if page_results:
-                            task_result['content'] = page_results[0].get('content', '')
-                            task_result['admin_view'] = True
-                    else:
-                        # PDF任务：返回所有页面（包括审查失败的）
-                        contents = []
-                        for page_result in page_results:
-                            content = page_result.get('content', '')
-                            if content:
-                                contents.append(content)
-                        task_result['content'] = '\n\n'.join(contents)
-                        task_result['admin_view'] = True
-
-        # 只在异常情况下记录日志
-        if task_result.get('status') == 'completed' and not task_result.get('content'):
-            logger.error(f"警告: 任务显示已完成但内容为空! 任务ID: {task_id}")
-            # 尝试从数据库重新获取
-            from models.database import page_result_model
-            page_results = await page_result_model.get_task_page_results(task_id)
-            logger.info(f"数据库中的页面结果数量: {len(page_results)}")
-            for pr in page_results:
-                logger.info(f"  页面 {pr.get('page_number')}: 状态={pr.get('status')}, 内容长度={len(pr.get('content', ''))}")
-
-        return JSONResponse({
-            "status": "success",
-            "data": task_result
-        })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务结果失败 {task_id}: {e}")
-        logger.exception(f"获取任务结果失败详情:")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/tasks" if PASSWORD else "/api/tasks")
-async def get_tasks_list_api(
-    request: Request,
-    status: Optional[str] = Query(None, description="任务状态筛选"),
-    limit: int = Query(100, description="返回数量限制"),
-    offset: int = Query(0, description="偏移量")
-):
-    """获取任务列表API（用户只能看到自己的任务）"""
-    # 从全局模块导入任务管理器，确保获取到最新的实例
-    from core.task_manager import task_manager as global_task_manager
-    from models.database import task_model
-
-    if not global_task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    try:
-        # 获取当前登录用户
-        user = await auth_manager_instance.require_user(request)
-
-        # 只返回当前用户的任务
-        tasks = await task_model.get_recent_tasks(limit=limit, user_id=user['id'])
-
-        return JSONResponse({
-            "status": "success",
-            "data": tasks
-        })
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务列表失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/system/stats" if PASSWORD else "/api/system/stats")
-async def get_system_stats_api():
-    """获取系统统计信息API"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    try:
-        stats = await task_manager.get_system_stats()
-        websocket_stats = websocket_manager.get_connection_stats()
-        
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "task_system": stats,
-                "websocket": websocket_stats
-            }
-        })
-        
-    except Exception as e:
-        logger.error(f"获取系统统计失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+register_ui_websocket_routes(
+    app=app,
+    password=PASSWORD,
+    templates=templates,
+    favicon_url=FAVICON_URL,
+    title=TITLE,
+    back_url=BACK_URL,
+    runtime_config=runtime_config,
+    api_runtime_config=api_runtime_config,
+    default_model=MODEL,
+    get_auth_manager=lambda: auth_manager_instance,
+    websocket_manager=websocket_manager,
+    logger=logger,
+)
+
+register_task_basic_routes(
+    app=app,
+    password=PASSWORD,
+    runtime_config=runtime_config,
+    websocket_manager=websocket_manager,
+    logger=logger,
+    get_task_manager=lambda: task_manager,
+    get_auth_manager=lambda: auth_manager_instance,
+    get_client_ip=get_client_ip,
+    check_pdf_info=check_pdf_info,
+)
+
+register_task_advanced_routes(
+    app=app,
+    password=PASSWORD,
+    runtime_config=runtime_config,
+    logger=logger,
+    get_task_manager=lambda: task_manager,
+    get_auth_manager=lambda: auth_manager_instance,
+    get_client_ip=get_client_ip,
+    check_pdf_info=check_pdf_info,
+)
 
 @app.get(f"/{PASSWORD}/api/broadcast/config" if PASSWORD else "/api/broadcast/config")
 async def get_broadcast_config():
@@ -1688,7 +812,7 @@ async def login_page(request: Request):
 
     turnstile_site_key = turnstile_config.get_config('site_key')
 
-    return templates.TemplateResponse("login.html", {
+    return templates.TemplateResponse(request, "login.html", {
         "request": request,
         "favicon_url": FAVICON_URL,
         "title": TITLE,
@@ -1700,7 +824,7 @@ async def login_page(request: Request):
 @app.get("/test-login", response_class=HTMLResponse)
 async def test_login_page(request: Request):
     """测试登录页面"""
-    return templates.TemplateResponse("test_login.html", {
+    return templates.TemplateResponse(request, "test_login.html", {
         "request": request
     })
 
@@ -1710,13 +834,14 @@ async def register_page(request: Request, token: str = ""):
     """注册页面"""
     # 获取 Turnstile 验证开关状态
     turnstile_enabled, _ = await get_turnstile_enabled_status()
+    turnstile_site_key = turnstile_config.get_config('site_key')
 
-    return templates.TemplateResponse("register.html", {
+    return templates.TemplateResponse(request, "register.html", {
         "request": request,
         "token": token,
         "favicon_url": FAVICON_URL,
         "title": TITLE,
-        "turnstile_site_key": TURNSTILE_SITE_KEY,
+        "turnstile_site_key": turnstile_site_key,
         "turnstile_enabled": turnstile_enabled
     })
 
@@ -2681,6 +1806,7 @@ async def update_runtime_config_api(request: Request, config_data: dict):
 
         # 更新配置
         runtime_config.update(config_data)
+        await apply_runtime_settings()
 
         return JSONResponse({
             "status": "success",
@@ -3095,7 +2221,7 @@ async def validate_registration_token_api(token: str):
 async def get_admin_stats_api(request: Request):
     """获取系统统计信息(仅管理员)"""
     try:
-        admin = await auth_manager_instance.require_admin(request)
+        await auth_manager_instance.require_admin(request)
 
         # 用户统计
         all_users = await user_model.get_all_users(limit=10000)
@@ -3114,19 +2240,16 @@ async def get_admin_stats_api(request: Request):
             "data": {
                 "users": {
                     "total": total_users,
-                    "admins": admin_users,
-                    "regular": total_users - admin_users
+                    "admin": admin_users,
                 },
                 "pages": {
                     "total_granted": total_pages_granted,
                     "total_used": total_pages_used,
-                    "remaining": total_pages_granted - total_pages_used
                 },
                 "codes": {
                     "total": total_codes,
                     "active": active_codes,
-                    "inactive": total_codes - active_codes
-                }
+                },
             }
         })
 
@@ -3136,1090 +2259,13 @@ async def get_admin_stats_api(request: Request):
         logger.error(f"获取统计信息失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ==================== 管理员任务管理API ====================
-
-@app.get(f"/{PASSWORD}/api/admin/tasks/list" if PASSWORD else "/api/admin/tasks/list")
-async def list_all_tasks_api(request: Request,
-                             page: int = Query(1, ge=1),
-                             page_size: int = Query(100, ge=1, le=1000),
-                             user_id: Optional[str] = Query(None),
-                             search: Optional[str] = Query(None)):
-    """获取所有任务列表（包含用户信息，仅管理员）"""
-    try:
-        admin = await auth_manager_instance.require_admin(request)
-        from models.database import task_model
-
-        offset = (page - 1) * page_size
-        tasks = await task_model.get_all_tasks_with_users(
-            limit=page_size,
-            offset=offset,
-            user_id_filter=user_id,
-            search_query=search
-        )
-        total = await task_model.count_tasks(user_id_filter=user_id, search_query=search)
-
-        return JSONResponse({
-            "status": "success",
-            "data": tasks,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size
-        })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务列表失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/admin/tasks/stats" if PASSWORD else "/api/admin/tasks/stats")
-async def get_tasks_stats_api(request: Request, user_id: Optional[str] = Query(None)):
-    """获取任务统计信息（仅管理员）"""
-    try:
-        admin = await auth_manager_instance.require_admin(request)
-        from models.database import task_model
-
-        stats = await task_model.get_task_stats_by_user(user_id=user_id)
-
-        return JSONResponse({
-            "status": "success",
-            "data": stats
-        })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务统计失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post(f"/{PASSWORD}/api/admin/tasks/{{task_id}}/cancel" if PASSWORD else "/api/admin/tasks/{task_id}/cancel")
-async def cancel_task_api(request: Request, task_id: str):
-    """管理员取消任务"""
-    try:
-        await auth_manager_instance.require_admin(request)
-        if not task_manager:
-            raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-        success, message = await task_manager.cancel_task(task_id, reason="管理员手动停止")
-        status = "success" if success else "error"
-        return JSONResponse({
-            "status": status,
-            "message": message
-        })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"管理员取消任务失败 {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get(f"/{PASSWORD}/api/admin/tasks/{{task_id}}/content" if PASSWORD else "/api/admin/tasks/{task_id}/content")
-async def get_task_content_api(request: Request, task_id: str):
-    """获取任务的OCR内容（仅管理员）"""
-    try:
-        admin = await auth_manager_instance.require_admin(request)
-        from models.database import task_model, page_result_model
-
-        # 获取任务信息
-        task = await task_model.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="任务不存在")
-
-        # 获取所有页面结果
-        page_results = await page_result_model.get_task_page_results(task_id)
-
-        # 整理内容
-        content_data = {
-            "task_id": task_id,
-            "file_name": task.get("file_name"),
-            "status": task.get("status"),
-            "total_pages": task.get("total_pages", 0),
-            "processed_pages": task.get("processed_pages", 0),
-            "created_at": task.get("created_at"),
-            "pages": []
-        }
-
-        # 添加每页的内容
-        for page in page_results:
-            content_data["pages"].append({
-                "page_number": page.get("page_number"),
-                "status": page.get("status"),
-                "content": page.get("content", ""),
-                "error_message": page.get("error_message")
-            })
-
-        return JSONResponse({
-            "status": "success",
-            "data": content_data
-        })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务内容失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Docker/k8s 专用健康检查端点（无密码保护，符合最佳实践）
-@app.get("/healthz")
-@app.get("/health")
-async def health_check():
-    """容器健康检查端点（不需要密码认证）"""
-    try:
-        # 基本检查：应用是否运行
-        if not task_manager:
-            return JSONResponse(
-                status_code=503,
-                content={"status": "unhealthy", "reason": "任务管理器未初始化"}
-            )
-
-        # 快速检查数据库连接
-        try:
-            from models.database import db_manager
-            import aiosqlite
-            async with aiosqlite.connect(db_manager.db_path) as db:
-                await db.execute("SELECT 1")
-        except Exception as db_error:
-            return JSONResponse(
-                status_code=503,
-                content={"status": "unhealthy", "reason": f"数据库连接失败: {str(db_error)}"}
-            )
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "healthy",
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-    except Exception as e:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "reason": str(e)}
-        )
-
-# 新增：系统健康状态API（需要密码保护）
-@app.get(f"/{PASSWORD}/api/system/health" if PASSWORD else "/api/system/health")
-async def get_system_health_api():
-    """获取系统健康状态API"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    try:
-        # 获取系统健康状态
-        stats = await task_manager.get_system_stats()
-        system_health = stats.get('system_health', {})
-        
-        # 计算健康状态
-        overall_status = "healthy"
-        issues = []
-        
-        # 检查系统资源
-        if 'system_monitor' in system_health:
-            metrics = system_health['system_monitor']
-            if metrics.get('cpu_percent', 0) > 90:
-                issues.append("CPU使用率过高")
-            if metrics.get('memory_percent', 0) > 90:
-                issues.append("内存使用率过高")
-            if metrics.get('disk_percent', 0) > 90:
-                issues.append("磁盘使用率过高")
-        
-        # 检查超时管理器
-        if 'timeout_manager' in system_health:
-            timeout_stats = system_health['timeout_manager']
-            if timeout_stats.get('active_timeouts', 0) > 10:
-                issues.append("活跃超时过多")
-        
-        # 检查错误处理器
-        if 'error_handler' in system_health:
-            error_stats = system_health['error_handler']
-            error_rate = error_stats.get('error_rate', 0)
-            if error_rate > 0.1:  # 错误率超过10%
-                issues.append("系统错误率过高")
-        
-        # 确定整体状态
-        if issues:
-            overall_status = "warning" if len(issues) <= 2 else "critical"
-        
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "overall_status": overall_status,
-                "timestamp": datetime.now().isoformat(),
-                "issues": issues,
-                "system_health": system_health
-            }
-        })
-        
-    except Exception as e:
-        logger.error(f"获取系统健康状态失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 新增：系统监控指标API
-@app.get(f"/{PASSWORD}/api/system/metrics" if PASSWORD else "/api/system/metrics")
-async def get_system_metrics_api():
-    """获取系统监控指标API"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    try:
-        stats = await task_manager.get_system_stats()
-        system_health = stats.get('system_health', {})
-        
-        metrics = {
-            "timestamp": datetime.now().isoformat(),
-            "system_resources": system_health.get('system_monitor', {}),
-            "timeout_stats": system_health.get('timeout_manager', {}),
-            "error_stats": system_health.get('error_handler', {}),
-            "recovery_stats": system_health.get('recovery_manager', {}),
-            "api_performance": system_health.get('system_monitor', {}).get('api_stats', {})
-        }
-        
-        return JSONResponse({
-            "status": "success",
-            "data": metrics
-        })
-        
-    except Exception as e:
-        logger.error(f"获取系统监控指标失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 新增：错误恢复统计API
-@app.get(f"/{PASSWORD}/api/system/recovery" if PASSWORD else "/api/system/recovery")
-async def get_recovery_stats_api():
-    """获取错误恢复统计API"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    try:
-        stats = await task_manager.get_system_stats()
-        system_health = stats.get('system_health', {})
-
-        recovery_stats = system_health.get('recovery_manager', {})
-        error_stats = system_health.get('error_handler', {})
-
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "recovery_manager": recovery_stats,
-                "error_handler": error_stats,
-                "summary": {
-                    "total_checkpoints": recovery_stats.get('total_checkpoints', 0),
-                    "successful_recoveries": recovery_stats.get('successful_recoveries', 0),
-                    "failed_recoveries": recovery_stats.get('failed_recoveries', 0),
-                    "total_errors_handled": error_stats.get('total_errors_handled', 0),
-                    "recovery_success_rate": recovery_stats.get('recovery_success_rate', 0),
-                    "error_rate": error_stats.get('error_rate', 0)
-                }
-            }
-        })
-
-    except Exception as e:
-        logger.error(f"获取错误恢复统计失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 审查配置管理接口（仅管理员）
-@app.get(f"/{PASSWORD}/api/moderation/config" if PASSWORD else "/api/moderation/config")
-async def get_moderation_config_api(request: Request):
-    """获取审查配置（仅管理员）"""
-    # 验证管理员权限
-    user = await auth_manager_instance.get_current_user(request)
-    if not user or not user.get('is_admin'):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-
-    from core.content_moderator import get_moderation_config
-    config = get_moderation_config()
-
-    return JSONResponse({
-        "status": "success",
-        "data": config.get_all_config()
-    })
-
-@app.post(f"/{PASSWORD}/api/moderation/config" if PASSWORD else "/api/moderation/config")
-async def update_moderation_config_api(request: Request):
-    """更新审查配置（运行时，重启失效）（仅管理员）"""
-    # 验证管理员权限
-    user = await auth_manager_instance.get_current_user(request)
-    if not user or not user.get('is_admin'):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-
-    try:
-        data = await request.json()
-
-        from core.content_moderator import get_moderation_config
-        config = get_moderation_config()
-
-        # 更新运行时配置
-        config.update_runtime(data)
-
-        logger.info(f"管理员 {user['username']} 更新了审查配置（运行时）: {data}")
-
-        return JSONResponse({
-            "status": "success",
-            "message": "审查配置已更新（仅本次运行有效，重启后恢复ENV配置）",
-            "data": config.get_all_config()
-        })
-
-    except Exception as e:
-        logger.error(f"更新审查配置失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post(f"/{PASSWORD}/api/moderation/config/reset" if PASSWORD else "/api/moderation/config/reset")
-async def reset_moderation_config_api(request: Request):
-    """重置审查配置为ENV默认值（仅管理员）"""
-    # 验证管理员权限
-    user = await auth_manager_instance.get_current_user(request)
-    if not user or not user.get('is_admin'):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-
-    try:
-        from core.content_moderator import get_moderation_config
-        config = get_moderation_config()
-
-        # 重置运行时配置
-        config.reset_runtime()
-
-        logger.info(f"管理员 {user['username']} 重置了审查配置为ENV默认值")
-
-        return JSONResponse({
-            "status": "success",
-            "message": "审查配置已重置为ENV默认值",
-            "data": config.get_all_config()
-        })
-
-    except Exception as e:
-        logger.error(f"重置审查配置失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/moderation/logs" if PASSWORD else "/api/moderation/logs")
-async def get_moderation_logs_api(
-    request: Request,
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0)
-):
-    """获取审查日志（仅管理员）"""
-    # 验证管理员权限
-    user = await auth_manager_instance.get_current_user(request)
-    if not user or not user.get('is_admin'):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-
-    try:
-        from models.database import db_manager
-        async with db_manager.get_connection() as db:
-            # 查询审查日志
-            async with db.execute("""
-                SELECT
-                    ml.*,
-                    t.file_name,
-                    t.status as task_status,
-                    u.username
-                FROM moderation_logs ml
-                LEFT JOIN tasks t ON ml.task_id = t.id
-                LEFT JOIN users u ON t.user_id = u.id
-                ORDER BY ml.created_at DESC
-                LIMIT ? OFFSET ?
-            """, (limit, offset)) as cursor:
-                rows = await cursor.fetchall()
-
-                logs = []
-                for row in rows:
-                    logs.append({
-                        "id": row[0],
-                        "task_id": row[1],
-                        "page_number": row[2],
-                        "action": row[3],
-                        "risk_level": row[4],
-                        "violation_types": json.loads(row[5]) if row[5] else [],
-                        "reason": row[6],
-                        "original_content": row[7][:200] if row[7] else None,  # 只返回前200字符
-                        "created_at": row[8],
-                        "file_name": row[9] if len(row) > 9 else None,
-                        "task_status": row[10] if len(row) > 10 else None,
-                        "username": row[11] if len(row) > 11 else None
-                    })
-
-            # 获取总数
-            async with db.execute("SELECT COUNT(*) FROM moderation_logs") as cursor:
-                total_row = await cursor.fetchone()
-                total = total_row[0] if total_row else 0
-
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "logs": logs,
-                "total": total,
-                "limit": limit,
-                "offset": offset
-            }
-        })
-
-    except Exception as e:
-        logger.error(f"获取审查日志失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/moderation/stats" if PASSWORD else "/api/moderation/stats")
-async def get_moderation_stats_api(request: Request):
-    """获取审查统计（仅管理员）"""
-    # 验证管理员权限
-    user = await auth_manager_instance.get_current_user(request)
-    if not user or not user.get('is_admin'):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-
-    try:
-        from models.database import db_manager
-        async with db_manager.get_connection() as db:
-            # 总审查次数
-            async with db.execute("SELECT COUNT(*) FROM moderation_logs") as cursor:
-                total_row = await cursor.fetchone()
-                total = total_row[0] if total_row else 0
-
-            # 动作分布
-            async with db.execute("""
-                SELECT action, COUNT(*) as count
-                FROM moderation_logs
-                GROUP BY action
-            """) as cursor:
-                action_rows = await cursor.fetchall()
-                action_dist = {row[0]: row[1] for row in action_rows}
-
-            # 风险等级分布
-            async with db.execute("""
-                SELECT risk_level, COUNT(*) as count
-                FROM moderation_logs
-                GROUP BY risk_level
-            """) as cursor:
-                risk_rows = await cursor.fetchall()
-                risk_dist = {row[0]: row[1] for row in risk_rows}
-
-            # 最近24小时审查次数
-            async with db.execute("""
-                SELECT COUNT(*) FROM moderation_logs
-                WHERE datetime(created_at) >= datetime('now', '-1 day')
-            """) as cursor:
-                recent_row = await cursor.fetchone()
-                recent_24h = recent_row[0] if recent_row else 0
-
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "total": total,
-                "action_distribution": action_dist,
-                "risk_distribution": risk_dist,
-                "recent_24h": recent_24h
-            }
-        })
-
-    except Exception as e:
-        logger.error(f"获取审查统计失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-# 新增：异步任务提交端点
-@app.post(f"/{PASSWORD}/api/async/image" if PASSWORD else "/api/async/image")
-async def submit_async_image_task(file: UploadFile, request: Request):
-    """提交异步图片OCR任务"""
-    import tempfile
-
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    if not file:
-        raise HTTPException(status_code=400, detail="未收到文件")
-
-    tmp_file_path = None
-    try:
-        # 验证文件类型
-        if not file.content_type or not file.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="不支持的文件类型，请上传图片文件")
-
-        # 创建临时文件保存图片
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.img') as tmp_file:
-            tmp_file_path = tmp_file.name
-
-            # 分块写入临时文件,避免内存占用
-            chunk_size = 1024 * 1024  # 1MB每块
-            total_size = 0
-            max_file_size = runtime_config.max_image_size_mb * 1024 * 1024
-
-            while chunk := await file.read(chunk_size):
-                total_size += len(chunk)
-                # 检查文件大小
-                if total_size > max_file_size:
-                    tmp_file.close()
-                    os.unlink(tmp_file_path)
-                    raise HTTPException(status_code=400, detail=f"文件过大，最大支持{runtime_config.max_image_size_mb}MB")
-                tmp_file.write(chunk)
-
-        logger.info(f"图片文件已写入临时文件: {tmp_file_path}")
-
-        # 获取文件大小
-        file_size_mb = os.path.getsize(tmp_file_path) / (1024 * 1024)
-
-        # 获取客户端IP
-        client_ip = get_client_ip(request)
-
-        task_id = await task_manager.submit_image_task_from_file(
-            file_path=tmp_file_path,
-            file_name=file.filename or "image",
-            metadata={
-                "source": "async_api",
-                "file_type": file.content_type,
-                "original_filename": file.filename,
-                "file_size_mb": file_size_mb,
-                "client_ip": client_ip
-            }
-        )
-
-        return JSONResponse({
-            "status": "success",
-            "task_id": task_id,
-            "message": "图片任务已提交",
-            "estimated_time": 30,
-            "endpoints": {
-                "status": f"/api/tasks/{task_id}",
-                "result": f"/api/tasks/{task_id}/result",
-                "cancel": f"/api/tasks/{task_id}",
-                "websocket": f"/ws"
-            }
-        })
-
-    except HTTPException:
-        # HTTP异常时清理临时文件
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
-        raise
-    except Exception as e:
-        # 其他异常时清理临时文件
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
-        logger.error(f"提交异步图片任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post(f"/{PASSWORD}/api/async/pdf" if PASSWORD else "/api/async/pdf")
-async def submit_async_pdf_task(file: UploadFile, request: Request):
-    """提交异步PDF OCR任务"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    if not file:
-        raise HTTPException(status_code=400, detail="未收到文件")
-
-    try:
-        # 流式读取文件，避免一次性加载到内存
-        file_data = await file.read()
-        if not file_data:
-            raise HTTPException(status_code=400, detail="文件内容为空")
-
-        # 验证文件类型
-        if not file.content_type or file.content_type != 'application/pdf':
-            raise HTTPException(status_code=400, detail="不支持的文件类型，请上传PDF文件")
-
-        # 文件大小检查（使用环境变量配置）
-        max_file_size = runtime_config.max_pdf_size_mb * 1024 * 1024
-        if len(file_data) > max_file_size:
-            raise HTTPException(status_code=400, detail=f"文件过大，最大支持{runtime_config.max_pdf_size_mb}MB")
-
-        # 获取PDF文件信息
-        try:
-            page_count, file_size_mb = check_pdf_info(file_data)
-            logger.info(f"PDF文件信息: {page_count} 页, {file_size_mb:.2f} MB")
-        except Exception as e:
-            logger.error(f"PDF文件信息获取失败: {e}")
-            raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏")
-
-        # 页数限制检查（使用环境变量配置）
-        if page_count > runtime_config.max_pdf_pages:
-            raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{runtime_config.max_pdf_pages}页")
-
-        # 获取客户端IP
-        client_ip = get_client_ip(request)
-
-        task_id = await task_manager.submit_pdf_task(
-            file_data=file_data,
-            file_name=file.filename or "document.pdf",
-            metadata={
-                "source": "async_api",
-                "file_type": file.content_type,
-                "original_filename": file.filename,
-                "file_size_mb": file_size_mb,
-                "client_ip": client_ip
-            }
-        )
-        
-        # 估算处理时间
-        estimated_time = page_count * 3  # 每页约3秒
-        
-        return JSONResponse({
-            "status": "success",
-            "task_id": task_id,
-            "message": "PDF任务已提交",
-            "total_pages": page_count,
-            "file_size_mb": f"{file_size_mb:.2f}",
-            "estimated_time": estimated_time,
-            "endpoints": {
-                "status": f"/api/tasks/{task_id}",
-                "result": f"/api/tasks/{task_id}/result",
-                "cancel": f"/api/tasks/{task_id}",
-                "websocket": f"/ws"
-            }
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"提交异步PDF任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 新增：批量任务提交端点
-@app.post(f"/{PASSWORD}/api/async/batch" if PASSWORD else "/api/async/batch")
-async def submit_batch_tasks(files: list[UploadFile], request: Request):
-    """提交批量异步任务"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-
-    if not files or len(files) == 0:
-        raise HTTPException(status_code=400, detail="未收到文件")
-
-    if len(files) > 20:  # 限制批量上传数量
-        raise HTTPException(status_code=400, detail="批量上传最多支持20个文件")
-
-    try:
-        # 获取客户端IP（对整个批次只获取一次）
-        client_ip = get_client_ip(request)
-
-        submitted_tasks = []
-        failed_files = []
-
-        for file in files:
-            tmp_file_path = None
-            try:
-                # 根据文件类型选择处理方式
-                if file.content_type and file.content_type.startswith('image/'):
-                    # 图片任务 - 使用临时文件
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.img') as tmp_file:
-                        tmp_file_path = tmp_file.name
-
-                        chunk_size = 1024 * 1024  # 1MB每块
-                        total_size = 0
-                        max_file_size = runtime_config.max_image_size_mb * 1024 * 1024
-
-                        while chunk := await file.read(chunk_size):
-                            total_size += len(chunk)
-                            if total_size > max_file_size:
-                                tmp_file.close()
-                                os.unlink(tmp_file_path)
-                                failed_files.append({"filename": file.filename, "error": f"图片文件过大(最大{runtime_config.max_image_size_mb}MB)"})
-                                tmp_file_path = None
-                                break
-                            tmp_file.write(chunk)
-
-                    if tmp_file_path:
-                        file_size_mb = os.path.getsize(tmp_file_path) / (1024 * 1024)
-
-                        task_id = await task_manager.submit_image_task_from_file(
-                            file_path=tmp_file_path,
-                            file_name=file.filename or "image",
-                            priority=1,  # 批量任务优先级稍低
-                            metadata={
-                                "source": "batch_api",
-                                "file_type": file.content_type,
-                                "original_filename": file.filename,
-                                "file_size_mb": file_size_mb,
-                                "client_ip": client_ip
-                            }
-                        )
-
-                        submitted_tasks.append({
-                            "task_id": task_id,
-                            "filename": file.filename,
-                            "type": "image",
-                            "estimated_time": 30
-                        })
-                        tmp_file_path = None  # 已提交,不需要清理
-                    
-                elif file.content_type == 'application/pdf':
-                    # PDF任务 - 使用临时文件
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                        tmp_file_path = tmp_file.name
-
-                        chunk_size = 1024 * 1024  # 1MB每块
-                        total_size = 0
-                        max_file_size = runtime_config.max_pdf_size_mb * 1024 * 1024
-
-                        while chunk := await file.read(chunk_size):
-                            total_size += len(chunk)
-                            if total_size > max_file_size:
-                                tmp_file.close()
-                                os.unlink(tmp_file_path)
-                                failed_files.append({"filename": file.filename, "error": f"PDF文件过大(最大{runtime_config.max_pdf_size_mb}MB)"})
-                                tmp_file_path = None
-                                break
-                            tmp_file.write(chunk)
-
-                    if tmp_file_path:
-                        # 获取PDF信息
-                        try:
-                            with open(tmp_file_path, 'rb') as f:
-                                pdf_bytes = f.read()
-                                page_count, file_size_mb = check_pdf_info(pdf_bytes)
-                                pdf_bytes = None  # 立即释放
-
-                            if page_count > runtime_config.max_pdf_pages:
-                                os.unlink(tmp_file_path)
-                                failed_files.append({"filename": file.filename, "error": f"PDF页数过多(最大{runtime_config.max_pdf_pages}页)"})
-                                tmp_file_path = None
-                            else:
-                                task_id = await task_manager.submit_pdf_task_from_file(
-                                    file_path=tmp_file_path,
-                                    file_name=file.filename or "document.pdf",
-                                    priority=1,  # 批量任务优先级稍低
-                                    metadata={
-                                        "source": "batch_api",
-                                        "file_type": file.content_type,
-                                        "original_filename": file.filename,
-                                        "file_size_mb": file_size_mb,
-                                        "total_pages": page_count,
-                                        "client_ip": client_ip
-                                    }
-                                )
-
-                                submitted_tasks.append({
-                                    "task_id": task_id,
-                                    "filename": file.filename,
-                                    "type": "pdf",
-                                    "total_pages": page_count,
-                                    "estimated_time": page_count * 3
-                                })
-                                tmp_file_path = None  # 已提交,不需要清理
-                        except Exception as e:
-                            if tmp_file_path and os.path.exists(tmp_file_path):
-                                os.unlink(tmp_file_path)
-                            failed_files.append({"filename": file.filename, "error": f"PDF文件格式错误: {str(e)}"})
-                            tmp_file_path = None
-
-                else:
-                    failed_files.append({"filename": file.filename, "error": "不支持的文件类型"})
-
-            except Exception as e:
-                # 清理临时文件
-                if tmp_file_path and os.path.exists(tmp_file_path):
-                    try:
-                        os.unlink(tmp_file_path)
-                    except:
-                        pass
-                failed_files.append({"filename": file.filename, "error": str(e)})
-        
-        total_estimated_time = sum(task.get("estimated_time", 0) for task in submitted_tasks)
-        
-        return JSONResponse({
-            "status": "success",
-            "message": f"批量任务提交完成，成功: {len(submitted_tasks)}, 失败: {len(failed_files)}",
-            "submitted_tasks": submitted_tasks,
-            "failed_files": failed_files,
-            "total_tasks": len(submitted_tasks),
-            "total_estimated_time": total_estimated_time,
-            "endpoints": {
-                "batch_status": "/api/tasks/batch/status",
-                "websocket": "/ws"
-            }
-        })
-        
-    except Exception as e:
-        logger.error(f"批量任务提交失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 新增：批量任务状态查询
-@app.post(f"/{PASSWORD}/api/tasks/batch/status" if PASSWORD else "/api/tasks/batch/status")
-async def get_batch_tasks_status(task_ids: dict):
-    """查询批量任务状态"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    task_id_list = task_ids.get("task_ids", [])
-    if not task_id_list or len(task_id_list) == 0:
-        raise HTTPException(status_code=400, detail="未提供任务ID")
-    
-    if len(task_id_list) > 50:  # 限制查询数量
-        raise HTTPException(status_code=400, detail="批量查询最多支持50个任务")
-    
-    try:
-        tasks_status = []
-        
-        for task_id in task_id_list:
-            try:
-                task_info = await task_manager.get_task_info(task_id)
-                if task_info:
-                    tasks_status.append({
-                        "task_id": task_id,
-                        "status": task_info["status"],
-                        "progress": task_info.get("progress", 0),
-                        "created_at": task_info["created_at"],
-                        "completed_at": task_info.get("completed_at"),
-                        "error_message": task_info.get("error_message")
-                    })
-                else:
-                    tasks_status.append({
-                        "task_id": task_id,
-                        "status": "not_found",
-                        "error_message": "任务不存在"
-                    })
-            except Exception as e:
-                tasks_status.append({
-                    "task_id": task_id,
-                    "status": "error",
-                    "error_message": str(e)
-                })
-        
-        # 统计信息
-        status_counts = {}
-        for task in tasks_status:
-            status = task["status"]
-            status_counts[status] = status_counts.get(status, 0) + 1
-        
-        return JSONResponse({
-            "status": "success",
-            "tasks": tasks_status,
-            "summary": {
-                "total_tasks": len(tasks_status),
-                "status_counts": status_counts
-            }
-        })
-        
-    except Exception as e:
-        logger.error(f"批量任务状态查询失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 新增：分页相关API端点
-@app.get(f"/{PASSWORD}/api/tasks/{{task_id}}/pages" if PASSWORD else "/api/tasks/{task_id}/pages")
-async def get_task_pages_api(task_id: str):
-    """获取任务的分页列表和状态"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    try:
-        pages = await task_manager.get_task_pages(task_id)
-        if not pages and not await task_manager.get_task_info(task_id):
-            raise HTTPException(status_code=404, detail="任务不存在")
-        
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "task_id": task_id,
-                "pages": pages,
-                "total_pages": len(pages),
-                "page_statistics": _calculate_page_statistics(pages)
-            }
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务分页失败 {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/tasks/{{task_id}}/pages/{{page_num}}" if PASSWORD else "/api/tasks/{task_id}/pages/{page_num}")
-async def get_task_page_api(task_id: str, page_num: int):
-    """获取特定页面结果"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    if page_num < 1:
-        raise HTTPException(status_code=400, detail="页码必须大于0")
-    
-    try:
-        page_result = await task_manager.get_task_page(task_id, page_num)
-        if not page_result:
-            # 检查任务是否存在
-            task_info = await task_manager.get_task_info(task_id)
-            if not task_info:
-                raise HTTPException(status_code=404, detail="任务不存在")
-            elif page_num > task_info.get('total_pages', 0):
-                raise HTTPException(status_code=404, detail="页码超出范围")
-            else:
-                raise HTTPException(status_code=404, detail="页面结果不存在")
-        
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "task_id": task_id,
-                "page_number": page_num,
-                "page_result": page_result
-            }
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务页面失败 {task_id}-{page_num}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/tasks/{{task_id}}/progress" if PASSWORD else "/api/tasks/{task_id}/progress")
-async def get_task_progress_detail_api(task_id: str):
-    """获取详细进度信息"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    try:
-        progress_detail = await task_manager.get_task_progress_detail(task_id)
-        if not progress_detail:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        
-        return JSONResponse({
-            "status": "success",
-            "data": progress_detail
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务详细进度失败 {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-@app.get(f"/{PASSWORD}/api/tasks/{{task_id}}/batches" if PASSWORD else "/api/tasks/{task_id}/batches")
-async def get_task_batches_api(task_id: str):
-    """获取任务的批次信息"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    try:
-        # 获取详细进度信息（包含批次信息）
-        progress_detail = await task_manager.get_task_progress_detail(task_id)
-        if not progress_detail:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        
-        batches = progress_detail.get('batches', [])
-        
-        return JSONResponse({
-            "status": "success",
-            "data": {
-                "task_id": task_id,
-                "batches": batches,
-                "total_batches": len(batches)
-            }
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取任务批次信息失败 {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(f"/{PASSWORD}/api/tasks/{{task_id}}/export" if PASSWORD else "/api/tasks/{task_id}/export")
-async def export_task_result_api(task_id: str, format: str = Query("json", description="导出格式: json, txt, md")):
-    """导出任务结果"""
-    if not task_manager:
-        raise HTTPException(status_code=503, detail="任务管理器未初始化")
-    
-    if format not in ["json", "txt", "md"]:
-        raise HTTPException(status_code=400, detail="不支持的导出格式，支持: json, txt, md")
-    
-    try:
-        task_result = await task_manager.get_task_result(task_id)
-        if not task_result:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        
-        if task_result["status"] != "completed":
-            raise HTTPException(status_code=400, detail="任务未完成，无法导出")
-        
-        content = task_result.get("content", "")
-        filename = f"task_{task_id}_result"
-        
-        if format == "json":
-            # JSON格式导出
-            export_data = {
-                "task_id": task_id,
-                "export_time": datetime.now().isoformat(),
-                "task_info": task_result,
-                "content": content
-            }
-            
-            response_content = json.dumps(export_data, ensure_ascii=False, indent=2)
-            media_type = "application/json"
-            filename += ".json"
-            
-        elif format == "txt":
-            # 纯文本格式导出
-            response_content = content
-            media_type = "text/plain"
-            filename += ".txt"
-            
-        elif format == "md":
-            # Markdown格式导出
-            response_content = f"# Task {task_id} Result\n\n{content}"
-            media_type = "text/markdown"
-            filename += ".md"
-        
-        return Response(
-            content=response_content,
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": f"{media_type}; charset=utf-8"
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"导出任务结果失败 {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-def _calculate_page_statistics(pages: list) -> dict:
-    """计算页面统计信息"""
-    stats = {
-        "total_pages": len(pages),
-        "completed_pages": 0,
-        "failed_pages": 0,
-        "pending_pages": 0,
-        "processing_pages": 0,
-        "average_processing_time": 0,
-        "total_content_length": 0,
-        "success_rate": 0
-    }
-    
-    if not pages:
-        return stats
-    
-    total_processing_time = 0
-    processing_time_count = 0
-    
-    for page in pages:
-        status = page.get('status', 'pending')
-        
-        if status == 'completed':
-            stats['completed_pages'] += 1
-            stats['total_content_length'] += page.get('content_length', 0)
-        elif status == 'failed':
-            stats['failed_pages'] += 1
-        elif status == 'processing':
-            stats['processing_pages'] += 1
-        else:
-            stats['pending_pages'] += 1
-        
-        # 计算平均处理时间
-        processing_time = page.get('processing_time')
-        if processing_time:
-            total_processing_time += processing_time
-            processing_time_count += 1
-    
-    # 计算平均处理时间
-    if processing_time_count > 0:
-        stats['average_processing_time'] = total_processing_time / processing_time_count
-    
-    # 计算成功率
-    if stats['total_pages'] > 0:
-        stats['success_rate'] = (stats['completed_pages'] / stats['total_pages']) * 100
-    
-    return stats
+# 注册系统监控路由
+register_system_routes(
+    app=app,
+    password=PASSWORD,
+    get_task_manager=lambda: task_manager,
+    get_auth_manager=lambda: auth_manager_instance,
+)
 
 if __name__ == "__main__":
     import uvicorn

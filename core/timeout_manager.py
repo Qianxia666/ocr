@@ -162,29 +162,32 @@ class TimeoutManager:
         """停止超时管理器"""
         if not self._running:
             return
-        
+
         self._running = False
-        
+
         # 停止监控任务
-        if self._monitor_task:
-            self._monitor_task.cancel()
+        monitor_task = self._monitor_task
+        self._monitor_task = None
+        if monitor_task:
+            monitor_task.cancel()
             try:
-                await self._monitor_task
+                await monitor_task
             except asyncio.CancelledError:
                 pass
-        
-        # 取消所有活跃的超时任务
+
+        # 快照活跃任务并在锁外等待取消，避免与任务清理阶段形成自锁
         async with self._lock:
-            for timeout_task in self._timeout_tasks.values():
-                timeout_task.cancel()
-            
-            # 等待所有任务完成
-            if self._timeout_tasks:
-                await asyncio.gather(*self._timeout_tasks.values(), return_exceptions=True)
-            
+            timeout_tasks = list(self._timeout_tasks.values())
             self._timeout_tasks.clear()
             self._active_timeouts.clear()
-        
+            self._stats['active_timeouts'] = 0
+
+        for timeout_task in timeout_tasks:
+            timeout_task.cancel()
+
+        if timeout_tasks:
+            await asyncio.gather(*timeout_tasks, return_exceptions=True)
+
         logger.info("超时管理器已停止")
     
     async def start_timeout(self, 
@@ -303,35 +306,37 @@ class TimeoutManager:
         :return: 超时状态信息
         """
         async with self._lock:
-            if timeout_id not in self._active_timeouts:
+            context = self._active_timeouts.get(timeout_id)
+            if context is None:
                 return None
-            
-            context = self._active_timeouts[timeout_id]
-            return {
-                'timeout_id': timeout_id,
-                'level': context.level.value,
-                'elapsed_time': context.elapsed_time,
-                'remaining_time': context.remaining_time,
-                'progress_ratio': context.progress_ratio,
-                'timeout_seconds': context.config.timeout_seconds,
-                'warning_threshold': context.config.warning_threshold,
-                'warning_sent': context.warning_sent,
-                'retry_count': context.retry_count,
-                'max_retries': context.config.max_retries,
-                'task_id': context.task_id,
-                'page_number': context.page_number,
-                'metadata': context.metadata
-            }
+
+            return self._build_timeout_status(timeout_id, context)
     
     async def get_all_timeouts(self) -> List[Dict[str, Any]]:
         """获取所有活跃超时的状态"""
         async with self._lock:
-            timeouts = []
-            for timeout_id in self._active_timeouts:
-                status = await self.get_timeout_status(timeout_id)
-                if status:
-                    timeouts.append(status)
-            return timeouts
+            return [
+                self._build_timeout_status(timeout_id, context)
+                for timeout_id, context in self._active_timeouts.items()
+            ]
+
+    def _build_timeout_status(self, timeout_id: str, context: TimeoutContext) -> Dict[str, Any]:
+        """构建超时状态快照，调用方负责处理并发访问边界。"""
+        return {
+            'timeout_id': timeout_id,
+            'level': context.level.value,
+            'elapsed_time': context.elapsed_time,
+            'remaining_time': context.remaining_time,
+            'progress_ratio': context.progress_ratio,
+            'timeout_seconds': context.config.timeout_seconds,
+            'warning_threshold': context.config.warning_threshold,
+            'warning_sent': context.warning_sent,
+            'retry_count': context.retry_count,
+            'max_retries': context.config.max_retries,
+            'task_id': context.task_id,
+            'page_number': context.page_number,
+            'metadata': context.metadata,
+        }
     
     async def _handle_timeout(self, context: TimeoutContext):
         """处理单个超时监控"""
@@ -463,14 +468,12 @@ class TimeoutManager:
         # 等待重试延迟
         if context.config.retry_delay > 0:
             await asyncio.sleep(context.config.retry_delay)
-        
+
         # 重置超时时间
         context.start_time = time.time()
         context.warning_sent = False
         logger.info(f"执行超时重试: {context.timeout_id} (第{context.retry_count}次)")
         return True
-        
-        logger.info(f"执行超时重试: {context.timeout_id} (第{context.retry_count}次)")
     
     async def _handle_timeout_warning_only(self, context: TimeoutContext):
         """处理仅警告的超时"""

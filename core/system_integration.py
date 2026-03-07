@@ -1,5 +1,5 @@
 """
-系统集成模块 - 协调超时管理、错误处理、监控和恢复机制
+绯荤粺闆嗘垚妯″潡 - 鍗忚皟瓒呮椂绠＄悊銆侀敊璇鐞嗐€佺洃鎺у拰鎭㈠鏈哄埗
 """
 import asyncio
 import logging
@@ -15,13 +15,13 @@ from models.websocket_messages import MessageFactory
 logger = logging.getLogger(__name__)
 
 class SystemIntegration:
-    """系统集成器 - 统一管理所有超时、错误处理、监控和恢复功能"""
+    """绯荤粺闆嗘垚鍣?- 缁熶竴绠＄悊鎵€鏈夎秴鏃躲€侀敊璇鐞嗐€佺洃鎺у拰鎭㈠鍔熻兘"""
     
     def __init__(self, runtime_config=None, websocket_manager=None):
         """
-        初始化系统集成器
-        :param runtime_config: 运行时配置对象引用
-        :param websocket_manager: WebSocket管理器，用于发送通知
+        鍒濆鍖栫郴缁熼泦鎴愬櫒
+        :param runtime_config: 杩愯鏃堕厤缃璞″紩鐢?
+        :param websocket_manager: WebSocket绠＄悊鍣紝鐢ㄤ簬鍙戦€侀€氱煡
         """
         self._runtime_config = runtime_config
         self.websocket_manager = websocket_manager
@@ -30,36 +30,36 @@ class SystemIntegration:
         self.system_monitor = SystemMonitor()
         self.recovery_manager = RecoveryManager()
 
-        # 初始化状态
+        # 鍒濆鍖栫姸鎬?
         self._initialized = False
         self._shutdown_event = asyncio.Event()
 
-        # 设置组件间的回调
+        # 璁剧疆缁勪欢闂寸殑鍥炶皟
         self._setup_component_callbacks()
 
-        logger.info("系统集成器创建完成")
+        logger.info("system integration created")
     
     def _setup_component_callbacks(self):
-        """设置组件间的回调函数"""
-        # 注释掉不存在的回调方法，避免启动错误
-        # TODO: 根据实际组件接口实现回调机制
-        # 超时管理器回调
+        """璁剧疆缁勪欢闂寸殑鍥炶皟鍑芥暟"""
+        # 娉ㄩ噴鎺変笉瀛樺湪鐨勫洖璋冩柟娉曪紝閬垮厤鍚姩閿欒
+        # TODO: 鏍规嵁瀹為檯缁勪欢鎺ュ彛瀹炵幇鍥炶皟鏈哄埗
+        # 瓒呮椂绠＄悊鍣ㄥ洖璋?
         # self.timeout_manager.set_warning_callback(self._on_timeout_warning)
         # self.timeout_manager.set_timeout_callback(self._on_timeout_occurred)
         
-        # 错误处理器回调
+        # 閿欒澶勭悊鍣ㄥ洖璋?
         # self.error_handler.set_recovery_callback(self._on_error_recovery)
         
-        # 系统监控器回调
+        # 绯荤粺鐩戞帶鍣ㄥ洖璋?
         # self.system_monitor.set_alert_callback(self._on_system_alert)
         
-        # 恢复管理器回调
+        # 鎭㈠绠＄悊鍣ㄥ洖璋?
         # self.recovery_manager.set_notification_callback(self._on_recovery_notification)
         
-        logger.warning("组件回调机制暂时禁用，需要根据实际组件接口实现")
+        logger.warning("component callbacks are temporarily disabled")
     
     def _resolve_max_retries(self, max_retries: Optional[int]) -> int:
-        """解析最大重试次数配置，确保返回有效值"""
+        """瑙ｆ瀽鏈€澶ч噸璇曟鏁伴厤缃紝纭繚杩斿洖鏈夋晥鍊?"""
         if max_retries is not None:
             candidate = max_retries
         elif self._runtime_config is not None and hasattr(self._runtime_config, 'max_retries'):
@@ -75,61 +75,61 @@ class SystemIntegration:
         return max(1, resolved)
     
     async def initialize(self):
-        """初始化所有组件"""
+        """鍒濆鍖栨墍鏈夌粍浠?"""
         if self._initialized:
             return
         
         try:
-            # 初始化各个组件
+            # 鍒濆鍖栧悇涓粍浠?
             await self.timeout_manager.start()
-            # 尝试初始化其他组件，如果失败则记录警告但不阻止启动
+            # 灏濊瘯鍒濆鍖栧叾浠栫粍浠讹紝濡傛灉澶辫触鍒欒褰曡鍛婁絾涓嶉樆姝㈠惎鍔?
             try:
                 await self.error_handler.initialize()
             except Exception as e:
-                logger.warning(f"错误处理器初始化失败: {e}")
+                logger.warning(f"閿欒澶勭悊鍣ㄥ垵濮嬪寲澶辫触: {e}")
             
             try:
                 await self.system_monitor.initialize()
             except Exception as e:
-                logger.warning(f"系统监控器初始化失败: {e}")
+                logger.warning(f"绯荤粺鐩戞帶鍣ㄥ垵濮嬪寲澶辫触: {e}")
             
             try:
                 await self.recovery_manager.initialize()
             except Exception as e:
-                logger.warning(f"恢复管理器初始化失败: {e}")
+                logger.warning(f"鎭㈠绠＄悊鍣ㄥ垵濮嬪寲澶辫触: {e}")
             
-            # 启动监控任务
+            # 鍚姩鐩戞帶浠诲姟
             asyncio.create_task(self._monitoring_loop())
             
             self._initialized = True
-            logger.info("系统集成器初始化完成")
+            logger.info("绯荤粺闆嗘垚鍣ㄥ垵濮嬪寲瀹屾垚")
             
         except Exception as e:
-            logger.error(f"系统集成器初始化失败: {e}")
+            logger.error(f"绯荤粺闆嗘垚鍣ㄥ垵濮嬪寲澶辫触: {e}")
             raise
     
     async def shutdown(self):
-        """关闭所有组件"""
+        """鍏抽棴鎵€鏈夌粍浠?"""
         if not self._initialized:
             return
         
         try:
-            # 设置关闭事件
+            # 璁剧疆鍏抽棴浜嬩欢
             self._shutdown_event.set()
             
-            # 关闭各个组件
+            # 鍏抽棴鍚勪釜缁勪欢
             await self.timeout_manager.stop()
             # await self.error_handler.shutdown()
             # await self.system_monitor.shutdown()
             # await self.recovery_manager.shutdown()
             
             self._initialized = False
-            logger.info("系统集成器关闭完成")
+            logger.info("system integration shutdown complete")
             
         except Exception as e:
-            logger.error(f"系统集成器关闭失败: {e}")
+            logger.error(f"绯荤粺闆嗘垚鍣ㄥ叧闂け璐? {e}")
     
-    # ========== 任务处理相关方法 ==========
+    # ========== 浠诲姟澶勭悊鐩稿叧鏂规硶 ==========
     
     async def execute_with_protection(self,
                                     task_id: str,
@@ -139,26 +139,26 @@ class SystemIntegration:
                                     max_retries: Optional[int] = None,
                                     **kwargs) -> Any:
         """
-        执行受保护的操作 - 包含超时、错误处理和恢复机制
-        :param task_id: 任务ID
-        :param operation: 要执行的操作
-        :param timeout_level: 超时级别
-        :param recovery_strategy: 恢复策略
-        :param max_retries: 最大重试次数（总尝试次数）
-        :param kwargs: 操作参数
-        :return: 操作结果
+        鎵ц鍙椾繚鎶ょ殑鎿嶄綔 - 鍖呭惈瓒呮椂銆侀敊璇鐞嗗拰鎭㈠鏈哄埗
+        :param task_id: 浠诲姟ID
+        :param operation: 瑕佹墽琛岀殑鎿嶄綔
+        :param timeout_level: 瓒呮椂绾у埆
+        :param recovery_strategy: 鎭㈠绛栫暐
+        :param max_retries: 鏈€澶ч噸璇曟鏁帮紙鎬诲皾璇曟鏁帮級
+        :param kwargs: 鎿嶄綔鍙傛暟
+        :return: 鎿嶄綔缁撴灉
         """
         checkpoint_id = None
         last_error = None
         attempts_allowed = self._resolve_max_retries(max_retries)
         
         try:
-            # 使用非递归的重试机制
+            # 浣跨敤闈為€掑綊鐨勯噸璇曟満鍒?
             for attempt in range(attempts_allowed):
                 timeout_context = None
                 timeout_stopped = False
                 try:
-                    # 创建检查点（仅在第一次尝试时创建）
+                    # 鍒涘缓妫€鏌ョ偣锛堜粎鍦ㄧ涓€娆″皾璇曟椂鍒涘缓锛?
                     if attempt == 0:
                         from .recovery_manager import CheckpointType
                         checkpoint_id = await self.recovery_manager.create_checkpoint(
@@ -168,7 +168,7 @@ class SystemIntegration:
                             state_data={"operation": operation.__name__, **kwargs}
                         )
                     
-                    # 启动超时保护
+                    # 鍚姩瓒呮椂淇濇姢
                     timeout_context = await self.timeout_manager.start_timeout(
                         timeout_id=f"{task_id}:{operation.__name__}:{attempt}",
                         level=timeout_level,
@@ -177,54 +177,47 @@ class SystemIntegration:
                     )
                     
                     try:
-                        # 执行操作
+                        # 鎵ц鎿嶄綔
                         result = await operation(**kwargs)
                         
-                        # 停止超时保护
+                        # 鍋滄瓒呮椂淇濇姢
                         await self.timeout_manager.stop_timeout(timeout_context.timeout_id)
                         timeout_stopped = True
                         
-                        # 清理检查点
+                        # 娓呯悊妫€鏌ョ偣
                         if checkpoint_id:
                             await self.recovery_manager.cleanup_checkpoint(checkpoint_id)
                         
                         return result
                         
                     except asyncio.TimeoutError as e:
-                        # 处理超时错误
+                        # 澶勭悊瓒呮椂閿欒
                         await self._handle_timeout_error(task_id, timeout_context, str(e))
                         raise
                         
                     except Exception as e:
-                        # 审查失败异常不进入重试逻辑，直接传播
-                        from core.content_moderator import ModerationFailedException
-                        if isinstance(e, ModerationFailedException):
-                            raise
 
                         last_error = e
-                        # 处理其他错误
+                        # 澶勭悊鍏朵粬閿欒
                         if attempt < attempts_allowed - 1:
                             recovery_result = await self.error_handler.handle_error(
                                 e, task_id, recovery_strategy
                             )
 
                             if recovery_result.should_retry:
-                                # 计算退避延迟
-                                retry_delay = min(1.0 * (2 ** attempt), 30.0)  # 指数退避，最大30秒
-                                logger.info(f"任务 {task_id} 准备第 {attempt + 1} 次重试，延迟 {retry_delay:.1f} 秒")
-                                await asyncio.sleep(retry_delay)
-                                continue  # 继续下一次重试
-
-                        # 如果是最后一次重试或者不需要重试，抛出异常
+                                logger.info(
+                                    "task %s scheduled for retry attempt %s/%s",
+                                    task_id,
+                                    attempt + 2,
+                                    attempts_allowed,
+                                )
+                                continue  # 缁х画涓嬩竴娆￠噸璇?
+                        # 濡傛灉鏄渶鍚庝竴娆￠噸璇曟垨鑰呬笉闇€瑕侀噸璇曪紝鎶涘嚭寮傚父
                         raise
 
                 except Exception as e:
-                    # 审查失败异常直接传播，不判断重试次数
-                    from core.content_moderator import ModerationFailedException
-                    if isinstance(e, ModerationFailedException):
-                        raise
 
-                    # 如果所有重试都失败了，抛出最后的错误
+                    # 濡傛灉鎵€鏈夐噸璇曢兘澶辫触浜嗭紝鎶涘嚭鏈€鍚庣殑閿欒
                     if attempt == attempts_allowed - 1:
                         raise
                 finally:
@@ -232,30 +225,30 @@ class SystemIntegration:
                         try:
                             await self.timeout_manager.stop_timeout(timeout_context.timeout_id)
                         except Exception as stop_error:
-                            logger.warning(f"ֹͣ��ʱ����ʧ�� {timeout_context.timeout_id}: {stop_error}")
+                            logger.warning("stop_timeout_failed timeout_id=%s error=%s", timeout_context.timeout_id, stop_error)
             
         except Exception as e:
-            # 最终异常处理
+            # 鏈€缁堝紓甯稿鐞?
             if checkpoint_id:
                 await self.recovery_manager.mark_checkpoint_failed(
                     checkpoint_id, str(e)
                 )
             
-            # 发送错误通知
+            # 鍙戦€侀敊璇€氱煡
             await self._send_error_notification(task_id, str(e))
             raise
     
     async def monitor_task_execution(self, task_id: str, total_pages: int = 1):
         """
-        监控任务执行过程
-        :param task_id: 任务ID
-        :param total_pages: 总页数
+        鐩戞帶浠诲姟鎵ц杩囩▼
+        :param task_id: 浠诲姟ID
+        :param total_pages: 鎬婚〉鏁?
         """
         try:
-            # 记录任务开始
+            # 璁板綍浠诲姟寮€濮?
             await self.system_monitor.record_task_start(task_id, total_pages)
             
-            # 启动任务级超时保护
+            # 鍚姩浠诲姟绾ц秴鏃朵繚鎶?
             timeout_context = await self.timeout_manager.start_timeout(
                 timeout_id=f"task_execution:{task_id}",
                 level=TimeoutLevel.TASK_EXECUTION,
@@ -266,28 +259,32 @@ class SystemIntegration:
             return timeout_context
             
         except Exception as e:
-            logger.error(f"任务监控启动失败 {task_id}: {e}")
+            logger.error(f"浠诲姟鐩戞帶鍚姩澶辫触 {task_id}: {e}")
             raise
     
     async def complete_task_monitoring(self, task_id: str, timeout_context, success: bool = True):
         """
-        完成任务监控
-        :param task_id: 任务ID
-        :param timeout_context: 超时上下文
-        :param success: 是否成功
+        瀹屾垚浠诲姟鐩戞帶
+        :param task_id: 浠诲姟ID
+        :param timeout_context: 瓒呮椂涓婁笅鏂?
+        :param success: 鏄惁鎴愬姛
         """
         try:
-            # 停止超时保护
+            # 鍋滄瓒呮椂淇濇姢
             if timeout_context:
                 await self.timeout_manager.stop_timeout(timeout_context.timeout_id)
             
-            # 记录任务完成
+            # 璁板綍浠诲姟瀹屾垚
             await self.system_monitor.record_task_completion(task_id, success)
             
         except Exception as e:
-            logger.error(f"任务监控完成失败 {task_id}: {e}")
+            logger.error(f"浠诲姟鐩戞帶瀹屾垚澶辫触 {task_id}: {e}")
     
-    # ========== API调用保护 ==========
+    async def finalize_task_monitoring(self, task_id: str, timeout_context):
+        """Compatibility wrapper for task monitoring cleanup."""
+        await self.complete_task_monitoring(task_id, timeout_context, success=True)
+
+    # ========== API璋冪敤淇濇姢 ==========
     
     async def protected_api_call(self,
                                 task_id: str,
@@ -296,12 +293,12 @@ class SystemIntegration:
                                 max_retries: Optional[int] = None,
                                 **kwargs):
         """
-        受保护的API调用 - 包含超时和重试机制
-        :param task_id: 任务ID
-        :param api_func: API函数
-        :param args: 位置参数
-        :param kwargs: 关键字参数
-        :return: API调用结果
+        鍙椾繚鎶ょ殑API璋冪敤 - 鍖呭惈瓒呮椂鍜岄噸璇曟満鍒?
+        :param task_id: 浠诲姟ID
+        :param api_func: API鍑芥暟
+        :param args: 浣嶇疆鍙傛暟
+        :param kwargs: 鍏抽敭瀛楀弬鏁?
+        :return: API璋冪敤缁撴灉
         """
         resolved_retries = self._resolve_max_retries(
             1 if max_retries is None else max_retries
@@ -316,10 +313,10 @@ class SystemIntegration:
             **kwargs
         )
     
-    # ========== 系统状态查询 ==========
+    # ========== 绯荤粺鐘舵€佹煡璇?==========
     
     async def get_system_health(self) -> Dict[str, Any]:
-        """获取系统健康状态"""
+        """鑾峰彇绯荤粺鍋ュ悍鐘舵€?"""
         try:
             timeout_stats = self.timeout_manager.get_statistics()
             error_stats = self.error_handler.get_statistics()
@@ -328,7 +325,7 @@ class SystemIntegration:
             
             return {
                 "timestamp": datetime.now().isoformat(),
-                "overall_status": "healthy",  # 可以根据各组件状态计算
+                "overall_status": "healthy",  # 鍙互鏍规嵁鍚勭粍浠剁姸鎬佽绠?
                 "timeout_manager": timeout_stats,
                 "error_handler": error_stats,
                 "system_monitor": system_metrics,
@@ -336,131 +333,174 @@ class SystemIntegration:
             }
             
         except Exception as e:
-            logger.error(f"获取系统健康状态失败: {e}")
+            logger.error(f"鑾峰彇绯荤粺鍋ュ悍鐘舵€佸け璐? {e}")
             return {
                 "timestamp": datetime.now().isoformat(),
                 "overall_status": "error",
                 "error": str(e)
             }
     
-    # ========== 回调处理方法 ==========
+    # ========== 鍥炶皟澶勭悊鏂规硶 ==========
     
     async def _on_timeout_warning(self, timeout_id: str, task_id: str, 
                                 elapsed_time: float, total_timeout: float):
-        """处理超时预警"""
+        """澶勭悊瓒呮椂棰勮"""
         try:
             percentage = (elapsed_time / total_timeout) * 100
             
-            # 发送超时预警消息
+            # 鍙戦€佽秴鏃堕璀︽秷鎭?
             if self.websocket_manager:
                 message = MessageFactory.create_timeout_warning(
-                    task_id, timeout_id, elapsed_time, total_timeout, percentage
+                    timeout_type=timeout_id,
+                    current_duration=elapsed_time,
+                    timeout_threshold=total_timeout,
+                    warning_threshold=total_timeout * 0.8,
+                    progress_percentage=percentage,
+                    task_id=task_id,
+                    operation_id=timeout_id,
                 )
                 await self.websocket_manager.send_to_task_subscribers(
                     task_id, message.to_dict()
                 )
             
-            logger.warning(f"任务 {task_id} 超时预警: {percentage:.1f}% ({elapsed_time:.1f}s/{total_timeout}s)")
+            logger.warning(f"浠诲姟 {task_id} 瓒呮椂棰勮: {percentage:.1f}% ({elapsed_time:.1f}s/{total_timeout}s)")
             
         except Exception as e:
-            logger.error(f"处理超时预警失败: {e}")
+            logger.error(f"澶勭悊瓒呮椂棰勮澶辫触: {e}")
     
     async def _on_timeout_occurred(self, timeout_id: str, task_id: str, elapsed_time: float):
-        """处理超时发生"""
+        """澶勭悊瓒呮椂鍙戠敓"""
         try:
-            # 发送超时发生消息
+            # 鍙戦€佽秴鏃跺彂鐢熸秷鎭?
             if self.websocket_manager:
-                message = MessageFactory.create_timeout_occurred(
-                    task_id, timeout_id, elapsed_time
+                message = MessageFactory.create_timeout_exceeded(
+                    timeout_type=timeout_id,
+                    duration=elapsed_time,
+                    timeout_threshold=elapsed_time,
+                    action_taken="timeout_occurred",
+                    task_id=task_id,
+                    operation_id=timeout_id,
                 )
                 await self.websocket_manager.send_to_task_subscribers(
                     task_id, message.to_dict()
                 )
             
-            logger.error(f"任务 {task_id} 发生超时: {elapsed_time:.1f}s")
+            logger.error(f"浠诲姟 {task_id} 鍙戠敓瓒呮椂: {elapsed_time:.1f}s")
             
         except Exception as e:
-            logger.error(f"处理超时发生失败: {e}")
+            logger.error(f"澶勭悊瓒呮椂鍙戠敓澶辫触: {e}")
     
     async def _on_error_recovery(self, task_id: str, error_type: str, 
                                recovery_action: str, success: bool):
-        """处理错误恢复"""
+        """澶勭悊閿欒鎭㈠"""
         try:
-            # 发送错误恢复消息
+            # 鍙戦€侀敊璇仮澶嶆秷鎭?
             if self.websocket_manager:
-                message = MessageFactory.create_error_recovery(
-                    task_id, error_type, recovery_action, success
-                )
+                if success:
+                    message = MessageFactory.create_error_recovery_completed(
+                        error_type=error_type,
+                        error_message=recovery_action,
+                        recovery_strategy=recovery_action,
+                        attempt_count=1,
+                        max_attempts=1,
+                        task_id=task_id,
+                    )
+                else:
+                    message = MessageFactory.create_error_recovery_failed(
+                        error_type=error_type,
+                        error_message=recovery_action,
+                        recovery_strategy=recovery_action,
+                        attempt_count=1,
+                        max_attempts=1,
+                        task_id=task_id,
+                    )
                 await self.websocket_manager.send_to_task_subscribers(
                     task_id, message.to_dict()
                 )
             
-            status = "成功" if success else "失败"
-            logger.info(f"任务 {task_id} 错误恢复{status}: {error_type} -> {recovery_action}")
+            status = "鎴愬姛" if success else "澶辫触"
+            logger.info(f"浠诲姟 {task_id} 閿欒鎭㈠{status}: {error_type} -> {recovery_action}")
             
         except Exception as e:
-            logger.error(f"处理错误恢复失败: {e}")
+            logger.error(f"澶勭悊閿欒鎭㈠澶辫触: {e}")
     
     async def _on_system_alert(self, alert_type: str, message: str, 
                              severity: str, metrics: Dict[str, Any]):
-        """处理系统告警"""
+        """澶勭悊绯荤粺鍛婅"""
         try:
-            # 发送系统告警消息
+            # 鍙戦€佺郴缁熷憡璀︽秷鎭?
             if self.websocket_manager:
                 alert_message = MessageFactory.create_system_alert(
-                    alert_type, message, severity, metrics
+                    alert_id=alert_type,
+                    metric_name=alert_type,
+                    level=severity,
+                    current_value=metrics.get("current_value", 0.0),
+                    threshold=metrics.get("threshold", 0.0),
+                    message=message,
+                    triggered_at=datetime.now().isoformat(),
+                    context=metrics,
                 )
                 await self.websocket_manager.broadcast_message(alert_message.to_dict())
             
-            logger.warning(f"系统告警 ({severity}): {alert_type} - {message}")
+            logger.warning(f"绯荤粺鍛婅 ({severity}): {alert_type} - {message}")
             
         except Exception as e:
-            logger.error(f"处理系统告警失败: {e}")
+            logger.error(f"澶勭悊绯荤粺鍛婅澶辫触: {e}")
     
     async def _on_recovery_notification(self, event_type: str, task_id: str, 
                                       message: str, data: Dict[str, Any]):
-        """处理恢复通知"""
+        """澶勭悊鎭㈠閫氱煡"""
         try:
-            # 发送恢复通知消息
+            # 鍙戦€佹仮澶嶉€氱煡娑堟伅
             if self.websocket_manager:
-                recovery_message = MessageFactory.create_recovery_notification(
-                    event_type, task_id, message, data
+                recovery_message = MessageFactory.create_recovery_job_update(
+                    task_id=task_id,
+                    recovery_state=event_type,
+                    recovery_attempts=data.get("recovery_attempts", 0),
+                    max_recovery_attempts=data.get("max_recovery_attempts", 0),
+                    recovery_strategy=data.get("recovery_strategy", "unknown"),
+                    error_messages=[message],
                 )
                 await self.websocket_manager.send_to_task_subscribers(
                     task_id, recovery_message.to_dict()
                 )
             
-            logger.info(f"恢复通知 {task_id}: {event_type} - {message}")
+            logger.info(f"鎭㈠閫氱煡 {task_id}: {event_type} - {message}")
             
         except Exception as e:
-            logger.error(f"处理恢复通知失败: {e}")
+            logger.error(f"澶勭悊鎭㈠閫氱煡澶辫触: {e}")
     
-    # ========== 内部方法 ==========
+    # ========== 鍐呴儴鏂规硶 ==========
     
     async def _handle_timeout_error(self, task_id: str, timeout_context, error_msg: str):
-        """处理超时错误"""
+        """澶勭悊瓒呮椂閿欒"""
         try:
-            # 记录超时事件
+            # 璁板綍瓒呮椂浜嬩欢
             await self.error_handler.handle_error(
                 asyncio.TimeoutError(error_msg), 
                 task_id, 
                 "auto"
             )
             
-            # 发送超时错误通知
+            # 鍙戦€佽秴鏃堕敊璇€氱煡
             if self.websocket_manager:
-                message = MessageFactory.create_timeout_occurred(
-                    task_id, timeout_context.timeout_id, timeout_context.elapsed_time
+                message = MessageFactory.create_timeout_exceeded(
+                    timeout_type=timeout_context.timeout_id,
+                    duration=timeout_context.elapsed_time,
+                    timeout_threshold=timeout_context.elapsed_time,
+                    action_taken="timeout_occurred",
+                    task_id=task_id,
+                    operation_id=timeout_context.timeout_id,
                 )
                 await self.websocket_manager.send_to_task_subscribers(
                     task_id, message.to_dict()
                 )
             
         except Exception as e:
-            logger.error(f"处理超时错误失败: {e}")
+            logger.error(f"澶勭悊瓒呮椂閿欒澶辫触: {e}")
     
     async def _send_error_notification(self, task_id: str, error_msg: str):
-        """发送错误通知"""
+        """鍙戦€侀敊璇€氱煡"""
         try:
             if self.websocket_manager:
                 message = MessageFactory.create_error_notification(
@@ -470,53 +510,53 @@ class SystemIntegration:
                     task_id, message.to_dict()
                 )
         except Exception as e:
-            logger.error(f"发送错误通知失败: {e}")
+            logger.error(f"鍙戦€侀敊璇€氱煡澶辫触: {e}")
     
     async def _monitoring_loop(self):
-        """监控循环 - 定期检查系统状态"""
+        """鐩戞帶寰幆 - 瀹氭湡妫€鏌ョ郴缁熺姸鎬?"""
         while not self._shutdown_event.is_set():
             try:
-                # 检查系统资源
+                # 妫€鏌ョ郴缁熻祫婧?
                 metrics = await self.system_monitor._collect_system_metrics()
                 await self.system_monitor._check_system_alerts(metrics)
                 
-                # 清理过期数据
+                # 娓呯悊杩囨湡鏁版嵁
                 # await self.timeout_manager.cleanup_expired_timeouts()
                 # await self.error_handler.cleanup_old_records()
                 # await self.recovery_manager.cleanup_expired_checkpoints()
                 
-                # 等待下一次检查
-                await asyncio.sleep(30)  # 每30秒检查一次
+                # 绛夊緟涓嬩竴娆℃鏌?
+                await asyncio.sleep(30)  # 姣?0绉掓鏌ヤ竴娆?
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"监控循环异常: {e}")
-                await asyncio.sleep(60)  # 发生异常时等待更长时间
+                logger.error(f"鐩戞帶寰幆寮傚父: {e}")
+                await asyncio.sleep(60)  # 鍙戠敓寮傚父鏃剁瓑寰呮洿闀挎椂闂?
 
-# 全局系统集成器实例
+# 鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ疄渚?
 system_integration: Optional[SystemIntegration] = None
 
 async def init_system_integration(runtime_config=None, websocket_manager=None):
     """
-    初始化全局系统集成器
-    :param runtime_config: 运行时配置对象引用
-    :param websocket_manager: WebSocket管理器
+    鍒濆鍖栧叏灞€绯荤粺闆嗘垚鍣?
+    :param runtime_config: 杩愯鏃堕厤缃璞″紩鐢?
+    :param websocket_manager: WebSocket绠＄悊鍣?
     """
     global system_integration
     if system_integration is None:
         system_integration = SystemIntegration(runtime_config, websocket_manager)
         await system_integration.initialize()
-        logger.info("全局系统集成器初始化完成")
+        logger.info("鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ垵濮嬪寲瀹屾垚")
 
 async def shutdown_system_integration():
-    """关闭全局系统集成器"""
+    """鍏抽棴鍏ㄥ眬绯荤粺闆嗘垚鍣?"""
     global system_integration
     if system_integration:
         await system_integration.shutdown()
         system_integration = None
-        logger.info("全局系统集成器已关闭")
+        logger.info("鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ凡鍏抽棴")
 
 def get_system_integration() -> Optional[SystemIntegration]:
-    """获取全局系统集成器实例"""
+    """鑾峰彇鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ疄渚?"""
     return system_integration

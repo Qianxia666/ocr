@@ -3,12 +3,8 @@ import uuid
 import logging
 import time
 import fitz  # PyMuPDF
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Set
 from datetime import datetime, timezone
-from io import BytesIO
-from PIL import Image
-import aiohttp
-import base64
 import json
 
 from models.database import (
@@ -28,41 +24,21 @@ from core.page_processor import (
     is_page_processor_ready,
     ensure_page_processor_ready
 )
-from core.content_moderator import ModerationFailedException
 from core.progress_tracker import ProgressTracker, init_progress_tracker, shutdown_progress_tracker, progress_tracker
 from core.system_integration import SystemIntegration, init_system_integration, shutdown_system_integration, get_system_integration
 from core.timeout_manager import TimeoutLevel
 from core.error_handler import RecoveryStrategy
 from core.auth import get_auth_manager
+from core.ocr_client import OCRServiceError, request_ocr_markdown
+from core.image_utils import compress_image_to_target_ratio
+from core.ocr_policy import (
+    OCR_SYSTEM_PROMPT,
+    OCR_USER_PROMPT,
+    build_ocr_request_config,
+)
 from models.websocket_messages import MessageFactory
 
 logger = logging.getLogger(__name__)
-
-def _extract_markdown_from_response(raw: str) -> str:
-    """Parse OCR model response and extract Markdown content"""
-    if not raw:
-        return ''
-
-    cleaned = raw.strip()
-
-    if cleaned.startswith('```') and cleaned.endswith('```'):
-        cleaned = cleaned.strip('`')
-        if cleaned.lower().startswith('json'):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
-
-    try:
-        data = json.loads(cleaned)
-        if isinstance(data, dict):
-            text_value = data.get('content') or data.get('text')
-            if isinstance(text_value, str) and text_value.strip():
-                return text_value.strip()
-        elif isinstance(data, str) and data.strip():
-            return data.strip()
-    except json.JSONDecodeError as exc:
-        logger.debug('OCR响应JSON解析失败: %s', exc)
-
-    return ''
 
 class TaskManager:
     """Task manager coordinating queues and OCR workers."""
@@ -120,12 +96,78 @@ class TaskManager:
         self.api_config = api_config or {}
         self.websocket_manager = websocket_manager
         self._initialized = False
+        self._cancellation_lock = asyncio.Lock()
+        self._quota_refunded_tasks: Set[str] = set()
+        self._pdf_render_lock = asyncio.Lock()
 
         # 设置任务处理器
         self.image_worker_pool.set_task_processor(self._process_task)
         self.pdf_worker_pool.set_task_processor(self._process_task)
 
         logger.info("任务管理器初始化完成（双队列模式）")
+
+    def _get_runtime_positive_int(self, field_name: str, fallback_key: str, default: int, minimum: int = 1) -> int:
+        if self.runtime_config is not None and hasattr(self.runtime_config, field_name):
+            try:
+                value = int(getattr(self.runtime_config, field_name))
+            except (TypeError, ValueError):
+                value = self.api_config.get(fallback_key, default)
+        else:
+            value = self.api_config.get(fallback_key, default)
+
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            value = default
+
+        return max(minimum, value)
+
+    def _get_configured_concurrency(self) -> int:
+        return self._get_runtime_positive_int('concurrency', 'concurrency', 5)
+
+    def _get_configured_batch_size(self) -> int:
+        return self._get_runtime_positive_int('batch_size', 'batch_size', 4)
+
+    def _get_configured_pdf_dpi(self) -> int:
+        return self._get_runtime_positive_int('pdf_dpi', 'pdf_dpi', 200, minimum=72)
+
+    async def _apply_worker_pool_target(self, worker_pool, target_count: int, pool_name: str) -> None:
+        if not worker_pool:
+            return
+
+        worker_pool.min_workers = target_count
+        worker_pool.max_workers = target_count
+
+        if not getattr(worker_pool, '_running', False):
+            return
+
+        scaled = await worker_pool.scale_workers(target_count)
+        if not scaled:
+            logger.warning("worker pool runtime resize did not complete immediately: %s -> %s", pool_name, target_count)
+
+    async def refresh_runtime_config(self) -> None:
+        if not self.runtime_config:
+            return
+
+        self.api_config.update({
+            'concurrency': self._get_configured_concurrency(),
+            'image_concurrency': self._get_runtime_positive_int('image_concurrency', 'image_concurrency', 2),
+            'pdf_concurrency': self._get_runtime_positive_int('pdf_concurrency', 'pdf_concurrency', 2),
+            'batch_size': self._get_configured_batch_size(),
+            'pdf_dpi': self._get_configured_pdf_dpi(),
+            'max_retries': self._get_configured_max_retries(),
+        })
+
+        await self._apply_worker_pool_target(
+            self.image_worker_pool,
+            self.api_config['image_concurrency'],
+            'image',
+        )
+        await self._apply_worker_pool_target(
+            self.pdf_worker_pool,
+            self.api_config['pdf_concurrency'],
+            'pdf',
+        )
 
     def _get_configured_max_retries(self) -> int:
         """获取实际生效的最大重试次数配置"""
@@ -346,6 +388,37 @@ class TaskManager:
                 pass
             raise Exception("任务提交失败")
     
+    @staticmethod
+    def _get_pdf_page_count_sync(file_data: bytes) -> int:
+        """在线程池中解析 PDF 页数时使用的同步辅助函数。"""
+        pdf_document = None
+        try:
+            pdf_document = fitz.open(stream=file_data, filetype="pdf")
+            return len(pdf_document)
+        finally:
+            if pdf_document:
+                pdf_document.close()
+
+    @staticmethod
+    def _open_task_pdf_document_sync(task_item: TaskItem):
+        metadata = task_item.metadata or {}
+        temp_file_path = metadata.get('temp_file_path')
+        if temp_file_path:
+            return fitz.open(temp_file_path)
+        if task_item.file_data:
+            return fitz.open(stream=task_item.file_data, filetype="pdf")
+        raise ValueError(f"PDF task {task_item.task_id} is missing both file_data and temp_file_path")
+
+    async def _open_task_pdf_document(self, task_item: TaskItem):
+        async with self._pdf_render_lock:
+            return await asyncio.to_thread(self._open_task_pdf_document_sync, task_item)
+
+    async def _close_task_pdf_document(self, pdf_document) -> None:
+        if pdf_document is None:
+            return
+        async with self._pdf_render_lock:
+            await asyncio.to_thread(pdf_document.close)
+
     async def submit_pdf_task(self,
                              file_data: bytes,
                              file_name: str,
@@ -361,9 +434,7 @@ class TaskManager:
         """
         # 获取PDF页数
         try:
-            pdf_document = fitz.open(stream=file_data, filetype="pdf")
-            total_pages = len(pdf_document)
-            pdf_document.close()
+            total_pages = await asyncio.to_thread(self._get_pdf_page_count_sync, file_data)
         except Exception as e:
             logger.error(f"PDF文件解析失败: {e}")
             raise Exception("PDF文件格式错误或损坏")
@@ -516,26 +587,15 @@ class TaskManager:
 
                 contents = []
                 empty_pages = []
-                moderation_failed_pages = []
                 for page_result in page_results:
                     page_num = page_result.get('page_number')
-                    page_status = page_result.get('status')
-                    error_message = page_result.get('error_message', '')
                     content = page_result.get('content', '')
-
-                    # 过滤审查失败的页面
-                    if page_status == 'cancelled' and error_message == '内容道德审查未通过':
-                        moderation_failed_pages.append(page_num)
-                        logger.debug(f"过滤审查失败页面 {task_id}-{page_num}")
-                        continue
 
                     if content:
                         contents.append(content)
                     else:
                         empty_pages.append(page_num)
 
-                if moderation_failed_pages:
-                    logger.info(f"PDF任务有 {len(moderation_failed_pages)} 个页面审查失败: 页面 {moderation_failed_pages}")
                 if empty_pages:
                     logger.error(f"PDF任务有 {len(empty_pages)} 个页面内容为空: 页面 {empty_pages}")
 
@@ -545,12 +605,7 @@ class TaskManager:
                 if not result['content']:
                     logger.error(f"严重: PDF任务所有页面内容都为空! {task_id}")
         elif task_data['status'] == TaskStatus.CANCELLED.value:
-            # 审查失败的任务 - 前端不可见内容
-            if task_data.get('error_message') == '内容道德审查未通过':
-                result['content'] = ''  # 前端看不到内容
-            else:
-                # 其他取消原因，可以返回内容
-                result['content'] = ''
+            result['content'] = ''
         else:
             result['content'] = ''
 
@@ -559,39 +614,46 @@ class TaskManager:
 
     async def cancel_task(self, task_id: str, reason: str = "管理员手动停止") -> tuple[bool, str]:
         """取消指定任务"""
-        task = await task_model.get_task(task_id)
-        if not task:
-            return False, "任务不存在"
+        async with self._cancellation_lock:
+            task = await task_model.get_task(task_id)
+            if not task:
+                return False, "任务不存在"
 
-        status = task.get('status')
-        if status in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
-            return False, "任务已结束"
+            status = task.get('status')
+            if status in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
+                return False, "任务已结束"
 
-        task_type_value = task.get('task_type')
-        if task_type_value == TaskType.IMAGE_OCR.value:
-            queue = self.image_task_queue
-            pool = self.image_worker_pool
-        else:
-            queue = self.pdf_task_queue
-            pool = self.pdf_worker_pool
+            task_type_value = task.get('task_type')
+            if task_type_value == TaskType.IMAGE_OCR.value:
+                queue = self.image_task_queue
+                pool = self.image_worker_pool
+            else:
+                queue = self.pdf_task_queue
+                pool = self.pdf_worker_pool
 
-        cancelled_pending = await queue.cancel_task(task_id, reason)
-        if cancelled_pending:
-            await self._refund_task_quota(task)
-            await self._send_task_cancelled_message(task_id, reason)
-            return True, "已取消等待中的任务"
+            cancelled_pending = await queue.cancel_task(task_id, reason)
+            if cancelled_pending:
+                latest_task = await task_model.get_task(task_id)
+                await self._refund_task_quota(latest_task or task)
+                await self._send_task_cancelled_message(task_id, reason)
+                return True, "已取消等待中的任务"
 
-        if not pool:
-            return False, "任务无法取消"
+            if not pool:
+                return False, "任务无法取消"
 
-        cancelled_processing = await pool.cancel_task(task_id, reason)
-        if cancelled_processing:
+            cancelled_processing = await pool.cancel_task(task_id, reason)
+            if cancelled_processing:
+                latest_task = await task_model.get_task(task_id)
+                await self._refund_task_quota(latest_task or task)
+                await self._send_task_cancelled_message(task_id, reason)
+                return True, "已停止任务处理"
+
             latest_task = await task_model.get_task(task_id)
-            await self._refund_task_quota(latest_task or task)
-            await self._send_task_cancelled_message(task_id, reason)
-            return True, "已停止任务处理"
+            if latest_task and latest_task.get('status') == TaskStatus.CANCELLED.value:
+                await self._refund_task_quota(latest_task)
+                return True, "任务已取消"
 
-        return False, "任务可能已完成，请刷新列表"
+            return False, "任务可能已完成，请刷新列表"
 
     async def get_tasks_list(self, status: Optional[str] = None, limit: int = 100):
         """获取任务列表"""
@@ -666,21 +728,17 @@ class TaskManager:
             
             # 使用较低的DPI以节省内存
             dpi = 150
-            pix = page.get_pixmap(dpi=dpi)
-            
-            # 流式转换图片数据
-            image_data = None
-            with BytesIO() as buffer:
-                png_data = pix.tobytes("png")
-                buffer.write(png_data)
-                image_data = buffer.getvalue()
+            image_data = await self._render_pdf_page_to_png(pdf_document, page_number, dpi)
             
             # 立即释放内存
-            pix = None
             page = None
             
             # 使用页面处理器重新处理
-            content = await page_processor._call_ocr_api_with_retry(image_data, asyncio.Semaphore(1))
+            content = await page_processor._call_ocr_api_with_retry(
+                image_data,
+                asyncio.Semaphore(1),
+                task_id=task_id,
+            )
             
             if content:
                 # 更新页面结果
@@ -858,26 +916,13 @@ class TaskManager:
                 raise Exception(msg)
 
             log.info(f"task pipeline finished for {task_id}")
-
-            # 检查是否为审查失败（特殊处理）
-            is_moderation_failed = isinstance(result, dict) and result.get('moderation_failed') == True
-
             if system_integration and timeout_context:
-                if is_moderation_failed:
-                    log.info(f"complete monitoring {task_id} (cancelled - moderation failed)")
-                    await system_integration.complete_task_monitoring(
-                        task_id, timeout_context, success=False
-                    )
-                else:
-                    log.info(f"complete monitoring {task_id} (success)")
-                    await system_integration.complete_task_monitoring(
-                        task_id, timeout_context, success=True
-                    )
+                log.info(f"complete monitoring {task_id} (success)")
+                await system_integration.complete_task_monitoring(
+                    task_id, timeout_context, success=True
+                )
 
-            if is_moderation_failed:
-                log.info(f"=== task cancelled {task_id} (moderation failed) ===")
-            else:
-                log.info(f"=== task finished {task_id} ===")
+            log.info(f"=== task finished {task_id} ===")
             return result
 
         except Exception as exc:
@@ -952,7 +997,7 @@ class TaskManager:
                 len(image_data) > MIN_COMPRESS_SIZE):
                 compression_ratio = getattr(self.runtime_config, 'image_compression_ratio', 1.0)
                 if compression_ratio < 1.0:
-                    image_data = self._compress_image(image_data, compression_ratio)
+                    image_data = await self._compress_image_async(image_data, compression_ratio)
 
             content = await self._call_ocr_api_protected(task_item.task_id, image_data)
             processing_time = time.time() - start_time
@@ -1011,63 +1056,6 @@ class TaskManager:
 
             log.info(f"image task completed {task_item.task_id} in {processing_time:.2f}s")
             return result_summary
-
-        except ModerationFailedException as moderation_exc:
-            # 审查失败异常 - 特殊处理
-            processing_time = time.time() - start_time
-            log.warning(f"内容道德审查未通过 {task_item.task_id}: {moderation_exc.details}")
-
-            # 保存原始OCR内容到page_result（仅后端可见）
-            await page_result_model.create_page_result(task_item.task_id, 1, 'cancelled')
-            await page_result_model.update_page_result(
-                task_item.task_id,
-                1,
-                'cancelled',
-                content=moderation_exc.original_content,  # 保存原始内容
-                error_message='内容道德审查未通过',
-                processing_time=processing_time
-            )
-
-            # 将任务状态设置为CANCELLED
-            await task_model.update_task_status(
-                task_item.task_id,
-                TaskStatus.CANCELLED,
-                progress=0.0,
-                processed_pages=0,
-                error_message='内容道德审查未通过'
-            )
-
-            # 保存审查日志到moderation_logs表
-            await self._save_moderation_log(
-                task_id=task_item.task_id,
-                page_number=1,
-                action='block',
-                details=moderation_exc.details,
-                original_content=moderation_exc.original_content
-            )
-
-            # WebSocket通知前端任务已取消
-            if self.websocket_manager:
-                cancelled_message = MessageFactory.create_task_failed(
-                    task_item.task_id,
-                    '内容道德审查未通过',
-                    failed_page=1
-                )
-                await self.websocket_manager.send_to_task_subscribers(
-                    task_item.task_id,
-                    cancelled_message.to_dict()
-                )
-
-            log.info(f"任务已取消(审查未通过) {task_item.task_id}")
-            # 返回特殊标记，让上层识别为取消而非成功
-            return {
-                'total_pages': 1,
-                'successful_pages': 0,
-                'failed_pages': 0,
-                'cancelled': True,
-                'moderation_failed': True,  # 添加特殊标记
-                'reason': '内容道德审查未通过'
-            }
 
         except Exception as exc:
             processing_time = time.time() - start_time
@@ -1255,7 +1243,6 @@ class TaskManager:
 
             successful_pages = 0
             failed_pages = 0
-            moderation_failed_pages = 0
             total_content_length = 0
 
             for page_result in page_results:
@@ -1267,40 +1254,19 @@ class TaskManager:
                     content = page_result.get('content', '')
                     content_length = len(content) if content else 0
                     total_content_length += content_length
-                    log.info(f"页面 {page_result['page_number']}: 内容长度={content_length}字符, 预览={content[:100] if content else '无内容'}...")
-                elif page_status == 'cancelled' and error_message == '内容道德审查未通过':
-                    moderation_failed_pages += 1
-                    log.warning(f"页面 {page_result['page_number']}: 审查失败")
+                    log.info(f"?? {page_result['page_number']}: ????={content_length}??, ??={content[:100] if content else '???'}...")
                 else:
                     failed_pages += 1
-                    log.error(f"页面 {page_result['page_number']}: 状态={page_status}, 错误={error_message}")
+                    log.error(f"?? {page_result['page_number']}: ??={page_status}, ??={error_message}")
 
-            log.info(f" 页面统计: 成功={successful_pages}, 失败={failed_pages}, 审查失败={moderation_failed_pages}, 总内容长度={total_content_length}字符")
-
-            # 如果所有页面都审查失败，将任务标记为CANCELLED
-            if moderation_failed_pages == task_item.total_pages:
-                log.warning(f"所有页面审查失败，将任务标记为CANCELLED {task_item.task_id}")
-                await task_model.update_task_status(
-                    task_item.task_id,
-                    TaskStatus.CANCELLED,
-                    error_message='所有页面内容道德审查未通过'
-                )
-                return {
-                    'total_pages': task_item.total_pages,
-                    'successful_pages': 0,
-                    'failed_pages': 0,
-                    'moderation_failed': True,
-                    'moderation_failed_pages': moderation_failed_pages,
-                    'cancelled': True,
-                    'reason': '所有页面内容道德审查未通过'
-                }
+            log.info(f" ????: ??={successful_pages}, ??={failed_pages}, ?????={total_content_length}??")
 
             if total_content_length == 0 and successful_pages > 0:
                 log.error(f" 检测到严重问题: 页面显示成功但内容为空！可能是OCR API响应解析失败。")
 
                 # 尝试修复空内容页面
                 log.info(f" 开始修复空内容页面 {task_item.task_id}...")
-                pdf_document = fitz.open(stream=task_item.file_data, filetype="pdf")
+                pdf_document = await self._open_task_pdf_document(task_item)
 
                 try:
                     fixed_pages = 0
@@ -1346,7 +1312,7 @@ class TaskManager:
                     log.error(f"修复空内容页面时出错 {task_item.task_id}: {fix_error}")
                 finally:
                     if pdf_document:
-                        pdf_document.close()
+                        await self._close_task_pdf_document(pdf_document)
 
             # 6. 发送任务完成消息
             if self.websocket_manager:
@@ -1427,16 +1393,16 @@ class TaskManager:
             # 2. 使用原有的PDF处理逻辑
             pdf_document = None
             try:
-                pdf_document = fitz.open(stream=task_item.file_data, filetype="pdf")
+                pdf_document = await self._open_task_pdf_document(task_item)
 
                 successful_pages = 0
                 failed_pages = 0
 
                 # 使用信号量控制并发
-                semaphore = asyncio.Semaphore(self.api_config.get('concurrency', 3))  # 降低并发数
+                semaphore = asyncio.Semaphore(self._get_configured_concurrency())
 
                 # 分批处理策略
-                batch_size = 2  # 备用方法使用更小的批次大小
+                batch_size = max(1, min(self._get_configured_batch_size(), 2))
                 log.info(f"备用PDF处理批次大小: {batch_size}")
 
                 batch_pages = []
@@ -1525,7 +1491,7 @@ class TaskManager:
 
             finally:
                 if pdf_document:
-                    pdf_document.close()
+                    await self._close_task_pdf_document(pdf_document)
 
         except Exception as e:
             total_time = time.time() - start_time
@@ -1571,22 +1537,8 @@ class TaskManager:
         try:
             async with semaphore:
                 # 转换页面为图片
-                page = pdf_document.load_page(page_number - 1)
-                
-                # 使用较低的DPI以节省内存
                 dpi = 150
-                pix = page.get_pixmap(dpi=dpi)
-                
-                # 流式转换图片数据
-                image_data = None
-                with BytesIO() as buffer:
-                    png_data = pix.tobytes("png")
-                    buffer.write(png_data)
-                    image_data = buffer.getvalue()
-                
-                # 立即释放内存
-                pix = None
-                page = None
+                image_data = await self._render_pdf_page_to_png(pdf_document, page_number, dpi)
                 
                 # 调用OCR API
                 content = await self._call_ocr_api_protected(task_id, image_data)
@@ -1634,10 +1586,10 @@ class TaskManager:
         pdf_document = None
         try:
             # 使用流式方式打开PDF，避免全部加载到内存
-            pdf_document = fitz.open(stream=task_item.file_data, filetype="pdf")
+            pdf_document = await self._open_task_pdf_document(task_item)
             
             # 使用信号量控制并发
-            semaphore = asyncio.Semaphore(self.api_config.get('concurrency', 5))
+            semaphore = asyncio.Semaphore(self._get_configured_concurrency())
             
             # 分批处理策略：根据文件大小和页数动态调整批次大小
             batch_size = self._calculate_batch_size(task_item.total_pages, task_item.file_size)
@@ -1666,12 +1618,12 @@ class TaskManager:
                     
         finally:
             if pdf_document:
-                pdf_document.close()
+                await self._close_task_pdf_document(pdf_document)
     
     def _calculate_batch_size(self, total_pages: int, file_size: int) -> int:
         """根据文件大小和页数计算最优批次大小"""
         # 基础批次大小
-        base_batch_size = 4
+        base_batch_size = self._get_configured_batch_size()
         
         # 根据文件大小调整（MB）
         file_size_mb = file_size / (1024 * 1024)
@@ -1720,18 +1672,9 @@ class TaskManager:
             
             # 动态调整DPI以平衡质量和内存使用
             dpi = self._calculate_optimal_dpi(page)
-            pix = page.get_pixmap(dpi=dpi)
-            
-            # 流式转换图片数据
-            image_data = None
-            with BytesIO() as buffer:
-                # 直接从pixmap获取PNG数据，避免PIL转换
-                png_data = pix.tobytes("png")
-                buffer.write(png_data)
-                image_data = buffer.getvalue()
+            image_data = await self._render_pdf_page_to_png(pdf_document, page_number, dpi)
             
             # 立即释放内存
-            pix = None
             page = None
             
             # 调用受保护的OCR API
@@ -1763,7 +1706,7 @@ class TaskManager:
         width, height = rect.width, rect.height
 
         # 基础DPI
-        base_dpi = self.api_config.get('pdf_dpi', 200)
+        base_dpi = self._get_configured_pdf_dpi()
 
         # 根据页面大小调整DPI
         page_area = width * height
@@ -1775,48 +1718,35 @@ class TaskManager:
         else:
             return base_dpi
 
+    @staticmethod
+    def _render_pdf_page_to_png_sync(pdf_document, page_number: int, dpi: int) -> bytes:
+        """CPU密集型PDF渲染（同步函数，供线程池调用）"""
+        page = pdf_document.load_page(page_number - 1)
+        pix = page.get_pixmap(dpi=dpi)
+        return pix.tobytes("png")
+
+    async def _render_pdf_page_to_png(self, pdf_document, page_number: int, dpi: int) -> bytes:
+        """在线程池中执行PDF渲染，避免阻塞事件循环"""
+        async with self._pdf_render_lock:
+            return await asyncio.to_thread(
+                self._render_pdf_page_to_png_sync,
+                pdf_document,
+                page_number,
+                dpi,
+            )
+
     def _compress_image(self, image_data: bytes, compression_ratio: float) -> bytes:
         """
-        压缩图片到指定比例
+        按目标输出体积比例压缩图片
         :param image_data: 原始图片数据
-        :param compression_ratio: 压缩比例(0.1-1.0)，如0.2表示压缩到原尺寸的20%
+        :param compression_ratio: 目标输出体积比例(0.1-1.0)，如0.5表示目标为原文件大小的50%
         :return: 压缩后的图片数据
         """
-        try:
-            # 如果压缩比例为1.0，直接返回原图
-            if compression_ratio >= 1.0:
-                return image_data
+        return compress_image_to_target_ratio(image_data, compression_ratio)
 
-            # 限制压缩比例范围
-            compression_ratio = max(0.1, min(1.0, compression_ratio))
-
-            # 打开图片
-            with BytesIO(image_data) as input_buffer:
-                img = Image.open(input_buffer)
-
-                # 计算新尺寸
-                original_width, original_height = img.size
-                new_width = int(original_width * compression_ratio)
-                new_height = int(original_height * compression_ratio)
-
-                # 压缩图片（使用LANCZOS算法保证质量）
-                compressed_img = img.resize((new_width, new_height), Image.LANCZOS)
-
-                # 转换为字节
-                with BytesIO() as output_buffer:
-                    compressed_img.save(output_buffer, format='PNG')
-                    compressed_data = output_buffer.getvalue()
-
-                size_saved_percent = (1 - len(compressed_data) / len(image_data)) * 100
-                logger.info(f"图片压缩完成: {original_width}x{original_height} -> {new_width}x{new_height}, "
-                           f"原大小: {len(image_data)//1024}KB, 压缩后: {len(compressed_data)//1024}KB, "
-                           f"节省: {size_saved_percent:.1f}%")
-
-                return compressed_data
-
-        except Exception as e:
-            logger.warning(f"图片压缩失败，使用原图: {e}")
-            return image_data
+    async def _compress_image_async(self, image_data: bytes, compression_ratio: float) -> bytes:
+        """在线程池中执行图片压缩，避免阻塞事件循环"""
+        return await asyncio.to_thread(self._compress_image, image_data, compression_ratio)
 
     async def _call_ocr_api_protected(self, task_id: str, image_data: bytes,
                                     semaphore: Optional[asyncio.Semaphore] = None) -> str:
@@ -1834,204 +1764,58 @@ class TaskManager:
             return await self._call_ocr_api(task_id, image_data, semaphore)
     
     async def _call_ocr_api(self, task_id: str, image_data: bytes, semaphore: Optional[asyncio.Semaphore] = None) -> str:
-        """调用OCR API - 基础实现"""
-        system_prompt = """
-        You are an expert OCR assistant. Your job is to extract all text from the provided image and convert it into a well-structured, easy-to-read Markdown document that mirrors the intended structure of the original. Follow these precise guidelines:
+        """Call OCR API with unified retry and timeout handling."""
+        request_config = build_ocr_request_config(
+            self.api_config,
+            self.runtime_config,
+            max_retries=self._get_configured_max_retries(),
+        )
 
-- Use Markdown headings, paragraphs, lists, and tables to match the document’s hierarchy and flow.  
-- For tables, use standard Markdown table syntax and merge cells if needed. If a table has a title, include it as plain text above the table.  
-- Render mathematical formulas with LaTeX syntax: use $...$ for inline and $$...$$ for display equations.  
-- For images, use the syntax ![descriptive alt text](link) with a clear, descriptive alt text.  
-- Remove unnecessary line breaks so that the text flows naturally without awkward breaks.
-- Your final Markdown output must be direct text (do not wrap it in code blocks).
-
-Ensure your output is clear, accurate, and faithfully reflects the original image’s content and structure.
-        """
-        
-        if semaphore:
-            async with semaphore:
-                return await self._make_api_request_with_timeout(task_id, image_data, system_prompt)
-        else:
-            return await self._make_api_request_with_timeout(task_id, image_data, system_prompt)
-    
-    async def _save_moderation_log(self, task_id: str, page_number: int, action: str, details: Dict[str, Any], original_content: str = None):
-        """保存审查日志到数据库"""
         try:
-            from models.database import db_manager
-            async with db_manager.get_connection() as db:
-                await db.execute("""
-                    INSERT INTO moderation_logs
-                    (task_id, page_number, action, risk_level, violation_types, reason, original_content, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    task_id,
-                    page_number,
-                    action,
-                    details.get('risk_level', 'high'),
-                    json.dumps(details.get('violation_types', []), ensure_ascii=False),
-                    details.get('reason', ''),
-                    original_content,
-                    datetime.now(timezone.utc).isoformat()
-                ))
-                await db.commit()
-                logger.info(f"审查日志已保存 {task_id}-{page_number}")
-        except Exception as e:
-            logger.error(f"保存审查日志失败 {task_id}: {e}")
-
-    async def _make_api_request_with_timeout(self, task_id: str, image_data: bytes, system_prompt: str, timeout: int = 120) -> str:
-        """发起API请求 - 增加超时控制"""
-        try:
-            return await asyncio.wait_for(
-                self._make_api_request(task_id, image_data, system_prompt),
-                timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(f"API请求超时 (>{timeout}秒)")
-    
-    async def _make_api_request(self, task_id: str, image_data: bytes, system_prompt: str) -> str:
-        """发起API请求（包含审查）"""
-        api_base_url = self.api_config.get('api_base_url', 'https://api.openai.com')
-        api_key = self.api_config.get('api_key')
-        model = self.api_config.get('model', 'gpt-4o')
-
-        if not api_key:
-            raise Exception("API密钥未配置")
-
-        encoded_image = base64.b64encode(image_data).decode('utf-8')
-
-        payload: Dict[str, Any] = {
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Analyze the provided image and output a JSON object with a single string field named \"content\". The value must contain the recognized Markdown-formatted text without additional commentary."
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{encoded_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            "stream": False,
-            "model": model,
-            "temperature": 0.0,
-            "presence_penalty": 0,
-            "frequency_penalty": 0,
-            "top_p": 1,
-        }
-
-        async with aiohttp.ClientSession() as session:
-            response = await session.post(
-                f"{api_base_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-            )
-
-            if response.status == 200:
-                result = await response.json()
-                message = None
-                choices = result.get('choices')
-                if isinstance(choices, list) and choices:
-                    message = choices[0].get('message') if isinstance(choices[0], dict) else None
-
-                raw_content: Optional[str] = None
-                if isinstance(message, dict):
-                    content_field = message.get('content')
-                    if isinstance(content_field, list):
-                        text_parts: List[str] = []
-                        for block in content_field:
-                            if not isinstance(block, dict):
-                                continue
-                            block_type = block.get('type')
-                            if block_type in ('text', 'output_text') and isinstance(block.get('text'), str):
-                                text_parts.append(block['text'])
-                        raw_content = ''.join(text_parts) if text_parts else None
-                    elif isinstance(content_field, str):
-                        raw_content = content_field
-
-                if not raw_content:
-                    raise Exception("OCR模型返回内容为空或结构不支持")
-
-                # 解析返回内容
-                parsed_content = _extract_markdown_from_response(raw_content)
-                if not parsed_content:
-                    raise Exception("OCR返回内容为空或格式不正确")
-
-                # ========== 内容道德审查 ==========
-                from core.content_moderator import ContentModerator, ModerationFailedException, get_moderation_config
-
-                # 初始化审查器
-                moderator = ContentModerator(get_moderation_config())
-
-                # 查询用户是否为管理员
-                user_is_admin = False
-                if task_id:
-                    try:
-                        from models.database import task_model, db_manager
-                        task_data = await task_model.get_task(task_id)
-                        if task_data and task_data.get('user_id'):
-                            # 直接查询数据库获取用户信�?
-                            async with db_manager.get_connection() as db:
-                                async with db.execute(
-                                    "SELECT is_admin FROM users WHERE id = ?",
-                                    (task_data['user_id'],)
-                                ) as cursor:
-                                    user_row = await cursor.fetchone()
-                                    user_is_admin = bool(user_row[0]) if user_row else False
-                    except Exception as e:
-                        logger.warning(f"查询用户管理员权限失�?{task_id}: {e}")
-
-                # 执行审查
-                action, moderated_content, details = await moderator.moderate_content(
-                    content=parsed_content,
-                    task_id=task_id,
-                    user_is_admin=user_is_admin
-                )
-                # 审查通过，返回内�?
-                return moderated_content
-                # 注意：ModerationFailedException会直接向上传播，由_process_image_task捕获处理
-                # ==================================
-
+            if semaphore:
+                async with semaphore:
+                    parsed_content = await request_ocr_markdown(
+                        request_config,
+                        image_data,
+                        system_prompt=OCR_SYSTEM_PROMPT,
+                        user_prompt=OCR_USER_PROMPT,
+                        logger=logger,
+                        task_id=task_id,
+                    )
             else:
-                error_detail = ""
-                try:
-                    error_payload = await response.text()
-                    if error_payload:
-                        try:
-                            error_json = json.loads(error_payload)
-                            if isinstance(error_json, dict):
-                                error_obj = error_json.get('error')
-                                if isinstance(error_obj, dict):
-                                    message = error_obj.get('message')
-                                    if isinstance(message, str):
-                                        error_detail = message.strip()
-                                if not error_detail and isinstance(error_json.get('message'), str):
-                                    error_detail = error_json['message'].strip()
-                        except json.JSONDecodeError:
-                            error_detail = error_payload.strip()
-                except Exception as error_read_exc:
-                    logger.warning(f"读取API错误响应失败 {task_id}: {error_read_exc}")
-
-                detail_suffix = f"，错误信�? {error_detail}" if error_detail else ""
-                raise Exception(f"API请求失败, 状态码: {response.status}{detail_suffix}")
-
-    
+                parsed_content = await request_ocr_markdown(
+                    request_config,
+                    image_data,
+                    system_prompt=OCR_SYSTEM_PROMPT,
+                    user_prompt=OCR_USER_PROMPT,
+                    logger=logger,
+                    task_id=task_id,
+                )
+        except OCRServiceError as exc:
+            logger.error(
+                "ocr_api_failed task=%s code=%s retryable=%s detail=%s",
+                task_id,
+                exc.code,
+                exc.retryable,
+                str(exc),
+            )
+            raise
+        return parsed_content
     async def _refund_task_quota(self, task: Optional[Dict[str, Any]]):
         """根据任务信息返还未消耗的配额"""
         if not task:
             return
 
+        task_id = str(task.get('id') or task.get('task_id') or "")
+        if task_id and task_id in self._quota_refunded_tasks:
+            logger.debug(f"任务 {task_id} 配额已返还，跳过重复返还")
+            return
+
         user_id = task.get('user_id')
         if not user_id:
+            return
+
+        if task.get('status') == TaskStatus.COMPLETED.value:
             return
 
         pages_to_refund = 0
@@ -2057,7 +1841,9 @@ Ensure your output is clear, accurate, and faithfully reflects the original imag
 
         try:
             await auth_manager.user_model.refund_pages(user_id, pages_to_refund)
-            logger.info(f"任务 {task.get('id', task.get('task_id'))} 取消，已返还 {pages_to_refund} 页配额给用户 {user_id}")
+            if task_id:
+                self._quota_refunded_tasks.add(task_id)
+            logger.info(f"任务 {task_id or task.get('id', task.get('task_id'))} 取消，已返还 {pages_to_refund} 页配额给用户 {user_id}")
         except Exception as exc:
             logger.error(f"返还用户配额失败 {user_id}: {exc}")
 

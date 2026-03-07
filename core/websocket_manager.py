@@ -1,9 +1,8 @@
 import asyncio
 import json
 import logging
-import weakref
 from datetime import datetime, timezone
-from typing import Dict, Any, Set, Optional, List, Callable
+from typing import Dict, Any, Set, Optional, Callable
 from fastapi import WebSocket, WebSocketDisconnect
 import uuid
 
@@ -89,6 +88,22 @@ class WebSocketManager:
         self._register_default_handlers()
         
         logger.info("WebSocket管理器初始化完成")
+
+    def _detach_connection_locked(self, client_id: str) -> Optional[WebSocketConnection]:
+        """Remove a connection and its task subscriptions while holding lock."""
+        connection = self.connections.pop(client_id, None)
+        if not connection:
+            return None
+
+        for task_id in list(connection.subscribed_tasks):
+            subscribers = self.task_subscribers.get(task_id)
+            if not subscribers:
+                continue
+            subscribers.discard(client_id)
+            if not subscribers:
+                del self.task_subscribers[task_id]
+
+        return connection
     
     def _register_default_handlers(self):
         """注册默认消息处理器"""
@@ -137,15 +152,15 @@ class WebSocketManager:
         """
         if client_id is None:
             client_id = str(uuid.uuid4())
-        
+
+        previous_connection = None
         async with self._lock:
-            # 如果客户端已存在，先关闭旧连接
-            if client_id in self.connections:
-                await self._disconnect_client(client_id)
-            
-            # 创建新连接
+            previous_connection = self._detach_connection_locked(client_id)
             connection = WebSocketConnection(websocket, client_id)
             self.connections[client_id] = connection
+
+        if previous_connection:
+            await previous_connection.close(code=1000, reason="Connection replaced")
         
         logger.info(f"WebSocket连接已建立: {client_id}")
         
@@ -160,45 +175,52 @@ class WebSocketManager:
     
     async def disconnect(self, client_id: str):
         """断开指定客户端连接"""
-        async with self._lock:
-            await self._disconnect_client(client_id)
+        await self._disconnect_client(client_id)
     
     async def _disconnect_client(self, client_id: str):
         """内部断开客户端连接方法"""
-        if client_id in self.connections:
-            connection = self.connections[client_id]
-            
-            # 清理任务订阅
-            for task_id in connection.subscribed_tasks:
-                if task_id in self.task_subscribers:
-                    self.task_subscribers[task_id].discard(client_id)
-                    if not self.task_subscribers[task_id]:
-                        del self.task_subscribers[task_id]
-            
-            # 关闭连接
+        async with self._lock:
+            connection = self._detach_connection_locked(client_id)
+
+        if connection:
             await connection.close()
-            del self.connections[client_id]
-            
             logger.info(f"WebSocket连接已断开: {client_id}")
     
     async def disconnect_all(self):
         """断开所有客户端连接"""
         async with self._lock:
-            client_ids = list(self.connections.keys())
-            for client_id in client_ids:
-                await self._disconnect_client(client_id)
+            connections = list(self.connections.items())
+            self.connections.clear()
+            self.task_subscribers.clear()
+
+        for client_id, connection in connections:
+            await connection.close()
+            logger.info(f"WebSocket连接已断开: {client_id}")
     
     async def send_to_client(self, client_id: str, message: Dict[str, Any]) -> bool:
         """发送消息给指定客户端"""
         async with self._lock:
-            if client_id in self.connections:
-                connection = self.connections[client_id]
-                success = await connection.send_message(message)
-                if not success:
-                    # 发送失败，移除连接
-                    await self._disconnect_client(client_id)
-                return success
+            connection = self.connections.get(client_id)
+
+        if not connection:
             return False
+
+        success = await connection.send_message(message)
+        if success:
+            return True
+
+        should_close = False
+        async with self._lock:
+            current_connection = self.connections.get(client_id)
+            if current_connection is connection:
+                self._detach_connection_locked(client_id)
+                should_close = True
+
+        if should_close:
+            await connection.close()
+            logger.info(f"WebSocket连接已断开: {client_id}")
+
+        return False
     
     async def broadcast(self, message: Dict[str, Any], exclude_clients: Optional[Set[str]] = None) -> int:
         """

@@ -478,18 +478,19 @@
           <!-- 图片压缩配置 -->
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="block text-sm font-semibold text-gray-800 mb-2">
-              图片压缩比例
+              图片目标体积比例
               <span id="compression_ratio_display" class="text-blue-600 font-mono ml-2">0.20</span>
             </label>
             <input id="image_compression_ratio" type="range" min="0.1" max="1.0" step="0.05" value="0.2"
                    oninput="updateCompressionDisplay(this.value)"
                    onchange="saveRuntimeConfig()"
                    class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500">
+            <p class="text-xs text-gray-500 mt-1">0.50 表示目标输出体积约为原文件 50%，优先调低编码质量，必要时才继续缩小尺寸。</p>
             <div class="flex justify-between text-xs text-gray-500 mt-1">
               <span>10% (最小)</span>
               <span>100% (原图)</span>
             </div>
-            <p class="text-xs text-gray-500 mt-2">OCR前将图片压缩到原尺寸的指定比例，降低API调用成本</p>
+            <p class="text-xs text-gray-500 mt-2">OCR前按目标输出体积进行压缩，优先降低编码质量，仅在必要时才继续缩小尺寸。</p>
           </div>
 
           <div class="p-4 bg-gray-50 rounded-lg">
@@ -583,78 +584,6 @@
         </div>
       </div>
 
-      <!-- 内容审查配置 -->
-      <div class="bg-white rounded-xl shadow-md p-6 mb-6">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="text-2xl font-bold text-gray-800">内容审查配置</h2>
-            <p class="text-sm text-gray-600 mt-1">管理内容审查开关、接口配置以及系统提示词。修改后立即生效，重启后恢复为 .env 默认值。</p>
-          </div>
-          <div class="flex items-center gap-3">
-            <button id="moderation-toggle"
-                    onclick="toggleModerationEnabled()"
-                    class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                    data-enabled="false">
-              <span id="moderation-toggle-slider" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
-            </button>
-            <span id="moderation-status" class="text-sm font-semibold text-gray-600 min-w-[4.5rem] inline-block text-center transition-colors duration-200">-</span>
-          </div>
-        </div>
-
-        <div id="moderation-settings" class="space-y-4 hidden">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm font-semibold text-gray-800 mb-2">审查 API 地址</label>
-              <input id="moderation-api-base-url"
-                     type="text"
-                     placeholder="https://example.com"
-                     autocomplete="off"
-                     class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-              <p class="text-xs text-gray-500 mt-1">留空时默认使用 OCR API 地址。</p>
-            </div>
-
-            <div>
-              <label class="block text-sm font-semibold text-gray-800 mb-2">审查 API Key</label>
-              <input id="moderation-api-key"
-                     type="text"
-                     placeholder="sk-..."
-                     autocomplete="off"
-                     class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-              <p class="text-xs text-gray-500 mt-1">留空时默认使用 OCR 的密钥。</p>
-            </div>
-
-            <div>
-              <label class="block text-sm font-semibold text-gray-800 mb-2">审查模型</label>
-              <input id="moderation-model"
-                     type="text"
-                     placeholder="例如：Qwen/Qwen3-0.6B"
-                     autocomplete="off"
-                     class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-              <p class="text-xs text-gray-500 mt-1">建议使用轻量模型以降低调用成本。</p>
-            </div>
-          </div>
-
-          <div>
-            <label class="block text-sm font-semibold text-gray-800 mb-2">系统提示词</label>
-            <textarea id="moderation-system-prompt"
-                      rows="10"
-                      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
-                      placeholder="请输入内容审查的系统提示词"></textarea>
-            <p class="text-xs text-gray-500 mt-1">该提示词仅在当前进程内存中生效，重启后恢复为 .env 配置。</p>
-          </div>
-
-          <div class="flex flex-col md:flex-row gap-3">
-            <button onclick="saveModerationConfig()"
-                    class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors">
-              保存审查配置
-            </button>
-            <button onclick="resetModerationConfig()"
-                    class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
-              重置为 ENV 默认
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -941,154 +870,6 @@
     }
 
 // 加载IP滥用检测配置
-    // 内容审查配置
-    async function loadModerationConfig() {
-      const settings = document.getElementById('moderation-settings');
-      if (!settings) {
-        return;
-      }
-
-      try {
-        const response = await fetch(`${baseUrl}${apiBase}/api/moderation/config`);
-        const data = await response.json();
-
-        if (data.status === "success") {
-          const config = data.data || {};
-          const enabled = config.enabled !== false;
-          updateModerationToggle(enabled);
-
-          document.getElementById('moderation-api-base-url').value = config.api_base_url || "";
-          document.getElementById('moderation-api-key').value = config.api_key || "";
-          document.getElementById('moderation-model').value = config.model || "";
-          document.getElementById('moderation-system-prompt').value = config.system_prompt || "";
-        }
-      } catch (error) {
-        console.error("加载内容审查配置失败:", error);
-      }
-    }
-
-    function updateModerationToggle(enabled) {
-      const toggle = document.getElementById('moderation-toggle');
-      const slider = document.getElementById('moderation-toggle-slider');
-      const status = document.getElementById('moderation-status');
-      const settings = document.getElementById('moderation-settings');
-
-      if (!toggle || !slider || !status || !settings) {
-        return;
-      }
-
-      toggle.dataset.enabled = enabled ? "true" : "false";
-
-      if (enabled) {
-        toggle.classList.add('bg-blue-500');
-        toggle.classList.remove('bg-gray-300');
-        slider.classList.add('translate-x-6');
-        slider.classList.remove('translate-x-1');
-        status.textContent = '已启用';
-        status.classList.add('text-blue-600');
-        status.classList.remove('text-gray-600');
-        settings.classList.remove('hidden');
-      } else {
-        toggle.classList.add('bg-gray-300');
-        toggle.classList.remove('bg-blue-500');
-        slider.classList.add('translate-x-1');
-        slider.classList.remove('translate-x-6');
-        status.textContent = '已禁用';
-        status.classList.add('text-gray-600');
-        status.classList.remove('text-blue-600');
-        settings.classList.add('hidden');
-      }
-    }
-
-    async function saveModerationConfig(showMessage = true) {
-      const toggle = document.getElementById('moderation-toggle');
-      const baseUrlInput = document.getElementById('moderation-api-base-url');
-      const apiKeyInput = document.getElementById('moderation-api-key');
-      const modelInput = document.getElementById('moderation-model');
-      const promptInput = document.getElementById('moderation-system-prompt');
-
-      if (!toggle || !baseUrlInput || !apiKeyInput || !modelInput || !promptInput) {
-        return false;
-      }
-
-      const payload = {
-        enabled: toggle.dataset.enabled === "true",
-        api_base_url: baseUrlInput.value.trim(),
-        api_key: apiKeyInput.value.trim(),
-        model: modelInput.value.trim(),
-        system_prompt: promptInput.value
-      };
-
-      try {
-        const response = await fetch(`${baseUrl}${apiBase}/api/moderation/config`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
-        });
-
-        const data = await response.json();
-
-        if (data.status === 'success') {
-          await loadModerationConfig();
-          if (showMessage) {
-            showNotification('内容审查配置已保存', 'success');
-          }
-          return true;
-        }
-
-        showNotification('保存失败: ' + (data.message || data.detail || '未知错误'), 'error');
-      } catch (error) {
-        console.error('保存内容审查配置失败:', error);
-        showNotification('保存失败，请重试', 'error');
-      }
-
-      return false;
-    }
-
-    async function toggleModerationEnabled() {
-      const toggle = document.getElementById('moderation-toggle');
-      if (!toggle) {
-        return;
-      }
-
-      const currentEnabled = toggle.dataset.enabled === "true";
-      const newEnabled = !currentEnabled;
-
-      updateModerationToggle(newEnabled);
-
-      const success = await saveModerationConfig(false);
-      if (success) {
-        showNotification(`内容审查已${newEnabled ? '启用' : '禁用'}`, 'success');
-      } else {
-        updateModerationToggle(currentEnabled);
-      }
-    }
-
-    async function resetModerationConfig() {
-      const confirmed = confirm('确认将内容审查配置重置为ENV默认值吗？');
-      if (!confirmed) {
-        return;
-      }
-
-      try {
-        const response = await fetch(`${baseUrl}${apiBase}/api/moderation/config/reset`, {
-          method: 'POST'
-        });
-
-        const data = await response.json();
-
-        if (data.status === 'success') {
-          showNotification('内容审查配置已重置为ENV默认值', 'success');
-          await loadModerationConfig();
-        } else {
-          showNotification('重置失败: ' + (data.message || data.detail || '未知错误'), 'error');
-        }
-      } catch (error) {
-        console.error('重置内容审查配置失败:', error);
-        showNotification('重置失败，请重试', 'error');
-      }
-    }
-
     async function loadIpAbuseSettings() {
       try {
         const response = await fetch(`${baseUrl}${apiBase}/api/admin/settings/ip-abuse`);
@@ -1763,8 +1544,7 @@
       loadRegistrationStatus();
       loadRuntimeConfig();
       loadApiConfig();
-      loadModerationConfig();
-      loadIpAbuseSettings();
+            loadIpAbuseSettings();
       loadTurnstileSettings();
       loadAnnouncementSettings();  // 加载公告设置
       loadBroadcastSettings();

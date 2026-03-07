@@ -25,7 +25,6 @@
 
 ### 高级特性
 - **WebSocket 实时通信**: 实时推送任务进度和结果
-- **内容审查**: 可选的内容道德审查功能
 - **Cloudflare Turnstile**: 可选的人机验证
 - **Docker 部署**: 完整的 Docker 和 Docker Compose 支持
 - **健康检查**: 容器健康检查端点
@@ -159,15 +158,6 @@ python main.py --port 8000 --host 0.0.0.0
 | `IP_ABUSE_DETECTION_ENABLED` | IP 滥用检测开关 | `true` |
 | `IP_ABUSE_ACCOUNTS_THRESHOLD` | IP 账户数阈值 | `3` |
 | `IP_ABUSE_DAYS_WINDOW` | 检测时间窗口 (天) | `7` |
-
-### 审查配置
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `MODERATION_ENABLED` | 内容审查开关 | `true` |
-| `MODERATION_API_BASE_URL` | 审查 API 地址 | 与 OCR 相同 |
-| `MODERATION_API_KEY` | 审查 API 密钥 | 与 OCR 相同 |
-| `MODERATION_MODEL` | 审查模型 | `gpt-4o` |
 
 ## 联系方式
 

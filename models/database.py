@@ -1,5 +1,4 @@
 import sqlite3
-import asyncio
 import aiosqlite
 from datetime import datetime, timezone
 from enum import Enum
@@ -36,14 +35,17 @@ class DatabaseManager:
             if db_dir and not os.path.exists(db_dir):
                 os.makedirs(db_dir, exist_ok=True)
         self.db_path = db_path
-        self._connection_pool = {}
-        self._lock = asyncio.Lock()
+
+    async def _configure_connection(self, connection: aiosqlite.Connection):
+        """Apply per-connection PRAGMA settings used by this service."""
+        await connection.execute("PRAGMA foreign_keys = ON")
+        await connection.execute("PRAGMA busy_timeout = 5000")
     
     async def initialize(self):
         """初始化数据库表结构"""
         async with aiosqlite.connect(self.db_path) as db:
-            # 启用外键约束
-            await db.execute("PRAGMA foreign_keys = ON")
+            await self._configure_connection(db)
+            await db.execute("PRAGMA journal_mode = WAL")
 
             # 创建用户表
             await db.execute("""
@@ -484,13 +486,12 @@ class DatabaseManager:
     @asynccontextmanager
     async def get_connection(self):
         """获取数据库连接的上下文管理器"""
-        async with self._lock:
-            connection = await aiosqlite.connect(self.db_path)
-            await connection.execute("PRAGMA foreign_keys = ON")
-            try:
-                yield connection
-            finally:
-                await connection.close()
+        connection = await aiosqlite.connect(self.db_path)
+        await self._configure_connection(connection)
+        try:
+            yield connection
+        finally:
+            await connection.close()
 
 class TaskModel:
     """任务模型，提供任务相关的数据库操作"""

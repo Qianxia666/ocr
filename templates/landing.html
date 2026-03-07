@@ -472,41 +472,86 @@
 
     <script>
         const passwordPrefix = "{{ password_prefix }}";
-        const apiBase = passwordPrefix || '';
+        const apiBase = passwordPrefix || "";
+        let landingWs = null;
+        let landingWsReconnectTimer = null;
 
-        // 广播条功能
         async function loadBroadcast() {
             try {
                 const response = await fetch(`${apiBase}/api/broadcast/config`);
                 const data = await response.json();
+                const broadcastBar = document.getElementById("broadcast-bar");
+                const linkEl = document.getElementById("broadcast-link");
 
-                if (data.status === 'success' && data.enabled && data.message) {
-                    // 设置内容
-                    document.getElementById('broadcast-message').textContent = data.message;
+                if (data.status === "success" && data.enabled && data.message) {
+                    document.getElementById("broadcast-message").textContent = data.message;
 
-                    // 不显示emoji
-                    const emojiEl = document.getElementById('broadcast-emoji');
-                    emojiEl.textContent = '';
+                    const emojiEl = document.getElementById("broadcast-emoji");
+                    emojiEl.textContent = "";
 
-                    // 设置链接
-                    const linkEl = document.getElementById('broadcast-link');
                     if (data.link && data.link.trim()) {
                         linkEl.href = data.link;
+                        linkEl.onclick = null;
                     } else {
+                        linkEl.href = "#";
                         linkEl.onclick = (e) => e.preventDefault();
                     }
 
-                    // 显示广播条
-                    document.getElementById('broadcast-bar').classList.remove('hidden');
+                    broadcastBar.classList.remove("hidden");
+                } else if (broadcastBar) {
+                    broadcastBar.classList.add("hidden");
                 }
             } catch (error) {
-                console.error('加载广播配置失败:', error);
+                console.error("load broadcast failed:", error);
             }
         }
 
+        function connectLandingWebSocket() {
+            try {
+                const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+                const wsPath = passwordPrefix ? `${passwordPrefix}/ws` : "/ws";
+                const wsUrl = `${protocol}//${window.location.host}${wsPath}`;
 
-        // 页面加载时加载广播
-        window.addEventListener('load', loadBroadcast);
+                landingWs = new WebSocket(wsUrl);
+
+                landingWs.onopen = () => {
+                    if (landingWsReconnectTimer) {
+                        clearTimeout(landingWsReconnectTimer);
+                        landingWsReconnectTimer = null;
+                    }
+                };
+
+                landingWs.onmessage = (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        if (message.type === "broadcast_updated") {
+                            loadBroadcast();
+                        }
+                    } catch (error) {
+                        console.error("landing websocket parse failed:", error);
+                    }
+                };
+
+                landingWs.onclose = () => {
+                    landingWs = null;
+                    landingWsReconnectTimer = setTimeout(connectLandingWebSocket, 5000);
+                };
+
+                landingWs.onerror = () => {
+                    if (landingWs) {
+                        landingWs.close();
+                    }
+                };
+            } catch (error) {
+                console.error("landing websocket failed:", error);
+                landingWsReconnectTimer = setTimeout(connectLandingWebSocket, 5000);
+            }
+        }
+
+        window.addEventListener("load", () => {
+            loadBroadcast();
+            connectLandingWebSocket();
+        });
     </script>
 </body>
 </html>
