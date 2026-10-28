@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 运行期数据
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 环境与上传
+.env
+.uploads/
+.agents/
+
+# 系统文件
+.DS_Store
+Thumbs.db

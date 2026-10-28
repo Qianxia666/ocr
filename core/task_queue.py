@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import time
@@ -270,16 +270,10 @@ class TaskQueue:
             async with self._lock:
                 if task_id in self._pending_tasks:
                     task_item = self._pending_tasks.pop(task_id)
-                    new_queue = asyncio.PriorityQueue(maxsize=self._queue.maxsize)
-                    while True:
-                        try:
-                            priority_item = self._queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                        if priority_item[2].task_id == task_id:
-                            continue
-                        new_queue.put_nowait(priority_item)
-                    self._queue = new_queue
+                    # Leave the priority item in the queue. A worker will pick
+                    # it up, notice that it is no longer pending, and call
+                    # task_done(). Replacing the queue here strands workers
+                    # waiting on the old queue and corrupts join accounting.
                     self._cancelled_tasks[task_id] = task_item
                     if task_item.metadata and 'temp_file_path' in task_item.metadata:
                         cleanup_file = task_item.metadata['temp_file_path']
@@ -399,10 +393,11 @@ class TaskQueue:
             logger.error(f"清理旧任务失败: {e}")
             return 0
     
-    async def restore_from_database(self) -> int:
+    async def restore_from_database(self, on_abandoned: Optional[Callable[[Dict[str, Any]], Any]] = None) -> int:
         """
         从数据库恢复未完成的任务到队列
         程序异常终止后恢复时，删除临时文件并标记任务为失败
+        :param on_abandoned: 任务被放弃时的异步回调（用于返还配额）
         :return: 恢复的任务数量
         """
         try:
@@ -423,7 +418,7 @@ class TaskQueue:
                     try:
                         import json
                         metadata = json.loads(metadata)
-                    except:
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         metadata = {}
                 elif not metadata:
                     metadata = {}
@@ -447,6 +442,8 @@ class TaskQueue:
                     )
                     logger.info(f"标记异常终止任务为失败: {task_id}")
                     restored_count += 1
+                    if on_abandoned:
+                        await self._notify_abandoned(on_abandoned, task_data)
 
                 # 如果任务处于pending状态
                 elif task_data['status'] == 'pending':
@@ -465,6 +462,8 @@ class TaskQueue:
                     )
                     logger.info(f"标记pending任务为失败: {task_id}")
                     restored_count += 1
+                    if on_abandoned:
+                        await self._notify_abandoned(on_abandoned, task_data)
 
             logger.info(f"处理了 {restored_count} 个未完成任务（已清理临时文件并标记为失败）")
             return restored_count
@@ -472,6 +471,14 @@ class TaskQueue:
         except Exception as e:
             logger.error(f"从数据库恢复任务失败: {e}")
             return 0
+
+    @staticmethod
+    async def _notify_abandoned(on_abandoned, task_data: Dict[str, Any]) -> None:
+        """调用放弃任务回调，回调失败不影响恢复流程。"""
+        try:
+            await on_abandoned(task_data)
+        except Exception as exc:
+            logger.warning(f"处理放弃任务回调失败 {task_data.get('id')}: {exc}")
 
 
 

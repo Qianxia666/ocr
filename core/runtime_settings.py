@@ -9,20 +9,51 @@ class RuntimeConfig:
     """Runtime-tunable settings stored in memory."""
 
     def __init__(self):
-        self.concurrency = int(os.getenv("CONCURRENCY", 5))
-        self.max_retries = int(os.getenv("MAX_RETRIES", 5))
-        self.image_concurrency = int(os.getenv("IMAGE_CONCURRENCY", 5))
-        self.pdf_concurrency = int(os.getenv("PDF_CONCURRENCY", 5))
-        self.pdf_dpi = int(os.getenv("PDF_DPI", 200))
-        self.batch_size = int(os.getenv("BATCH_SIZE", 8))
-        self.max_image_size_mb = int(os.getenv("MAX_IMAGE_SIZE_MB", 50))
-        self.max_pdf_size_mb = int(os.getenv("MAX_PDF_SIZE_MB", 50))
-        self.max_pdf_pages = int(os.getenv("MAX_PDF_PAGES", 50))
+        # Keep the defaults aligned with .env.example and docker-compose.yml.
+        self.concurrency = self._env_int("CONCURRENCY", 5, minimum=1)
+        self.max_retries = self._env_int("MAX_RETRIES", 5, minimum=1)
+        self.image_concurrency = self._env_int("IMAGE_CONCURRENCY", 2, minimum=1)
+        self.pdf_concurrency = self._env_int("PDF_CONCURRENCY", 2, minimum=1)
+        self.pdf_dpi = self._env_int("PDF_DPI", 200, minimum=1)
+        self.batch_size = self._env_int("BATCH_SIZE", 8, minimum=1)
+        self.max_image_size_mb = self._env_int("MAX_IMAGE_SIZE_MB", 50, minimum=1)
+        self.max_pdf_size_mb = self._env_int("MAX_PDF_SIZE_MB", 200, minimum=1)
+        self.max_pdf_pages = self._env_int("MAX_PDF_PAGES", 500, minimum=1)
 
-        self.api_timeout = int(os.getenv("API_TIMEOUT", 300))
-        self.api_request_timeout = int(os.getenv("API_REQUEST_TIMEOUT", 300))
-        self.frontend_poll_timeout = int(os.getenv("FRONTEND_POLL_TIMEOUT", 300))
-        self.image_compression_ratio = float(os.getenv("IMAGE_COMPRESSION_RATIO", 0.2))
+        self.api_timeout = self._env_int("API_TIMEOUT", 300, minimum=1)
+        self.api_request_timeout = self._env_int("API_REQUEST_TIMEOUT", 300, minimum=1)
+        self.frontend_poll_timeout = self._env_int("FRONTEND_POLL_TIMEOUT", 300, minimum=1)
+        self.image_compression_ratio = self._env_float(
+            "IMAGE_COMPRESSION_RATIO", 0.2, minimum=0.1, maximum=1.0
+        )
+
+    @staticmethod
+    def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+        try:
+            value = int(os.getenv(name, str(default)))
+        except (TypeError, ValueError):
+            logger.warning("Invalid %s; using default %s", name, default)
+            return default
+        if value < minimum:
+            logger.warning("Invalid %s=%s; using minimum %s", name, value, minimum)
+            return minimum
+        return value
+
+    @staticmethod
+    def _env_float(
+        name: str, default: float, *, minimum: float, maximum: float
+    ) -> float:
+        try:
+            value = float(os.getenv(name, str(default)))
+        except (TypeError, ValueError):
+            logger.warning("Invalid %s; using default %s", name, default)
+            return default
+        if value < minimum or value > maximum:
+            logger.warning(
+                "Invalid %s=%s; clamping to [%s, %s]", name, value, minimum, maximum
+            )
+            return max(minimum, min(maximum, value))
+        return value
 
     def get_all(self) -> Dict[str, Any]:
         return {
@@ -42,36 +73,65 @@ class RuntimeConfig:
         }
 
     def update(self, config: Dict[str, Any]):
-        if "concurrency" in config:
-            self.concurrency = int(config["concurrency"])
-        if "max_retries" in config:
-            self.max_retries = int(config["max_retries"])
-        if "image_concurrency" in config:
-            self.image_concurrency = int(config["image_concurrency"])
-        if "pdf_concurrency" in config:
-            self.pdf_concurrency = int(config["pdf_concurrency"])
-        if "pdf_dpi" in config:
-            self.pdf_dpi = int(config["pdf_dpi"])
-        if "batch_size" in config:
-            self.batch_size = int(config["batch_size"])
-        if "max_image_size_mb" in config:
-            self.max_image_size_mb = int(config["max_image_size_mb"])
-        if "max_pdf_size_mb" in config:
-            self.max_pdf_size_mb = int(config["max_pdf_size_mb"])
-        if "max_pdf_pages" in config:
-            self.max_pdf_pages = int(config["max_pdf_pages"])
-        if "api_timeout" in config:
-            self.api_timeout = int(config["api_timeout"])
-            logger.info("Updated API timeout: %s seconds", self.api_timeout)
-        if "api_request_timeout" in config:
-            self.api_request_timeout = int(config["api_request_timeout"])
-            logger.info("Updated API request timeout: %s seconds", self.api_request_timeout)
-        if "frontend_poll_timeout" in config:
-            self.frontend_poll_timeout = int(config["frontend_poll_timeout"])
-            logger.info("Updated frontend poll timeout: %s seconds", self.frontend_poll_timeout)
+        """Validate and apply runtime settings atomically.
+
+        A malformed admin request must not partially mutate the live worker
+        configuration. Unknown keys are ignored for backwards compatibility.
+        """
+        if not isinstance(config, dict):
+            raise ValueError("config must be an object")
+
+        integer_fields = {
+            "concurrency": 1,
+            "max_retries": 1,
+            "image_concurrency": 1,
+            "pdf_concurrency": 1,
+            "pdf_dpi": 1,
+            "batch_size": 1,
+            "max_image_size_mb": 1,
+            "max_pdf_size_mb": 1,
+            "max_pdf_pages": 1,
+            "api_timeout": 1,
+            "api_request_timeout": 1,
+            "frontend_poll_timeout": 1,
+        }
+        parsed: Dict[str, Any] = {}
+        for field, minimum in integer_fields.items():
+            if field not in config:
+                continue
+            raw_value = config[field]
+            if isinstance(raw_value, bool):
+                raise ValueError(f"{field} must be an integer")
+            if isinstance(raw_value, float) and not raw_value.is_integer():
+                raise ValueError(f"{field} must be an integer")
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field} must be an integer") from exc
+            if value < minimum:
+                raise ValueError(f"{field} must be at least {minimum}")
+            parsed[field] = value
+
         if "image_compression_ratio" in config:
-            ratio = float(config["image_compression_ratio"])
-            self.image_compression_ratio = max(0.1, min(1.0, ratio))
+            if isinstance(config["image_compression_ratio"], bool):
+                raise ValueError("image_compression_ratio must be a number")
+            try:
+                ratio = float(config["image_compression_ratio"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("image_compression_ratio must be a number") from exc
+            if not 0.1 <= ratio <= 1.0:
+                raise ValueError("image_compression_ratio must be between 0.1 and 1.0")
+            parsed["image_compression_ratio"] = ratio
+
+        for field, value in parsed.items():
+            setattr(self, field, value)
+        if "api_timeout" in parsed:
+            logger.info("Updated API timeout: %s seconds", self.api_timeout)
+        if "api_request_timeout" in parsed:
+            logger.info("Updated API request timeout: %s seconds", self.api_request_timeout)
+        if "frontend_poll_timeout" in parsed:
+            logger.info("Updated frontend poll timeout: %s seconds", self.frontend_poll_timeout)
+        if "image_compression_ratio" in parsed:
             logger.info("Updated image target size ratio: %s", self.image_compression_ratio)
 
 

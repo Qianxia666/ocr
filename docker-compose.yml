@@ -33,6 +33,9 @@ services:
       - MAX_IMAGE_SIZE_MB=${MAX_IMAGE_SIZE_MB:-50}
       - MAX_PDF_SIZE_MB=${MAX_PDF_SIZE_MB:-200}
       - MAX_PDF_PAGES=${MAX_PDF_PAGES:-500}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
 
       # 前端配置
       - FAVICON_URL=${FAVICON_URL:-/static/favicon.ico}
@@ -50,10 +53,6 @@ services:
       - ./data:/app/data
       # 临时文件目录（可选，用于调试）
       # - ./tmp:/app/tmp
-
-    # 环境变量文件
-    env_file:
-      - .env
 
     # 健康检查（使用专用端点，无需密码）
     healthcheck:

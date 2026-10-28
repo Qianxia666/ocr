@@ -782,7 +782,8 @@
           const config = data.data || {};
           baseUrlInput.value = config.api_base_url || "";
           apiKeyInput.value = config.api_key || "";
-          apiKeyInput.dataset.hasValue = config.api_key ? "true" : "false";
+          apiKeyInput.dataset.hasValue = config.api_key_masked ? "true" : "false";
+          apiKeyInput.dataset.maskedValue = config.api_key_masked ? (config.api_key || "") : "";
           modelInput.value = config.model || "";
         }
       } catch (err) {
@@ -818,7 +819,9 @@
       };
 
       const apiKeyValue = apiKeyInput.value.trim();
-      if (apiKeyValue) {
+      if (apiKeyInput.dataset.maskedValue && apiKeyValue === apiKeyInput.dataset.maskedValue) {
+        // Keep the existing secret when only non-secret settings are changed.
+      } else if (apiKeyValue) {
         payload.api_key = apiKeyValue;
       } else if (apiKeyInput.dataset.hasValue === "true") {
         payload.clear_api_key = true;
@@ -1075,7 +1078,8 @@
           const config = data.data || {};
           siteKeyInput.value = config.site_key || "";
           secretKeyInput.value = config.secret_key || "";
-          secretKeyInput.dataset.hasValue = config.secret_key ? "true" : "false";
+          secretKeyInput.dataset.hasValue = config.secret_key_masked ? "true" : "false";
+          secretKeyInput.dataset.maskedValue = config.secret_key_masked ? (config.secret_key || "") : "";
         }
       } catch (err) {
         console.error("Failed to load Turnstile runtime config:", err);
@@ -1095,7 +1099,9 @@
       };
 
       const secretValue = secretKeyInput.value.trim();
-      if (secretValue) {
+      if (secretKeyInput.dataset.maskedValue && secretValue === secretKeyInput.dataset.maskedValue) {
+        // Keep the existing secret when only the site key changes.
+      } else if (secretValue) {
         payload.secret_key = secretValue;
       } else if (secretKeyInput.dataset.hasValue === "true") {
         payload.clear_secret_key = true;

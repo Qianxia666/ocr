@@ -1,16 +1,13 @@
 
 import asyncio
 import psutil
-import time
 import logging
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from collections import deque, defaultdict
-import json
 import os
 import gc
-import threading
 
 logger = logging.getLogger(__name__)
 
@@ -572,7 +569,7 @@ class SystemMonitor:
             }
             
             # 广播监控数据
-            await self.websocket_manager.broadcast(monitoring_message)
+            await self.websocket_manager.broadcast(monitoring_message, require_admin=True)
             
         except Exception as e:
             logger.error(f"发送监控更新失败: {e}")
@@ -589,7 +586,7 @@ class SystemMonitor:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
-            await self.websocket_manager.broadcast(alert_message)
+            await self.websocket_manager.broadcast(alert_message, require_admin=True)
             
         except Exception as e:
             logger.error(f"发送告警通知失败: {e}")
@@ -606,7 +603,7 @@ class SystemMonitor:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
-            await self.websocket_manager.broadcast(resolved_message)
+            await self.websocket_manager.broadcast(resolved_message, require_admin=True)
             
         except Exception as e:
             logger.error(f"发送告警解决通知失败: {e}")

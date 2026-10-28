@@ -1,5 +1,5 @@
 import sqlite3
-import aiosqlite
+from core import aiosqlite_compat as aiosqlite
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, Any, List
@@ -416,6 +416,14 @@ class DatabaseManager:
             # 兑换记录表索引
             await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_history_user_id ON redemption_history (user_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_redemption_history_code ON redemption_history (code)")
+            try:
+                # 同一用户同一兑换码只能入账一次（防止并发重复兑换）
+                await db.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_redemption_history_user_code "
+                    "ON redemption_history (user_id, code)"
+                )
+            except Exception as e:
+                logger.warning(f"创建兑换记录唯一索引失败（可能存在历史重复数据）: {e}")
 
             # 注册令牌表索引
             await db.execute("CREATE INDEX IF NOT EXISTS idx_registration_tokens_is_active ON registration_tokens (is_active)")
@@ -654,27 +662,34 @@ class TaskModel:
             logger.error(f"获取任务列表失败 {status.value}: {e}")
             return []
     
-    async def get_recent_tasks(self, limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_recent_tasks(
+        self,
+        limit: int = 50,
+        user_id: Optional[str] = None,
+        status: Optional[str] = None,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
         """获取最近的任务列表，可选按用户筛选"""
         try:
             async with self.db_manager.get_connection() as db:
                 db.row_factory = aiosqlite.Row
 
+                conditions = []
+                params = []
                 if user_id:
-                    # 按用户筛选
-                    query = """
-                        SELECT * FROM tasks
-                        WHERE user_id = ?
-                        ORDER BY created_at DESC LIMIT ?
-                    """
-                    params = (user_id, limit)
-                else:
-                    # 返回所有任务
-                    query = """
-                        SELECT * FROM tasks
-                        ORDER BY created_at DESC LIMIT ?
-                    """
-                    params = (limit,)
+                    conditions.append("user_id = ?")
+                    params.append(user_id)
+                if status:
+                    conditions.append("status = ?")
+                    params.append(status)
+
+                where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+                query = f"""
+                    SELECT * FROM tasks
+                    {where_clause}
+                    ORDER BY created_at DESC LIMIT ? OFFSET ?
+                """
+                params.extend([max(limit, 1), max(offset, 0)])
 
                 async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
@@ -697,50 +712,7 @@ class TaskModel:
             async with self.db_manager.get_connection() as db:
                 db.row_factory = aiosqlite.Row
 
-                # 构建基础查询
-                query_parts = []
-                params = []
-
-                # 用户筛选条件
-                if user_id_filter:
-                    query_parts.append("t.user_id = ?")
-                    params.append(user_id_filter)
-
-                # 搜索条件 - 搜索文件名、用户名、任务UUID
-                if search_query:
-                    search_pattern = f"%{search_query}%"
-                    query_parts.append("(t.file_name LIKE ? OR u.username LIKE ? OR t.id LIKE ? OR t.user_id LIKE ?)")
-                    params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
-
-                # 构建WHERE子句
-                where_clause = ""
-                if query_parts:
-                    where_clause = "WHERE " + " AND ".join(query_parts)
-
-                # 如果有搜索关键词，还需要搜索文件内容
-                if search_query:
-                    # 先查询匹配内容的任务ID
-                    content_query = """
-                        SELECT DISTINCT task_id FROM page_results
-                        WHERE content LIKE ?
-                    """
-                    content_params = [f"%{search_query}%"]
-
-                    async with db.execute(content_query, content_params) as cursor:
-                        content_rows = await cursor.fetchall()
-                        content_task_ids = [row[0] for row in content_rows]
-
-                    # 合并基础查询和内容查询
-                    if content_task_ids:
-                        placeholders = ','.join('?' * len(content_task_ids))
-                        if query_parts:
-                            # 已有其他筛选条件，添加OR条件
-                            where_clause += f" OR t.id IN ({placeholders})"
-                            params.extend(content_task_ids)
-                        else:
-                            # 没有其他筛选条件，只有内容搜索
-                            where_clause = f"WHERE t.id IN ({placeholders})"
-                            params = content_task_ids
+                where_clause, params = self._build_task_filter(user_id_filter, search_query)
 
                 # 完整查询
                 query = f"""
@@ -764,28 +736,44 @@ class TaskModel:
             logger.error(f"获取任务列表（含用户信息）失败: {e}")
             return []
 
+    @staticmethod
+    def _build_task_filter(user_id_filter: Optional[str] = None, search_query: Optional[str] = None) -> tuple[str, List[Any]]:
+        """构建管理员任务列表的 WHERE 子句。
+
+        所有条件都用 AND 组合；内容搜索作为子查询参与组合，
+        避免 ``base_conditions OR content_condition`` 造成的越权查询。
+        """
+        query_parts = []
+        params: List[Any] = []
+
+        if user_id_filter:
+            query_parts.append("t.user_id = ?")
+            params.append(user_id_filter)
+
+        if search_query:
+            search_pattern = f"%{search_query}%"
+            query_parts.append(
+                "("
+                "t.file_name LIKE ? OR u.username LIKE ? OR t.id LIKE ? OR t.user_id LIKE ? "
+                "OR t.id IN (SELECT task_id FROM page_results WHERE content LIKE ?)"
+                ")"
+            )
+            params.extend([search_pattern] * 5)
+
+        where_clause = "WHERE " + " AND ".join(query_parts) if query_parts else ""
+        return where_clause, params
+
     async def count_tasks(self, user_id_filter: Optional[str] = None, search_query: Optional[str] = None) -> int:
-        """统计任务总数（支持筛选）"""
+        """统计任务总数（支持筛选），筛选逻辑与列表查询保持一致"""
         try:
             async with self.db_manager.get_connection() as db:
-                # 构建查询条件
-                query_parts = []
-                params = []
+                where_clause, params = self._build_task_filter(user_id_filter, search_query)
 
-                if user_id_filter:
-                    query_parts.append("user_id = ?")
-                    params.append(user_id_filter)
-
-                if search_query:
-                    search_pattern = f"%{search_query}%"
-                    query_parts.append("(file_name LIKE ? OR id LIKE ? OR user_id LIKE ?)")
-                    params.extend([search_pattern, search_pattern, search_pattern])
-
-                where_clause = ""
-                if query_parts:
-                    where_clause = "WHERE " + " AND ".join(query_parts)
-
-                query = f"SELECT COUNT(*) FROM tasks {where_clause}"
+                query = f"""
+                    SELECT COUNT(*) FROM tasks t
+                    LEFT JOIN users u ON t.user_id = u.id
+                    {where_clause}
+                """
 
                 async with db.execute(query, params) as cursor:
                     row = await cursor.fetchone()
@@ -1366,7 +1354,11 @@ class IPTrackingModel:
             return []
 
     async def reset_to_env_defaults(self) -> bool:
-        """重置配置为环境变量中的默认值（应用启动时调用）"""
+        """使用环境变量作为默认值初始化配置。
+
+        只在数据库缺少对应配置项时写入，避免每次启动覆盖管理员在界面中
+        保存的持久化设置。
+        """
         try:
             import os
             ip_abuse_enabled = os.getenv('IP_ABUSE_DETECTION_ENABLED', 'true')
@@ -1375,30 +1367,28 @@ class IPTrackingModel:
 
             async with self.db_manager.get_connection() as db:
                 now = datetime.now(timezone.utc).isoformat()
+                defaults = (
+                    ('ip_abuse_detection_enabled', ip_abuse_enabled, 'IP滥用检测开关'),
+                    ('ip_abuse_accounts_threshold', ip_abuse_threshold, 'IP滥用账户阈值'),
+                    ('ip_abuse_days_window', ip_abuse_days, 'IP滥用检测时间窗口(天)'),
+                )
 
-                await db.execute("""
-                    UPDATE system_settings
-                    SET value = ?, updated_at = ?
-                    WHERE key = 'ip_abuse_detection_enabled'
-                """, (ip_abuse_enabled, now))
-
-                await db.execute("""
-                    UPDATE system_settings
-                    SET value = ?, updated_at = ?
-                    WHERE key = 'ip_abuse_accounts_threshold'
-                """, (ip_abuse_threshold, now))
-
-                await db.execute("""
-                    UPDATE system_settings
-                    SET value = ?, updated_at = ?
-                    WHERE key = 'ip_abuse_days_window'
-                """, (ip_abuse_days, now))
+                for key, value, description in defaults:
+                    await db.execute("""
+                        INSERT OR IGNORE INTO system_settings (key, value, description, updated_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (key, value, description, now))
 
                 await db.commit()
-                logger.info(f"IP滥用检测配置已重置为ENV默认值: enabled={ip_abuse_enabled}, threshold={ip_abuse_threshold}, days={ip_abuse_days}")
+                logger.info(
+                    "IP滥用检测配置已就绪（仅补齐缺失项）: enabled=%s, threshold=%s, days=%s",
+                    ip_abuse_enabled,
+                    ip_abuse_threshold,
+                    ip_abuse_days,
+                )
                 return True
         except Exception as e:
-            logger.error(f"重置IP滥用检测配置失败: {e}")
+            logger.error(f"初始化IP滥用检测配置失败: {e}")
             return False
 
 
@@ -1546,7 +1536,7 @@ class UserAgreementModel:
                     WHERE user_id = ? AND agreement_id = ?
                 """, (user_id, active_agreement['id'])) as cursor:
                     row = await cursor.fetchone()
-                    return row and row[0] > 0
+                    return bool(row and row[0] > 0)
         except Exception as e:
             logger.error(f"检查用户接受状态失败 {user_id}: {e}")
             return False

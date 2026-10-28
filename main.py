@@ -6,13 +6,12 @@ from io import BytesIO
 from PIL import Image
 import aiohttp
 import asyncio
-from fastapi import FastAPI, Request, UploadFile, Query, HTTPException, Response
-from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, RedirectResponse
+from fastapi import FastAPI, Request, Query, HTTPException, Response
+from fastapi.responses import JSONResponse, HTMLResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 import os
-import json
 from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -29,30 +28,18 @@ from core.routes.ui_websocket_routes import register_ui_websocket_routes
 from core.routes.task_basic_routes import register_task_basic_routes
 from core.routes.task_advanced_routes import register_task_advanced_routes
 
-# 配置日志记录 - 支持UTF-8编码
+# 配置日志记录 - 尽量使用宿主终端的原生编码，避免导入模块时修改代码页。
 import sys
 if sys.platform == 'win32':
-    # Windows系统配置UTF-8编码
     try:
-        # 设置控制台代码页为UTF-8
-        os.system('chcp 65001 > nul')
-    except:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, OSError):
         pass
-
-    # 配置日志使用UTF-8编码
-    import codecs
-    logging.basicConfig(
-        level=logging.INFO,  # INFO级别仅显示重要日志
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(
-                codecs.getwriter('utf-8')(sys.stdout.buffer, errors='replace')
-            )
-        ]
-    )
-else:
-    # 非Windows系统使用默认配置
-    logging.basicConfig(level=logging.INFO)  # INFO级别仅显示重要日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
 
 # 加载 .env 文件（如果存在）
@@ -67,25 +54,58 @@ TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY", "")
 TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "")
 
 # 并发限制和重试机制
-CONCURRENCY = int(os.getenv("CONCURRENCY", 5))  # 保留用于向后兼容
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", 5))
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    """Read a positive integer ENV value without breaking module import."""
+    try:
+        return max(int(os.getenv(name, str(default))), minimum)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        return max(minimum, min(maximum, float(os.getenv(name, str(default)))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _require_int(value: Any, field_name: str, *, minimum: int, maximum: Optional[int] = None) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise HTTPException(status_code=400, detail=f"{field_name}必须是整数")
+    if value < minimum or (maximum is not None and value > maximum):
+        if maximum is None:
+            detail = f"{field_name}必须大于或等于{minimum}"
+        else:
+            detail = f"{field_name}必须在{minimum}-{maximum}之间"
+        raise HTTPException(status_code=400, detail=detail)
+    return value
+
+
+def _require_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"{field_name}必须是字符串")
+    return value
+
+
+CONCURRENCY = _env_int("CONCURRENCY", 5)
+MAX_RETRIES = _env_int("MAX_RETRIES", 5)
 RETRY_DELAY = 0.5  # 重试延迟时间（秒）
 
 # 图片和PDF独立并发配置
-IMAGE_CONCURRENCY = int(os.getenv("IMAGE_CONCURRENCY", 2))  # 图片OCR并发数
-PDF_CONCURRENCY = int(os.getenv("PDF_CONCURRENCY", 2))  # PDF OCR并发数
+IMAGE_CONCURRENCY = _env_int("IMAGE_CONCURRENCY", 2)
+PDF_CONCURRENCY = _env_int("PDF_CONCURRENCY", 2)
 
 # PDF处理优化配置
-PDF_DPI = int(os.getenv("PDF_DPI", 200))  # 降低DPI减少内存占用
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", 8))  # 批处理大小
+PDF_DPI = _env_int("PDF_DPI", 200)
+BATCH_SIZE = _env_int("BATCH_SIZE", 8)
 
 # 文件大小限制配置
-MAX_IMAGE_SIZE_MB = int(os.getenv("MAX_IMAGE_SIZE_MB", 50))  # 图片文件最大大小(MB)
-MAX_PDF_SIZE_MB = int(os.getenv("MAX_PDF_SIZE_MB", 200))  # PDF文件最大大小(MB)
-MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 500))  # PDF最大页数限制
+MAX_IMAGE_SIZE_MB = _env_int("MAX_IMAGE_SIZE_MB", 50)
+MAX_PDF_SIZE_MB = _env_int("MAX_PDF_SIZE_MB", 200)
+MAX_PDF_PAGES = _env_int("MAX_PDF_PAGES", 500)
 
 # 图片压缩配置
-IMAGE_COMPRESSION_RATIO = float(os.getenv("IMAGE_COMPRESSION_RATIO", 0.2))  # 图片目标体积比例(0.1-1.0)，默认0.2即目标为原文件20%
+IMAGE_COMPRESSION_RATIO = _env_float("IMAGE_COMPRESSION_RATIO", 0.2, 0.1, 1.0)
 
 # 运行时配置管理器
 runtime_config = RuntimeConfig()
@@ -369,9 +389,9 @@ async def lifespan(app: FastAPI):
         global ip_tracking_model_instance, ip_abuse_detection_task
         ip_tracking_model_instance = ip_tracking_model
 
-        # 重置IP滥用检测配置为ENV默认值
+        # 补齐缺失的IP滥用检测配置（保留管理后台已持久化的设置）
         await ip_tracking_model_instance.reset_to_env_defaults()
-        logger.info("IP滥用检测配置已从ENV重置")
+        logger.info("IP滥用检测配置缺失项已按ENV补齐")
 
         # 创建IP滥用检测定时任务（每5分钟执行一次）
         async def ip_abuse_detection_loop():
@@ -438,6 +458,13 @@ async def lifespan(app: FastAPI):
 # 初始化 FastAPI 应用
 app = FastAPI(lifespan=lifespan)
 
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Avoid returning database/network exception details to API clients."""
+    detail = "internal server error" if exc.status_code >= 500 else exc.detail
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail}, headers=exc.headers)
+
 # 导入WebSocket和任务管理器
 from core.websocket_manager import websocket_manager, init_websocket_manager, shutdown_websocket_manager
 from core.task_manager import init_task_manager, shutdown_task_manager
@@ -451,8 +478,10 @@ auth_manager_instance = None
 ip_tracking_model_instance = None
 ip_abuse_detection_task = None
 
-# 挂载静态文件目录
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Resolve resource paths relative to this file so the app can be launched
+# from any working directory (for example: uvicorn package.main:app).
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 # 环境变量配置
 FAVICON_URL = os.getenv("FAVICON_URL", "/static/favicon.ico")
@@ -460,28 +489,33 @@ TITLE = os.getenv("TITLE", "智能图文识别服务")
 BACK_URL = os.getenv("BACK_URL", "")
 
 # 配置 Jinja2 模板目录
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
-# 跨域支持
+# Cross-origin support. Wildcard origins cannot be combined with credentialed
+# cookies; use explicit origins whenever the UI is hosted elsewhere.
+_cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
+if not _cors_origins:
+    _cors_origins = ["*"]
+_cors_allow_credentials = "*" not in _cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 def get_client_ip(request: Request) -> str:
     """获取客户端真实IP地址"""
-    # 优先从代理头获取真实IP
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # Proxy headers are user-controlled unless the deployment explicitly opts in.
+    if _parse_bool(os.getenv("TRUST_PROXY_HEADERS")) is True:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
 
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip
 
     # 否则从request.client获取
     if request.client:
@@ -762,7 +796,7 @@ async def get_broadcast_config():
         })
     except Exception as e:
         logger.error(f"获取广播配置失败: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        return JSONResponse({"status": "error", "message": "获取广播配置失败"}, status_code=500)
 
 @app.get(f"/{PASSWORD}/api/announcement/config" if PASSWORD else "/api/announcement/config")
 async def get_announcement_config():
@@ -787,7 +821,7 @@ async def get_announcement_config():
         })
     except Exception as e:
         logger.error(f"获取公告配置失败: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        return JSONResponse({"status": "error", "message": "获取公告配置失败"}, status_code=500)
 
 # ==================== 认证 API 端点 ====================
 
@@ -849,10 +883,10 @@ async def register_page(request: Request, token: str = ""):
 async def register_api(user_data: dict, request: Request):
     """用户注册（支持开放注册和令牌注册）"""
     try:
-        username = user_data.get('username', '').strip()
-        password = user_data.get('password', '')
-        token = user_data.get('token', '').strip()
-        turnstile_token = user_data.get('turnstile_token', '').strip()
+        username = _require_string(user_data.get('username', ''), "用户名").strip()
+        password = _require_string(user_data.get('password', ''), "密码")
+        token = _require_string(user_data.get('token', ''), "注册令牌").strip()
+        turnstile_token = _require_string(user_data.get('turnstile_token', ''), "Turnstile令牌").strip()
 
         # 验证 Turnstile
         client_ip = request.client.host if request.client else None
@@ -869,6 +903,9 @@ async def register_api(user_data: dict, request: Request):
 
         if len(password) < 6:
             raise HTTPException(status_code=400, detail="密码长度至少为6个字符")
+
+        if len(password) > 128:
+            raise HTTPException(status_code=400, detail="密码长度不能超过128个字符")
 
         # 获取注册开关状态
         from models.database import db_manager
@@ -904,10 +941,11 @@ async def register_api(user_data: dict, request: Request):
                 token=token,
                 user_id=user_id,
                 username=username,
-                user_uuid=user_id  # user_id就是UUID
             )
             if not token_success:
                 logger.error(f"用户创建成功但令牌使用失败: {token_message}")
+                await user_model.delete_user(user_id)
+                raise HTTPException(status_code=400, detail=token_message)
 
         return JSONResponse({
             "status": "success",
@@ -924,9 +962,9 @@ async def register_api(user_data: dict, request: Request):
 async def login_api(user_data: dict, request: Request):
     """用户登录"""
     try:
-        username = user_data.get('username', '').strip()
-        password = user_data.get('password', '')
-        turnstile_token = user_data.get('turnstile_token', '').strip()
+        username = _require_string(user_data.get('username', ''), "用户名").strip()
+        password = _require_string(user_data.get('password', ''), "密码")
+        turnstile_token = _require_string(user_data.get('turnstile_token', ''), "Turnstile令牌").strip()
 
         # 验证 Turnstile
         client_ip = request.client.host if request.client else None
@@ -964,7 +1002,11 @@ async def login_api(user_data: dict, request: Request):
             path='/',
             max_age=30 * 24 * 60 * 60,  # 30天
             httponly=True,
-            samesite='lax'
+            samesite='lax',
+            secure=(
+                _parse_bool(os.getenv("SESSION_COOKIE_SECURE")) is True
+                or request.url.scheme == "https"
+            ),
         )
 
         logger.info(f"用户 {username} 登录成功")
@@ -979,11 +1021,12 @@ async def login_api(user_data: dict, request: Request):
 async def logout_api(request: Request, response: Response):
     """用户登出"""
     try:
-        await auth_manager_instance.logout(response, request)
-        return JSONResponse({
+        logout_response = JSONResponse({
             "status": "success",
             "message": "已登出"
         })
+        await auth_manager_instance.logout(logout_response, request)
+        return logout_response
     except Exception as e:
         logger.error(f"用户登出失败: {e}")
         raise HTTPException(status_code=500, detail="登出失败")
@@ -1020,7 +1063,7 @@ async def redeem_code_api(request: Request, code_data: dict):
     """兑换码兑换"""
     try:
         user = await auth_manager_instance.require_user(request)
-        code = code_data.get('code', '').strip().upper()
+        code = _require_string(code_data.get('code', ''), "兑换码").strip().upper()
 
         if not code:
             raise HTTPException(status_code=400, detail="兑换码不能为空")
@@ -1033,9 +1076,6 @@ async def redeem_code_api(request: Request, code_data: dict):
                 "status": "error",
                 "message": message
             }, status_code=400)
-
-        # 增加用户配额
-        await user_model.add_pages(user['id'], pages)
 
         # 获取更新后的配额
         quota = await user_model.get_quota(user['id'])
@@ -1106,14 +1146,13 @@ async def generate_redemption_code_api(request: Request, code_config: dict):
         description = code_config.get('description')
         batch_count = code_config.get('batch_count', 1)  # 批量生成数量,默认为1
 
-        if pages <= 0:
-            raise HTTPException(status_code=400, detail="页数必须大于0")
-
-        if max_uses <= 0:
-            raise HTTPException(status_code=400, detail="使用次数必须大于0")
-
-        if batch_count <= 0 or batch_count > 100:
-            raise HTTPException(status_code=400, detail="批量生成数量必须在1-100之间")
+        pages = _require_int(pages, "页数", minimum=1)
+        max_uses = _require_int(max_uses, "使用次数", minimum=1)
+        batch_count = _require_int(batch_count, "批量生成数量", minimum=1, maximum=100)
+        if expires_days is not None:
+            expires_days = _require_int(expires_days, "有效天数", minimum=1, maximum=36500)
+        if description is not None and not isinstance(description, str):
+            raise HTTPException(status_code=400, detail="描述必须是字符串")
 
         logger.info(f"创建兑换码参数: pages={pages}, max_uses={max_uses}, expires_days={expires_days}, batch_count={batch_count}, created_by={user.get('id')}")
 
@@ -1289,10 +1328,20 @@ async def adjust_user_quota_api(request: Request, user_id: str, quota_data: dict
         action = quota_data.get('action')  # 'set' or 'add'
         pages = quota_data.get('pages', 0)
 
+        if isinstance(pages, bool) or not isinstance(pages, int):
+            raise HTTPException(status_code=400, detail="页数必须是整数")
         if pages < 0:
             raise HTTPException(status_code=400, detail="页数不能为负数")
 
         if action == 'set':
+            current_quota = await user_model.get_quota(user_id)
+            if not current_quota:
+                raise HTTPException(status_code=404, detail="用户不存在")
+            if pages < current_quota['used_pages']:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"配额不能低于已使用页数({current_quota['used_pages']}页)"
+                )
             success = await user_model.set_quota(user_id, pages)
             message = f"用户 {user_id} 配额已设置为 {pages} 页"
         elif action == 'add':
@@ -1396,7 +1445,9 @@ async def toggle_registration_api(request: Request, settings_data: dict):
     try:
         admin = await auth_manager_instance.require_admin(request)
 
-        enabled = settings_data.get('enabled', True)
+        enabled = _parse_bool(settings_data.get('enabled', True))
+        if enabled is None:
+            raise HTTPException(status_code=400, detail="enabled 参数无效")
 
         from models.database import db_manager
         from datetime import datetime, timezone
@@ -1513,13 +1564,15 @@ async def get_api_runtime_settings_api(request: Request):
         await auth_manager_instance.require_admin(request)
 
         config = api_runtime_config.get_effective_config(include_sensitive=True)
+        masked_api_key = _mask_secret(config.get('api_key', ''))
         sources = api_runtime_config.get_sources()
 
         return JSONResponse({
             "status": "success",
             "data": {
                 "api_base_url": config.get('api_base_url', ''),
-                "api_key": config.get('api_key', ''),
+                "api_key": masked_api_key,
+                "api_key_masked": bool(masked_api_key),
                 "model": config.get('model', '')
             },
             "sources": sources,
@@ -1562,13 +1615,15 @@ async def update_api_runtime_settings_api(request: Request, config_data: dict):
         logger.info(f"管理员{admin['username']} 更新 API 配置: {safe_payload}")
 
         config = api_runtime_config.get_effective_config(include_sensitive=True)
+        masked_api_key = _mask_secret(config.get('api_key', ''))
 
         return JSONResponse({
             "status": "success",
             "message": "API 配置已更新（仅本次运行有效，重启后恢复ENV默认值）",
             "data": {
                 "api_base_url": config.get('api_base_url', ''),
-                "api_key": config.get('api_key', ''),
+                "api_key": masked_api_key,
+                "api_key_masked": bool(masked_api_key),
                 "model": config.get('model', '')
             },
             "sources": api_runtime_config.get_sources()
@@ -1590,6 +1645,7 @@ async def reset_api_runtime_settings_api(request: Request):
         apply_api_runtime_config()
 
         config = api_runtime_config.get_effective_config(include_sensitive=True)
+        masked_api_key = _mask_secret(config.get('api_key', ''))
 
         logger.info(f"管理员{admin['username']} 重置 API 配置为 ENV 默认值")
 
@@ -1598,7 +1654,8 @@ async def reset_api_runtime_settings_api(request: Request):
             "message": "API 配置已重置为ENV默认值",
             "data": {
                 "api_base_url": config.get('api_base_url', ''),
-                "api_key": config.get('api_key', ''),
+                "api_key": masked_api_key,
+                "api_key_masked": bool(masked_api_key),
                 "model": config.get('model', '')
             },
             "sources": api_runtime_config.get_sources()
@@ -1619,6 +1676,7 @@ async def get_turnstile_runtime_config_api(request: Request):
         await auth_manager_instance.require_admin(request)
 
         config = turnstile_config.get_effective_config(include_sensitive=True)
+        masked_secret_key = _mask_secret(config.get('secret_key', ''))
         sources = turnstile_config.get_sources()
 
         return JSONResponse({
@@ -1626,7 +1684,8 @@ async def get_turnstile_runtime_config_api(request: Request):
             "data": {
                 "enabled": bool(config.get('enabled', False)),
                 "site_key": config.get('site_key', ''),
-                "secret_key": config.get('secret_key', '')
+                "secret_key": masked_secret_key,
+                "secret_key_masked": bool(masked_secret_key),
             },
             "sources": sources,
             "masked": {
@@ -1675,6 +1734,7 @@ async def update_turnstile_runtime_config_api(request: Request, config_data: dic
         logger.info(f"管理员{admin['username']} 更新 Turnstile 运行时配置: {safe_payload}")
 
         config = turnstile_config.get_effective_config(include_sensitive=True)
+        masked_secret_key = _mask_secret(config.get('secret_key', ''))
 
         return JSONResponse({
             "status": "success",
@@ -1682,7 +1742,8 @@ async def update_turnstile_runtime_config_api(request: Request, config_data: dic
             "data": {
                 "enabled": bool(config.get('enabled', False)),
                 "site_key": config.get('site_key', ''),
-                "secret_key": config.get('secret_key', '')
+                "secret_key": masked_secret_key,
+                "secret_key_masked": bool(masked_secret_key),
             },
             "sources": turnstile_config.get_sources()
         })
@@ -1704,6 +1765,7 @@ async def reset_turnstile_runtime_config_api(request: Request):
         logger.info(f"管理员{admin['username']} 重置 Turnstile 运行时配置为 ENV 默认值")
 
         config = turnstile_config.get_effective_config(include_sensitive=True)
+        masked_secret_key = _mask_secret(config.get('secret_key', ''))
 
         return JSONResponse({
             "status": "success",
@@ -1711,7 +1773,8 @@ async def reset_turnstile_runtime_config_api(request: Request):
             "data": {
                 "enabled": bool(config.get('enabled', False)),
                 "site_key": config.get('site_key', ''),
-                "secret_key": config.get('secret_key', '')
+                "secret_key": masked_secret_key,
+                "secret_key_masked": bool(masked_secret_key),
             },
             "sources": turnstile_config.get_sources()
         })
@@ -1747,14 +1810,17 @@ async def update_ip_abuse_settings_api(request: Request, settings_data: dict):
     try:
         admin = await auth_manager_instance.require_admin(request)
 
-        enabled = settings_data.get('enabled')
+        enabled_raw = settings_data.get('enabled')
+        enabled = _parse_bool(enabled_raw) if enabled_raw is not None else None
         threshold = settings_data.get('threshold')
         days = settings_data.get('days')
 
         # 验证参数
-        if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+        if enabled_raw is not None and enabled is None:
+            raise HTTPException(status_code=400, detail="enabled 参数无效")
+        if threshold is not None and (not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1):
             raise HTTPException(status_code=400, detail="账户数阈值必须是大于0的整数")
-        if days is not None and (not isinstance(days, int) or days < 1):
+        if days is not None and (not isinstance(days, int) or isinstance(days, bool) or days < 1):
             raise HTTPException(status_code=400, detail="天数窗口必须是大于0的整数")
 
         success = await ip_tracking_model_instance.update_settings(
@@ -1805,7 +1871,10 @@ async def update_runtime_config_api(request: Request, config_data: dict):
         admin = await auth_manager_instance.require_admin(request)
 
         # 更新配置
-        runtime_config.update(config_data)
+        try:
+            runtime_config.update(config_data)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         await apply_runtime_settings()
 
         return JSONResponse({
@@ -1970,7 +2039,7 @@ async def update_user_agreement_admin(request: Request):
     try:
         await auth_manager_instance.require_admin(request)
         data = await request.json()
-        content = data.get('content', '').strip()
+        content = _require_string(data.get('content', ''), "协议内容").strip()
 
         if not content:
             raise HTTPException(status_code=400, detail="协议内容不能为空")
@@ -2019,7 +2088,7 @@ async def get_current_user_agreement():
         })
     except Exception as e:
         logger.error(f"获取用户协议失败: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        return JSONResponse({"status": "error", "message": "获取用户协议失败"}, status_code=500)
 
 
 # ==================== 注册令牌管理API ====================
@@ -2035,11 +2104,12 @@ async def create_registration_token_api(request: Request, token_data: dict):
         description = token_data.get('description')
         batch_count = token_data.get('batch_count', 1)  # 批量生成数量,默认为1
 
-        if max_uses < 1:
-            raise HTTPException(status_code=400, detail="最大使用次数必须大于0")
-
-        if batch_count <= 0 or batch_count > 100:
-            raise HTTPException(status_code=400, detail="批量生成数量必须在1-100之间")
+        max_uses = _require_int(max_uses, "最大使用次数", minimum=1)
+        batch_count = _require_int(batch_count, "批量生成数量", minimum=1, maximum=100)
+        if expires_days is not None:
+            expires_days = _require_int(expires_days, "有效天数", minimum=1, maximum=36500)
+        if description is not None and not isinstance(description, str):
+            raise HTTPException(status_code=400, detail="描述必须是字符串")
 
         logger.info(f"创建注册令牌参数: max_uses={max_uses}, expires_days={expires_days}, batch_count={batch_count}, created_by={admin.get('id')}")
 
@@ -2274,7 +2344,7 @@ if __name__ == "__main__":
     # 解析命令行参数
     parser = argparse.ArgumentParser(description="Web OCR API Server")
     # 从环境变量读取默认端口，如果没有则使用 54188
-    default_port = int(os.getenv("PORT", 54188))
+    default_port = _env_int("PORT", 54188)
     parser.add_argument("--port", type=int, default=default_port, help=f"Port to run the server on (default: {default_port})")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind the server to (default: 0.0.0.0)")
     args = parser.parse_args()

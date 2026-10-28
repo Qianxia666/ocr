@@ -3,9 +3,8 @@ import uuid
 import logging
 import time
 import fitz  # PyMuPDF
-from typing import Dict, Any, Optional, List, Callable, Set
+from typing import Dict, Any, Optional, List, Set
 from datetime import datetime, timezone
-import json
 
 from models.database import (
     TaskStatus, TaskType, task_model, page_result_model,
@@ -14,18 +13,16 @@ from models.database import (
 )
 from core.task_queue import (
     TaskQueue, WorkerPool, TaskItem,
-    image_task_queue, pdf_task_queue,
-    image_worker_pool, pdf_worker_pool
+    image_task_queue, pdf_task_queue
 )
 from core.page_processor import (
-    PageProcessor,
     init_page_processor,
     shutdown_page_processor,
     is_page_processor_ready,
     ensure_page_processor_ready
 )
-from core.progress_tracker import ProgressTracker, init_progress_tracker, shutdown_progress_tracker, progress_tracker
-from core.system_integration import SystemIntegration, init_system_integration, shutdown_system_integration, get_system_integration
+from core.progress_tracker import init_progress_tracker, shutdown_progress_tracker
+from core.system_integration import init_system_integration, shutdown_system_integration, get_system_integration
 from core.timeout_manager import TimeoutLevel
 from core.error_handler import RecoveryStrategy
 from core.auth import get_auth_manager
@@ -97,6 +94,7 @@ class TaskManager:
         self.websocket_manager = websocket_manager
         self._initialized = False
         self._cancellation_lock = asyncio.Lock()
+        self._quota_refund_lock = asyncio.Lock()
         self._quota_refunded_tasks: Set[str] = set()
         self._pdf_render_lock = asyncio.Lock()
 
@@ -240,8 +238,12 @@ class TaskManager:
             
             # 恢复未完成的任务
             try:
-                image_restored = await self.image_task_queue.restore_from_database()
-                pdf_restored = await self.pdf_task_queue.restore_from_database()
+                image_restored = await self.image_task_queue.restore_from_database(
+                    on_abandoned=self._refund_task_quota
+                )
+                pdf_restored = await self.pdf_task_queue.restore_from_database(
+                    on_abandoned=self._refund_task_quota
+                )
                 logger.info(f"恢复了 {image_restored + pdf_restored} 个未完成的任务 (图片: {image_restored}, PDF: {pdf_restored})")
             except Exception as e:
                 logger.warning(f"恢复未完成任务失败: {e}")
@@ -384,7 +386,7 @@ class TaskManager:
             # 清理临时文件
             try:
                 os.unlink(file_path)
-            except:
+            except OSError:
                 pass
             raise Exception("任务提交失败")
     
@@ -485,7 +487,10 @@ class TaskManager:
             raise Exception(f"临时文件不存在: {file_path}")
 
         # 从元数据获取页数和文件大小
+        metadata = metadata or {}
         total_pages = metadata.get('total_pages', 0)
+        if not isinstance(total_pages, int) or total_pages < 1:
+            raise ValueError("PDF metadata must include a positive total_pages value")
         file_size = os.path.getsize(file_path)
 
         task_id = str(uuid.uuid4())
@@ -519,7 +524,7 @@ class TaskManager:
             # 清理临时文件
             try:
                 os.unlink(file_path)
-            except:
+            except OSError:
                 pass
             raise Exception("任务提交失败")
     
@@ -944,6 +949,14 @@ class TaskManager:
             except Exception as update_error:
                 log.error(f"failed to update task status {task_id}: {update_error}")
 
+            # OCR failures should not permanently consume pages that were
+            # never processed. The refund helper is idempotent per task.
+            try:
+                failed_task = await task_model.get_task(task_id)
+                await self._refund_task_quota(failed_task)
+            except Exception as refund_error:
+                log.error(f"failed to refund quota for task {task_id}: {refund_error}")
+
             raise
         finally:
             if system_integration and timeout_context:
@@ -971,7 +984,6 @@ class TaskManager:
 
     async def _process_image_task(self, task_item: TaskItem) -> Dict[str, Any]:
         """Process a single image OCR task."""
-        import os
 
         log = self._task_logger(task_item)
         start_time = time.time()
@@ -1104,7 +1116,6 @@ class TaskManager:
     async def _process_pdf_task(self, task_item: TaskItem) -> Dict[str, Any]:
         """处理PDF OCR任务 - 使用新的分页处理器"""
         log = self._task_logger(task_item)
-        import os
         start_time = time.time()
         temp_file_path = task_item.metadata.get('temp_file_path')
 
@@ -1254,12 +1265,12 @@ class TaskManager:
                     content = page_result.get('content', '')
                     content_length = len(content) if content else 0
                     total_content_length += content_length
-                    log.info(f"?? {page_result['page_number']}: ????={content_length}??, ??={content[:100] if content else '???'}...")
+                    log.info(f"页面 {page_result['page_number']}: 内容长度={content_length}字符, 预览={content[:100] if content else '(空)'}...")
                 else:
                     failed_pages += 1
-                    log.error(f"?? {page_result['page_number']}: ??={page_status}, ??={error_message}")
+                    log.error(f"页面 {page_result['page_number']}: 状态={page_status}, 错误={error_message}")
 
-            log.info(f" ????: ??={successful_pages}, ??={failed_pages}, ?????={total_content_length}??")
+            log.info(f" 页面统计: 成功={successful_pages}, 失败={failed_pages}, 内容总长度={total_content_length}字符")
 
             if total_content_length == 0 and successful_pages > 0:
                 log.error(f" 检测到严重问题: 页面显示成功但内容为空！可能是OCR API响应解析失败。")
@@ -1802,6 +1813,10 @@ class TaskManager:
             raise
         return parsed_content
     async def _refund_task_quota(self, task: Optional[Dict[str, Any]]):
+        async with self._quota_refund_lock:
+            await self._refund_task_quota_locked(task)
+
+    async def _refund_task_quota_locked(self, task: Optional[Dict[str, Any]]):
         """根据任务信息返还未消耗的配额"""
         if not task:
             return
@@ -1827,8 +1842,6 @@ class TaskManager:
             processed_pages = task.get('processed_pages') or 0
             if total_pages:
                 pages_to_refund = max(total_pages - processed_pages, 0)
-                if pages_to_refund == 0 and task.get('status') != TaskStatus.COMPLETED.value:
-                    pages_to_refund = total_pages
 
         if pages_to_refund <= 0:
             return
@@ -1840,10 +1853,13 @@ class TaskManager:
             return
 
         try:
-            await auth_manager.user_model.refund_pages(user_id, pages_to_refund)
+            refunded = await auth_manager.user_model.refund_pages(user_id, pages_to_refund)
+            if not refunded:
+                logger.error("返还用户配额失败 %s: 用户不存在或参数无效", user_id)
+                return
             if task_id:
                 self._quota_refunded_tasks.add(task_id)
-            logger.info(f"任务 {task_id or task.get('id', task.get('task_id'))} 取消，已返还 {pages_to_refund} 页配额给用户 {user_id}")
+            logger.info(f"任务 {task_id or task.get('id', task.get('task_id'))} 已返还 {pages_to_refund} 页配额给用户 {user_id}")
         except Exception as exc:
             logger.error(f"返还用户配额失败 {user_id}: {exc}")
 

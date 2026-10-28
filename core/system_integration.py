@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 
 from .timeout_manager import TimeoutManager, TimeoutLevel
-from .error_handler import ErrorHandler, ErrorType
+from .error_handler import ErrorHandler
 from .system_monitor import SystemMonitor
 from .recovery_manager import RecoveryManager
 from models.websocket_messages import MessageFactory
@@ -27,20 +27,26 @@ class SystemIntegration:
         self.websocket_manager = websocket_manager
         self.timeout_manager = TimeoutManager(runtime_config, websocket_manager)
         self.error_handler = ErrorHandler()
-        self.system_monitor = SystemMonitor()
-        self.recovery_manager = RecoveryManager()
+        self.system_monitor = SystemMonitor(
+            websocket_manager=websocket_manager,
+            error_handler=self.error_handler,
+        )
+        self.recovery_manager = RecoveryManager(
+            websocket_manager=websocket_manager,
+            error_handler=self.error_handler,
+        )
 
         # 鍒濆鍖栫姸鎬?
         self._initialized = False
         self._shutdown_event = asyncio.Event()
 
-        # 璁剧疆缁勪欢闂寸殑鍥炶皟
+        # 设置组件间的回调
         self._setup_component_callbacks()
 
         logger.info("system integration created")
     
     def _setup_component_callbacks(self):
-        """璁剧疆缁勪欢闂寸殑鍥炶皟鍑芥暟"""
+        """设置组件间的回调函数"""
         # 娉ㄩ噴鎺変笉瀛樺湪鐨勫洖璋冩柟娉曪紝閬垮厤鍚姩閿欒
         # TODO: 鏍规嵁瀹為檯缁勪欢鎺ュ彛瀹炵幇鍥炶皟鏈哄埗
         # 瓒呮椂绠＄悊鍣ㄥ洖璋?
@@ -91,7 +97,7 @@ class SystemIntegration:
             try:
                 await self.system_monitor.initialize()
             except Exception as e:
-                logger.warning(f"绯荤粺鐩戞帶鍣ㄥ垵濮嬪寲澶辫触: {e}")
+                logger.warning(f"系统监控器初始化失败: {e}")
             
             try:
                 await self.recovery_manager.initialize()
@@ -102,10 +108,10 @@ class SystemIntegration:
             asyncio.create_task(self._monitoring_loop())
             
             self._initialized = True
-            logger.info("绯荤粺闆嗘垚鍣ㄥ垵濮嬪寲瀹屾垚")
+            logger.info("系统集成器初始化完成")
             
         except Exception as e:
-            logger.error(f"绯荤粺闆嗘垚鍣ㄥ垵濮嬪寲澶辫触: {e}")
+            logger.error(f"系统集成器初始化失败: {e}")
             raise
     
     async def shutdown(self):
@@ -114,10 +120,10 @@ class SystemIntegration:
             return
         
         try:
-            # 璁剧疆鍏抽棴浜嬩欢
+            # 设置关闭事件
             self._shutdown_event.set()
             
-            # 鍏抽棴鍚勪釜缁勪欢
+            # 关闭各个组件
             await self.timeout_manager.stop()
             # await self.error_handler.shutdown()
             # await self.system_monitor.shutdown()
@@ -129,7 +135,7 @@ class SystemIntegration:
         except Exception as e:
             logger.error(f"绯荤粺闆嗘垚鍣ㄥ叧闂け璐? {e}")
     
-    # ========== 浠诲姟澶勭悊鐩稿叧鏂规硶 ==========
+    # ========== 任务处理相关方法 ==========
     
     async def execute_with_protection(self,
                                     task_id: str,
@@ -140,12 +146,12 @@ class SystemIntegration:
                                     **kwargs) -> Any:
         """
         鎵ц鍙椾繚鎶ょ殑鎿嶄綔 - 鍖呭惈瓒呮椂銆侀敊璇鐞嗗拰鎭㈠鏈哄埗
-        :param task_id: 浠诲姟ID
+        :param task_id: 任务ID
         :param operation: 瑕佹墽琛岀殑鎿嶄綔
-        :param timeout_level: 瓒呮椂绾у埆
+        :param timeout_level: 超时级别
         :param recovery_strategy: 鎭㈠绛栫暐
         :param max_retries: 鏈€澶ч噸璇曟鏁帮紙鎬诲皾璇曟鏁帮級
-        :param kwargs: 鎿嶄綔鍙傛暟
+        :param kwargs: 操作参数
         :return: 鎿嶄綔缁撴灉
         """
         checkpoint_id = None
@@ -241,7 +247,7 @@ class SystemIntegration:
     async def monitor_task_execution(self, task_id: str, total_pages: int = 1):
         """
         鐩戞帶浠诲姟鎵ц杩囩▼
-        :param task_id: 浠诲姟ID
+        :param task_id: 任务ID
         :param total_pages: 鎬婚〉鏁?
         """
         try:
@@ -264,8 +270,8 @@ class SystemIntegration:
     
     async def complete_task_monitoring(self, task_id: str, timeout_context, success: bool = True):
         """
-        瀹屾垚浠诲姟鐩戞帶
-        :param task_id: 浠诲姟ID
+        完成任务监控
+        :param task_id: 任务ID
         :param timeout_context: 瓒呮椂涓婁笅鏂?
         :param success: 鏄惁鎴愬姛
         """
@@ -274,15 +280,20 @@ class SystemIntegration:
             if timeout_context:
                 await self.timeout_manager.stop_timeout(timeout_context.timeout_id)
             
-            # 璁板綍浠诲姟瀹屾垚
+            # 记录任务完成
             await self.system_monitor.record_task_completion(task_id, success)
             
         except Exception as e:
-            logger.error(f"浠诲姟鐩戞帶瀹屾垚澶辫触 {task_id}: {e}")
+            logger.error(f"任务监控完成失败 {task_id}: {e}")
     
     async def finalize_task_monitoring(self, task_id: str, timeout_context):
-        """Compatibility wrapper for task monitoring cleanup."""
-        await self.complete_task_monitoring(task_id, timeout_context, success=True)
+        """Stop a monitoring context without recording a second completion."""
+        if not timeout_context:
+            return
+        try:
+            await self.timeout_manager.stop_timeout(timeout_context.timeout_id)
+        except Exception as exc:
+            logger.warning("任务监控清理失败 %s: %s", task_id, exc)
 
     # ========== API璋冪敤淇濇姢 ==========
     
@@ -294,9 +305,9 @@ class SystemIntegration:
                                 **kwargs):
         """
         鍙椾繚鎶ょ殑API璋冪敤 - 鍖呭惈瓒呮椂鍜岄噸璇曟満鍒?
-        :param task_id: 浠诲姟ID
+        :param task_id: 任务ID
         :param api_func: API鍑芥暟
-        :param args: 浣嶇疆鍙傛暟
+        :param args: 位置参数
         :param kwargs: 鍏抽敭瀛楀弬鏁?
         :return: API璋冪敤缁撴灉
         """
@@ -318,9 +329,9 @@ class SystemIntegration:
     async def get_system_health(self) -> Dict[str, Any]:
         """鑾峰彇绯荤粺鍋ュ悍鐘舵€?"""
         try:
-            timeout_stats = self.timeout_manager.get_statistics()
+            timeout_stats = await self.timeout_manager.get_statistics()
             error_stats = self.error_handler.get_statistics()
-            system_metrics = self.system_monitor.get_current_metrics()
+            system_metrics = self.system_monitor.get_current_metrics() or {}
             recovery_stats = self.recovery_manager.get_statistics()
             
             return {
@@ -340,7 +351,7 @@ class SystemIntegration:
                 "error": str(e)
             }
     
-    # ========== 鍥炶皟澶勭悊鏂规硶 ==========
+    # ========== 回调处理方法 ==========
     
     async def _on_timeout_warning(self, timeout_id: str, task_id: str, 
                                 elapsed_time: float, total_timeout: float):
@@ -369,7 +380,7 @@ class SystemIntegration:
             logger.error(f"澶勭悊瓒呮椂棰勮澶辫触: {e}")
     
     async def _on_timeout_occurred(self, timeout_id: str, task_id: str, elapsed_time: float):
-        """澶勭悊瓒呮椂鍙戠敓"""
+        """处理超时发生"""
         try:
             # 鍙戦€佽秴鏃跺彂鐢熸秷鎭?
             if self.websocket_manager:
@@ -385,10 +396,10 @@ class SystemIntegration:
                     task_id, message.to_dict()
                 )
             
-            logger.error(f"浠诲姟 {task_id} 鍙戠敓瓒呮椂: {elapsed_time:.1f}s")
+            logger.error(f"任务 {task_id} 发生超时: {elapsed_time:.1f}s")
             
         except Exception as e:
-            logger.error(f"澶勭悊瓒呮椂鍙戠敓澶辫触: {e}")
+            logger.error(f"处理超时发生失败: {e}")
     
     async def _on_error_recovery(self, task_id: str, error_type: str, 
                                recovery_action: str, success: bool):
@@ -418,7 +429,7 @@ class SystemIntegration:
                     task_id, message.to_dict()
                 )
             
-            status = "鎴愬姛" if success else "澶辫触"
+            status = "成功" if success else "失败"
             logger.info(f"浠诲姟 {task_id} 閿欒鎭㈠{status}: {error_type} -> {recovery_action}")
             
         except Exception as e:
@@ -440,7 +451,10 @@ class SystemIntegration:
                     triggered_at=datetime.now().isoformat(),
                     context=metrics,
                 )
-                await self.websocket_manager.broadcast_message(alert_message.to_dict())
+                await self.websocket_manager.broadcast(
+                    alert_message.to_dict(),
+                    require_admin=True,
+                )
             
             logger.warning(f"绯荤粺鍛婅 ({severity}): {alert_type} - {message}")
             
@@ -475,7 +489,7 @@ class SystemIntegration:
     async def _handle_timeout_error(self, task_id: str, timeout_context, error_msg: str):
         """澶勭悊瓒呮椂閿欒"""
         try:
-            # 璁板綍瓒呮椂浜嬩欢
+            # 记录超时事件
             await self.error_handler.handle_error(
                 asyncio.TimeoutError(error_msg), 
                 task_id, 
@@ -547,7 +561,7 @@ async def init_system_integration(runtime_config=None, websocket_manager=None):
     if system_integration is None:
         system_integration = SystemIntegration(runtime_config, websocket_manager)
         await system_integration.initialize()
-        logger.info("鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ垵濮嬪寲瀹屾垚")
+        logger.info("全局系统集成器初始化完成")
 
 async def shutdown_system_integration():
     """鍏抽棴鍏ㄥ眬绯荤粺闆嗘垚鍣?"""
@@ -555,7 +569,7 @@ async def shutdown_system_integration():
     if system_integration:
         await system_integration.shutdown()
         system_integration = None
-        logger.info("鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ凡鍏抽棴")
+        logger.info("全局系统集成器已关闭")
 
 def get_system_integration() -> Optional[SystemIntegration]:
     """鑾峰彇鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ疄渚?"""

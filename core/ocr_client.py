@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
@@ -245,7 +245,7 @@ async def request_ocr_markdown(
         session = aiohttp.ClientSession(timeout=timeout)
 
     request_payload = _build_payload(image_data, config.model, system_prompt, user_prompt)
-    request_url = f"{config.api_base_url}/v1/chat/completions"
+    request_url = f"{config.api_base_url.rstrip('/')}/v1/chat/completions"
     headers = {"Authorization": f"Bearer {config.api_key}"}
 
     last_error: Optional[OCRServiceError] = None

@@ -1,11 +1,10 @@
 import asyncio
 import logging
 import time
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
+from typing import Dict, Any, Optional
 
 from models.database import (
-    task_model, task_progress_model, page_result_model, page_batch_model
+    task_model, task_progress_model, page_result_model
 )
 from models.websocket_messages import MessageFactory
 

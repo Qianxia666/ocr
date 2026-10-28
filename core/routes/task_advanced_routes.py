@@ -23,8 +23,8 @@ def _cleanup_temp_file(path: Optional[str], logger: Optional[logging.Logger] = N
 
 def _raise_internal_error(logger: logging.Logger, code: str, exc: Exception, **context: Any) -> None:
     context_str = " ".join(f"{key}={value}" for key, value in context.items() if value is not None)
-    logger.exception("task_route_failed code=%s %s", code, context_str)
-    raise HTTPException(status_code=500, detail=str(exc), headers={"X-Error-Code": code})
+    logger.error("task_route_failed code=%s %s error=%s", code, context_str, exc, exc_info=True)
+    raise HTTPException(status_code=500, detail="internal server error", headers={"X-Error-Code": code})
 
 
 async def _write_upload_to_temp_file(
@@ -47,6 +47,9 @@ async def _write_upload_to_temp_file(
                 if total_size > max_file_size:
                     raise HTTPException(status_code=400, detail=error_message)
                 tmp_file.write(chunk)
+
+        if total_size <= 0:
+            raise HTTPException(status_code=400, detail="empty file")
 
         return tmp_file_path, total_size / (1024 * 1024)
     except Exception:
@@ -77,7 +80,9 @@ def _calculate_page_statistics(pages: list[dict[str, Any]]) -> dict[str, Any]:
 
         if status == "completed":
             stats["completed_pages"] += 1
-            stats["total_content_length"] += page.get("content_length", 0)
+            content_length = page.get("content_length", 0) or 0
+            if isinstance(content_length, (int, float)):
+                stats["total_content_length"] += content_length
         elif status == "failed":
             stats["failed_pages"] += 1
         elif status == "processing":
@@ -86,7 +91,7 @@ def _calculate_page_statistics(pages: list[dict[str, Any]]) -> dict[str, Any]:
             stats["pending_pages"] += 1
 
         processing_time = page.get("processing_time")
-        if processing_time:
+        if isinstance(processing_time, (int, float)) and processing_time > 0:
             total_processing_time += processing_time
             processing_time_count += 1
 
@@ -125,6 +130,18 @@ def register_task_advanced_routes(
         if not auth_manager:
             raise HTTPException(status_code=503, detail="认证管理器未初始化")
         return auth_manager
+
+    async def _require_task_access(request: Request, task_id: str):
+        """Require a logged-in task owner or administrator."""
+        auth_manager = _require_auth_manager()
+        task_manager = _require_task_manager()
+        user = await auth_manager.require_user(request)
+        task_info = await task_manager.get_task_info(task_id)
+        if not task_info:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if not user.get("is_admin") and task_info.get("user_id") != user.get("id"):
+            raise HTTPException(status_code=404, detail="任务不存在")
+        return user, task_info
 
     async def _inspect_pdf_source(pdf_source: Any) -> tuple[int, float]:
         return await asyncio.to_thread(check_pdf_info, pdf_source)
@@ -232,12 +249,16 @@ def register_task_advanced_routes(
     @router.post(f"/{password}/api/async/image" if password else "/api/async/image")
     async def submit_async_image_task(file: UploadFile, request: Request):
         task_manager = _require_task_manager()
+        auth_manager = _require_auth_manager()
+        user = await auth_manager.require_user(request)
         if not file:
             raise HTTPException(status_code=400, detail="未收到文件")
         if not file.content_type or not file.content_type.startswith("image/"):
             raise HTTPException(status_code=400, detail="不支持的文件类型，请上传图片文件")
 
         tmp_file_path: Optional[str] = None
+        quota_reserved = False
+        task_submitted = False
         try:
             tmp_file_path, file_size_mb = await _write_upload_to_temp_file(
                 file,
@@ -245,18 +266,24 @@ def register_task_advanced_routes(
                 max_file_size_mb=runtime_config.max_image_size_mb,
                 error_message=f"文件过大，最大支持{runtime_config.max_image_size_mb}MB",
             )
+            has_quota, quota_message = await auth_manager.check_quota(user["id"], 1)
+            if not has_quota or not await auth_manager.deduct_quota(user["id"], 1):
+                raise HTTPException(status_code=403, detail=f"quota exceeded: {quota_message}")
+            quota_reserved = True
             client_ip = get_client_ip(request)
             task_id = await task_manager.submit_image_task_from_file(
                 file_path=tmp_file_path,
                 file_name=file.filename or "image",
                 metadata={
                     "source": "async_api",
+                    "user_id": user["id"],
                     "file_type": file.content_type,
                     "original_filename": file.filename,
                     "file_size_mb": file_size_mb,
                     "client_ip": client_ip,
                 },
             )
+            task_submitted = True
             tmp_file_path = None
 
             return JSONResponse(
@@ -275,20 +302,29 @@ def register_task_advanced_routes(
             )
         except HTTPException:
             _cleanup_temp_file(tmp_file_path, logger, "submit_async_image_task")
+            if quota_reserved and not task_submitted:
+                await auth_manager.user_model.refund_pages(user["id"], 1)
             raise
         except Exception as exc:
             _cleanup_temp_file(tmp_file_path, logger, "submit_async_image_task")
+            if quota_reserved and not task_submitted:
+                await auth_manager.user_model.refund_pages(user["id"], 1)
             _raise_internal_error(logger, "TASK_ASYNC_IMAGE_SUBMIT_FAILED", exc, filename=file.filename)
 
     @router.post(f"/{password}/api/async/pdf" if password else "/api/async/pdf")
     async def submit_async_pdf_task(file: UploadFile, request: Request):
         task_manager = _require_task_manager()
+        auth_manager = _require_auth_manager()
+        user = await auth_manager.require_user(request)
         if not file:
             raise HTTPException(status_code=400, detail="未收到文件")
         if file.content_type != "application/pdf":
             raise HTTPException(status_code=400, detail="不支持的文件类型，请上传PDF文件")
 
         tmp_file_path: Optional[str] = None
+        quota_reserved = False
+        task_submitted = False
+        page_count = 0
         try:
             tmp_file_path, file_size_mb = await _write_upload_to_temp_file(
                 file,
@@ -302,8 +338,15 @@ def register_task_advanced_routes(
                 logger.warning("async_pdf_inspection_failed filename=%s error=%s", file.filename, exc)
                 raise HTTPException(status_code=400, detail="PDF文件格式错误或损坏") from exc
 
+            if page_count <= 0:
+                raise HTTPException(status_code=400, detail="PDF文件没有可处理页面")
             if page_count > runtime_config.max_pdf_pages:
                 raise HTTPException(status_code=400, detail=f"PDF页数过多，最大支持{runtime_config.max_pdf_pages}页")
+
+            has_quota, quota_message = await auth_manager.check_quota(user["id"], page_count)
+            if not has_quota or not await auth_manager.deduct_quota(user["id"], page_count):
+                raise HTTPException(status_code=403, detail=f"quota exceeded: {quota_message}")
+            quota_reserved = True
 
             client_ip = get_client_ip(request)
             task_id = await task_manager.submit_pdf_task_from_file(
@@ -311,6 +354,7 @@ def register_task_advanced_routes(
                 file_name=file.filename or "document.pdf",
                 metadata={
                     "source": "async_api",
+                    "user_id": user["id"],
                     "file_type": file.content_type,
                     "original_filename": file.filename,
                     "file_size_mb": file_size_mb,
@@ -318,6 +362,7 @@ def register_task_advanced_routes(
                     "client_ip": client_ip,
                 },
             )
+            task_submitted = True
             tmp_file_path = None
 
             return JSONResponse(
@@ -338,14 +383,20 @@ def register_task_advanced_routes(
             )
         except HTTPException:
             _cleanup_temp_file(tmp_file_path, logger, "submit_async_pdf_task")
+            if quota_reserved and not task_submitted:
+                await auth_manager.user_model.refund_pages(user["id"], page_count)
             raise
         except Exception as exc:
             _cleanup_temp_file(tmp_file_path, logger, "submit_async_pdf_task")
+            if quota_reserved and not task_submitted:
+                await auth_manager.user_model.refund_pages(user["id"], page_count)
             _raise_internal_error(logger, "TASK_ASYNC_PDF_SUBMIT_FAILED", exc, filename=file.filename)
 
     @router.post(f"/{password}/api/async/batch" if password else "/api/async/batch")
     async def submit_batch_tasks(files: list[UploadFile], request: Request):
         task_manager = _require_task_manager()
+        auth_manager = _require_auth_manager()
+        user = await auth_manager.require_user(request)
         if not files:
             raise HTTPException(status_code=400, detail="未收到文件")
         if len(files) > 20:
@@ -358,6 +409,8 @@ def register_task_advanced_routes(
 
             for file in files:
                 tmp_file_path: Optional[str] = None
+                reserved_pages = 0
+                task_submitted = False
                 try:
                     if file.content_type and file.content_type.startswith("image/"):
                         tmp_file_path, file_size_mb = await _write_upload_to_temp_file(
@@ -366,18 +419,24 @@ def register_task_advanced_routes(
                             max_file_size_mb=runtime_config.max_image_size_mb,
                             error_message=f"图片文件过大(最大{runtime_config.max_image_size_mb}MB)",
                         )
+                        has_quota, quota_message = await auth_manager.check_quota(user["id"], 1)
+                        if not has_quota or not await auth_manager.deduct_quota(user["id"], 1):
+                            raise HTTPException(status_code=403, detail=f"quota exceeded: {quota_message}")
+                        reserved_pages = 1
                         task_id = await task_manager.submit_image_task_from_file(
                             file_path=tmp_file_path,
                             file_name=file.filename or "image",
                             priority=1,
                             metadata={
                                 "source": "batch_api",
+                                "user_id": user["id"],
                                 "file_type": file.content_type,
                                 "original_filename": file.filename,
                                 "file_size_mb": file_size_mb,
                                 "client_ip": client_ip,
                             },
                         )
+                        task_submitted = True
                         submitted_tasks.append(
                             {
                                 "task_id": task_id,
@@ -395,9 +454,17 @@ def register_task_advanced_routes(
                             error_message=f"PDF文件过大(最大{runtime_config.max_pdf_size_mb}MB)",
                         )
                         page_count, _ = await _inspect_pdf_source(tmp_file_path)
+                        if page_count <= 0:
+                            failed_files.append({"filename": file.filename, "error": "PDF文件没有可处理页面"})
+                            continue
                         if page_count > runtime_config.max_pdf_pages:
                             failed_files.append({"filename": file.filename, "error": f"PDF页数过多(最大{runtime_config.max_pdf_pages}页)"})
                             continue
+
+                        has_quota, quota_message = await auth_manager.check_quota(user["id"], page_count)
+                        if not has_quota or not await auth_manager.deduct_quota(user["id"], page_count):
+                            raise HTTPException(status_code=403, detail=f"quota exceeded: {quota_message}")
+                        reserved_pages = page_count
 
                         task_id = await task_manager.submit_pdf_task_from_file(
                             file_path=tmp_file_path,
@@ -405,6 +472,7 @@ def register_task_advanced_routes(
                             priority=1,
                             metadata={
                                 "source": "batch_api",
+                                "user_id": user["id"],
                                 "file_type": file.content_type,
                                 "original_filename": file.filename,
                                 "file_size_mb": file_size_mb,
@@ -412,6 +480,7 @@ def register_task_advanced_routes(
                                 "client_ip": client_ip,
                             },
                         )
+                        task_submitted = True
                         submitted_tasks.append(
                             {
                                 "task_id": task_id,
@@ -427,10 +496,12 @@ def register_task_advanced_routes(
                 except HTTPException as exc:
                     failed_files.append({"filename": file.filename, "error": str(exc.detail)})
                 except Exception as exc:
-                    failed_files.append({"filename": file.filename, "error": str(exc)})
+                    failed_files.append({"filename": file.filename, "error": "文件处理失败"})
                     logger.warning("batch_task_item_failed filename=%s error=%s", file.filename, exc)
                 finally:
                     _cleanup_temp_file(tmp_file_path, logger, "submit_batch_tasks")
+                    if reserved_pages and not task_submitted:
+                        await auth_manager.user_model.refund_pages(user["id"], reserved_pages)
 
             total_estimated_time = sum(task.get("estimated_time", 0) for task in submitted_tasks)
             return JSONResponse(
@@ -450,9 +521,13 @@ def register_task_advanced_routes(
             _raise_internal_error(logger, "TASK_BATCH_SUBMIT_FAILED", exc, files_count=len(files))
 
     @router.post(f"/{password}/api/tasks/batch/status" if password else "/api/tasks/batch/status")
-    async def get_batch_tasks_status(task_ids: dict):
+    async def get_batch_tasks_status(task_ids: dict, request: Request):
         task_manager = _require_task_manager()
+        auth_manager = _require_auth_manager()
+        user = await auth_manager.require_user(request)
         task_id_list = task_ids.get("task_ids", [])
+        if not isinstance(task_id_list, list) or any(not isinstance(task_id, str) or not task_id.strip() for task_id in task_id_list):
+            raise HTTPException(status_code=400, detail="task_ids必须是非空字符串数组")
         if not task_id_list:
             raise HTTPException(status_code=400, detail="未提供任务ID")
         if len(task_id_list) > 50:
@@ -463,7 +538,9 @@ def register_task_advanced_routes(
             for task_id in task_id_list:
                 try:
                     task_info = await task_manager.get_task_info(task_id)
-                    if task_info:
+                    if task_info and (
+                        user.get("is_admin") or task_info.get("user_id") == user.get("id")
+                    ):
                         tasks_status.append(
                             {
                                 "task_id": task_id,
@@ -478,7 +555,7 @@ def register_task_advanced_routes(
                         tasks_status.append({"task_id": task_id, "status": "not_found", "error_message": "任务不存在"})
                 except Exception as exc:
                     logger.warning("batch_status_item_failed task_id=%s error=%s", task_id, exc)
-                    tasks_status.append({"task_id": task_id, "status": "error", "error_message": str(exc)})
+                    tasks_status.append({"task_id": task_id, "status": "error", "error_message": "任务状态查询失败"})
 
             status_counts: dict[str, int] = {}
             for task in tasks_status:
@@ -498,11 +575,12 @@ def register_task_advanced_routes(
             _raise_internal_error(logger, "TASK_BATCH_STATUS_FAILED", exc, task_count=len(task_id_list))
 
     @router.get(f"/{password}/api/tasks/{{task_id}}/pages" if password else "/api/tasks/{task_id}/pages")
-    async def get_task_pages_api(task_id: str):
+    async def get_task_pages_api(task_id: str, request: Request):
         task_manager = _require_task_manager()
         try:
+            _, task_info = await _require_task_access(request, task_id)
             pages = await task_manager.get_task_pages(task_id)
-            if not pages and not await task_manager.get_task_info(task_id):
+            if not pages and not task_info:
                 raise HTTPException(status_code=404, detail="任务不存在")
 
             return JSONResponse(
@@ -522,17 +600,15 @@ def register_task_advanced_routes(
             _raise_internal_error(logger, "TASK_PAGES_FAILED", exc, task_id=task_id)
 
     @router.get(f"/{password}/api/tasks/{{task_id}}/pages/{{page_num}}" if password else "/api/tasks/{task_id}/pages/{page_num}")
-    async def get_task_page_api(task_id: str, page_num: int):
+    async def get_task_page_api(task_id: str, page_num: int, request: Request):
         task_manager = _require_task_manager()
         if page_num < 1:
             raise HTTPException(status_code=400, detail="页码必须大于0")
 
         try:
+            _, task_info = await _require_task_access(request, task_id)
             page_result = await task_manager.get_task_page(task_id, page_num)
             if not page_result:
-                task_info = await task_manager.get_task_info(task_id)
-                if not task_info:
-                    raise HTTPException(status_code=404, detail="任务不存在")
                 if page_num > task_info.get("total_pages", 0):
                     raise HTTPException(status_code=404, detail="页码超出范围")
                 raise HTTPException(status_code=404, detail="页面结果不存在")
@@ -549,9 +625,10 @@ def register_task_advanced_routes(
             _raise_internal_error(logger, "TASK_PAGE_FAILED", exc, task_id=task_id, page_num=page_num)
 
     @router.get(f"/{password}/api/tasks/{{task_id}}/progress" if password else "/api/tasks/{task_id}/progress")
-    async def get_task_progress_detail_api(task_id: str):
+    async def get_task_progress_detail_api(task_id: str, request: Request):
         task_manager = _require_task_manager()
         try:
+            await _require_task_access(request, task_id)
             progress_detail = await task_manager.get_task_progress_detail(task_id)
             if not progress_detail:
                 raise HTTPException(status_code=404, detail="任务不存在")
@@ -562,9 +639,10 @@ def register_task_advanced_routes(
             _raise_internal_error(logger, "TASK_PROGRESS_FAILED", exc, task_id=task_id)
 
     @router.get(f"/{password}/api/tasks/{{task_id}}/batches" if password else "/api/tasks/{task_id}/batches")
-    async def get_task_batches_api(task_id: str):
+    async def get_task_batches_api(task_id: str, request: Request):
         task_manager = _require_task_manager()
         try:
+            await _require_task_access(request, task_id)
             progress_detail = await task_manager.get_task_progress_detail(task_id)
             if not progress_detail:
                 raise HTTPException(status_code=404, detail="任务不存在")
@@ -582,8 +660,13 @@ def register_task_advanced_routes(
             _raise_internal_error(logger, "TASK_BATCHES_FAILED", exc, task_id=task_id)
 
     @router.get(f"/{password}/api/tasks/{{task_id}}/export" if password else "/api/tasks/{task_id}/export")
-    async def export_task_result_api(task_id: str, format: str = Query("json", description="导出格式: json, txt, md")):
+    async def export_task_result_api(
+        task_id: str,
+        request: Request,
+        format: str = Query("json", description="导出格式: json, txt, md"),
+    ):
         task_manager = _require_task_manager()
+        await _require_task_access(request, task_id)
         if format not in ["json", "txt", "md"]:
             raise HTTPException(status_code=400, detail="不支持的导出格式，支持: json, txt, md")
 

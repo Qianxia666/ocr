@@ -7,9 +7,8 @@ import asyncio
 import logging
 import json
 import os
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple
 from enum import Enum
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +299,7 @@ class ContentModerator:
                     json_end = ai_response.find('```', json_start)
                     json_str = ai_response[json_start:json_end].strip()
                     return json.loads(json_str)
-                except:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     pass
 
             # 无法解析 - 保守处理

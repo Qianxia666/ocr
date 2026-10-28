@@ -1188,7 +1188,7 @@
     function subscribeTask(taskId) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
-          type: 'subscribe',
+          type: 'subscribe_task',
           task_id: taskId
         }));
       }

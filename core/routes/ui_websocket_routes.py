@@ -223,8 +223,15 @@ def register_ui_websocket_routes(
     async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
         """WebSocket连接端点"""
         try:
+            auth_manager = _get_auth_manager()
+            user = await auth_manager.get_current_user(websocket)
             await websocket.accept()
-            actual_client_id = await websocket_manager.connect(websocket, client_id)
+            actual_client_id = await websocket_manager.connect(
+                websocket,
+                client_id,
+                user_id=user.get("id") if user else None,
+                is_admin=bool(user and user.get("is_admin")),
+            )
             logger.info("WebSocket客户端连接: %s", actual_client_id)
 
             try:

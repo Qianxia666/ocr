@@ -1,11 +1,10 @@
 import asyncio
 import time
 import logging
-from typing import Dict, Any, Optional, Callable, Set, List
-from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, Optional, Callable, List
+from datetime import datetime, timezone
 from dataclasses import dataclass, field, replace
 from enum import Enum
-import weakref
 
 logger = logging.getLogger(__name__)
 

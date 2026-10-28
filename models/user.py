@@ -1,11 +1,11 @@
-import aiosqlite
+from core import aiosqlite_compat as aiosqlite
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
-import json
+import asyncio
 import logging
 import uuid
 import secrets
-import bcrypt
+from core.password_hashing import hash_password as _hash_password, verify_password as _verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +18,12 @@ class UserModel:
 
     def hash_password(self, password: str) -> str:
         """对密码进行哈希加密"""
-        salt = bcrypt.gensalt()
-        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
-        return hashed.decode('utf-8')
+        return _hash_password(password)
 
     def verify_password(self, password: str, password_hash: str) -> bool:
         """验证密码是否正确"""
         try:
-            return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+            return _verify_password(password, password_hash)
         except Exception as e:
             logger.error(f"密码验证失败: {e}")
             return False
@@ -34,14 +32,25 @@ class UserModel:
                          username: str,
                          password: str,
                          is_admin: bool = False,
-                         total_pages: int = 0) -> Optional[str]:
+                         total_pages: int = 0,
+                         auto_first_admin: bool = False) -> Optional[str]:
         """创建新用户，返回用户ID"""
         try:
             user_id = str(uuid.uuid4())
-            password_hash = self.hash_password(password)
+            # 密码哈希属于 CPU 密集操作，放到线程池避免阻塞事件循环
+            password_hash = await asyncio.to_thread(self.hash_password, password)
             session_token = secrets.token_urlsafe(32)
 
             async with self.db_manager.get_connection() as db:
+                effective_is_admin = bool(is_admin)
+                effective_total_pages = total_pages
+                if auto_first_admin:
+                    await db.execute("BEGIN IMMEDIATE")
+                    async with db.execute("SELECT COUNT(*) FROM users") as cursor:
+                        row = await cursor.fetchone()
+                    effective_is_admin = bool(row and row[0] == 0)
+                    effective_total_pages = 1000000 if effective_is_admin else 0
+
                 await db.execute("""
                     INSERT INTO users (
                         id, username, password_hash, is_admin, total_pages, used_pages,
@@ -51,15 +60,15 @@ class UserModel:
                     user_id,
                     username,
                     password_hash,
-                    1 if is_admin else 0,
-                    total_pages,
+                    1 if effective_is_admin else 0,
+                    effective_total_pages,
                     0,
                     datetime.now(timezone.utc).isoformat(),
                     datetime.now(timezone.utc).isoformat(),
                     session_token
                 ))
                 await db.commit()
-                logger.info(f"用户 {username} ({user_id[:8]}...) 创建成功 (管理员: {is_admin})")
+                logger.info(f"用户 {username} ({user_id[:8]}...) 创建成功 (管理员: {effective_is_admin})")
                 return user_id
         except Exception as e:
             logger.error(f"创建用户失败 {username}: {e}")
@@ -77,7 +86,7 @@ class UserModel:
                 logger.warning(f"用户 {username} 已被禁用，拒绝登录")
                 return None
 
-            if self.verify_password(password, user['password_hash']):
+            if await asyncio.to_thread(self.verify_password, password, user['password_hash']):
                 # 更新最后登录时间
                 await self.update_last_login(user['id'])
                 return user
@@ -172,12 +181,16 @@ class UserModel:
 
     async def add_pages(self, user_id: str, pages: int) -> bool:
         """增加用户的总页数"""
+        if not isinstance(pages, int) or isinstance(pages, bool) or pages < 0:
+            return False
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     UPDATE users SET total_pages = total_pages + ? WHERE id = ?
                 """, (pages, user_id))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    return False
                 logger.info(f"用户 {user_id} 增加 {pages} 页配额")
                 return True
         except Exception as e:
@@ -186,26 +199,19 @@ class UserModel:
 
     async def deduct_pages(self, user_id: str, pages: int) -> bool:
         """扣除用户使用的页数"""
+        if not isinstance(pages, int) or isinstance(pages, bool) or pages <= 0:
+            return False
         try:
             async with self.db_manager.get_connection() as db:
-                # 检查余额
-                async with db.execute("""
-                    SELECT total_pages, used_pages FROM users WHERE id = ?
-                """, (user_id,)) as cursor:
-                    row = await cursor.fetchone()
-                    if not row:
-                        return False
-
-                    total_pages, used_pages = row
-                    if used_pages + pages > total_pages:
-                        logger.warning(f"用户 {user_id} 配额不足")
-                        return False
-
-                # 扣除页数
-                await db.execute("""
-                    UPDATE users SET used_pages = used_pages + ? WHERE id = ?
-                """, (pages, user_id))
+                cursor = await db.execute("""
+                    UPDATE users
+                    SET used_pages = used_pages + ?
+                    WHERE id = ? AND used_pages + ? <= total_pages
+                """, (pages, user_id, pages))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    logger.warning(f"用户 {user_id} 配额不足或不存在")
+                    return False
                 logger.info(f"用户 {user_id} 扣除 {pages} 页")
                 return True
         except Exception as e:
@@ -215,11 +221,13 @@ class UserModel:
 
     async def refund_pages(self, user_id: str, pages: int) -> bool:
         """返还用户已扣除的页数"""
+        if not isinstance(pages, int) or isinstance(pages, bool):
+            return False
         if pages <= 0:
             return True
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     UPDATE users
                     SET used_pages = CASE
                         WHEN used_pages >= ? THEN used_pages - ?
@@ -228,6 +236,8 @@ class UserModel:
                     WHERE id = ?
                 """, (pages, pages, user_id))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    return False
                 logger.info(f"用户 {user_id} 返还 {pages} 页配额")
                 return True
         except Exception as e:
@@ -256,12 +266,18 @@ class UserModel:
 
     async def set_quota(self, user_id: str, total_pages: int) -> bool:
         """设置用户总配额"""
+        if not isinstance(total_pages, int) or isinstance(total_pages, bool) or total_pages < 0:
+            return False
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
-                    UPDATE users SET total_pages = ? WHERE id = ?
-                """, (total_pages, user_id))
+                cursor = await db.execute("""
+                    UPDATE users
+                    SET total_pages = ?
+                    WHERE id = ? AND used_pages <= ?
+                """, (total_pages, user_id, total_pages))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    return False
                 logger.info(f"用户 {user_id} 配额设置为 {total_pages} 页")
                 return True
         except Exception as e:
@@ -335,10 +351,14 @@ class UserModel:
         """禁用用户"""
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
-                    UPDATE users SET is_disabled = 1 WHERE id = ?
+                cursor = await db.execute("""
+                    UPDATE users
+                    SET is_disabled = 1, session_token = NULL
+                    WHERE id = ?
                 """, (user_id,))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    return False
                 logger.info(f"用户 {user_id} 已被禁用")
                 return True
         except Exception as e:
@@ -349,14 +369,27 @@ class UserModel:
         """启用用户"""
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     UPDATE users SET is_disabled = 0 WHERE id = ?
                 """, (user_id,))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    return False
                 logger.info(f"用户 {user_id} 已被启用")
                 return True
         except Exception as e:
             logger.error(f"启用用户失败 {user_id}: {e}")
+            return False
+
+    async def delete_user(self, user_id: str) -> bool:
+        """Delete a user when a multi-step registration cannot be finalized."""
+        try:
+            async with self.db_manager.get_connection() as db:
+                cursor = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                await db.commit()
+                return cursor.rowcount == 1
+        except Exception as exc:
+            logger.error("删除未完成注册的用户失败 %s: %s", user_id, exc)
             return False
 
 
@@ -378,6 +411,16 @@ class RedemptionCodeModel:
                          expires_days: Optional[int] = None,
                          description: Optional[str] = None) -> Optional[str]:
         """创建兑换码"""
+        if not isinstance(pages, int) or isinstance(pages, bool) or pages <= 0:
+            return None
+        if not isinstance(max_uses, int) or isinstance(max_uses, bool) or max_uses <= 0:
+            return None
+        if expires_days is not None and (
+            not isinstance(expires_days, int)
+            or isinstance(expires_days, bool)
+            or expires_days <= 0
+        ):
+            return None
         try:
             code = self.generate_code()
             expires_at = None
@@ -448,48 +491,78 @@ class RedemptionCodeModel:
         return True, "有效"
 
     async def use_code(self, code: str, user_id: str) -> tuple[bool, str, int]:
-        """使用兑换码"""
-        # 验证兑换码
-        is_valid, message = await self.validate_code(code)
-        if not is_valid:
-            return False, message, 0
-
+        """Consume a code and grant pages in one serialized transaction."""
+        now = datetime.now(timezone.utc)
         try:
-            # 检查用户是否已经兑换过该兑换码
             async with self.db_manager.get_connection() as db:
-                async with db.execute("""
-                    SELECT COUNT(*) FROM redemption_history
-                    WHERE user_id = ? AND code = ?
-                """, (user_id, code)) as cursor:
+                await db.execute("BEGIN IMMEDIATE")
+
+                async with db.execute(
+                    """
+                    SELECT pages, max_uses, used_count, expires_at, is_active
+                    FROM redemption_codes WHERE code = ?
+                    """,
+                    (code,),
+                ) as cursor:
                     row = await cursor.fetchone()
-                    if row and row[0] > 0:
-                        logger.warning(f"用户 {user_id} 尝试重复兑换 {code}")
+
+                if not row:
+                    await db.rollback()
+                    return False, "兑换码不存在", 0
+
+                pages, max_uses, used_count, expires_at, is_active = row
+                if not is_active:
+                    await db.rollback()
+                    return False, "兑换码已被禁用", 0
+                if used_count >= max_uses:
+                    await db.rollback()
+                    return False, "兑换码已达到最大使用次数", 0
+                if expires_at:
+                    expiry = datetime.fromisoformat(expires_at)
+                    if expiry.tzinfo is None:
+                        expiry = expiry.replace(tzinfo=timezone.utc)
+                    if now > expiry:
+                        await db.rollback()
+                        return False, "兑换码已过期", 0
+
+                async with db.execute(
+                    "SELECT 1 FROM redemption_history WHERE user_id = ? AND code = ? LIMIT 1",
+                    (user_id, code),
+                ) as cursor:
+                    if await cursor.fetchone():
+                        await db.rollback()
                         return False, "您不能重复兑换该兑换码", 0
 
-            code_info = await self.get_code(code)
-            pages = code_info['pages']
+                update_cursor = await db.execute(
+                    """
+                    UPDATE redemption_codes
+                    SET used_count = used_count + 1
+                    WHERE code = ? AND is_active = 1 AND used_count < max_uses
+                    """,
+                    (code,),
+                )
+                if update_cursor.rowcount != 1:
+                    await db.rollback()
+                    return False, "兑换码已达到最大使用次数", 0
 
-            async with self.db_manager.get_connection() as db:
-                # 增加使用次数
-                await db.execute("""
-                    UPDATE redemption_codes SET used_count = used_count + 1
-                    WHERE code = ?
-                """, (code,))
+                user_cursor = await db.execute(
+                    "UPDATE users SET total_pages = total_pages + ? WHERE id = ?",
+                    (pages, user_id),
+                )
+                if user_cursor.rowcount != 1:
+                    await db.rollback()
+                    return False, "用户不存在", 0
 
-                # 记录兑换历史
-                await db.execute("""
+                await db.execute(
+                    """
                     INSERT INTO redemption_history (
                         user_id, code, pages_granted, redeemed_at
                     ) VALUES (?, ?, ?, ?)
-                """, (
-                    user_id,
-                    code,
-                    pages,
-                    datetime.now(timezone.utc).isoformat()
-                ))
-
+                    """,
+                    (user_id, code, pages, now.isoformat()),
+                )
                 await db.commit()
-                logger.info(f"用户 {user_id} 兑换码 {code} 成功,获得 {pages} 页")
+                logger.info("用户 %s 兑换码 %s 成功,获得 %s 页", user_id, code, pages)
                 return True, "兑换成功", pages
         except Exception as e:
             logger.error(f"使用兑换码失败 {code}: {e}")
@@ -499,10 +572,13 @@ class RedemptionCodeModel:
         """禁用兑换码"""
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     UPDATE redemption_codes SET is_active = 0 WHERE code = ?
                 """, (code,))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    logger.warning(f"禁用兑换码失败，兑换码不存在: {code}")
+                    return False
                 logger.info(f"兑换码 {code} 已禁用")
                 return True
         except Exception as e:
@@ -513,10 +589,13 @@ class RedemptionCodeModel:
         """激活兑换码"""
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     UPDATE redemption_codes SET is_active = 1 WHERE code = ?
                 """, (code,))
                 await db.commit()
+                if cursor.rowcount != 1:
+                    logger.warning(f"激活兑换码失败，兑换码不存在: {code}")
+                    return False
                 logger.info(f"兑换码 {code} 已激活")
                 return True
         except Exception as e:
@@ -674,6 +753,14 @@ class RegistrationTokenModel:
                           expires_days: Optional[int] = None,
                           description: Optional[str] = None) -> Optional[str]:
         """创建注册令牌"""
+        if not isinstance(max_uses, int) or isinstance(max_uses, bool) or max_uses <= 0:
+            return None
+        if expires_days is not None and (
+            not isinstance(expires_days, int)
+            or isinstance(expires_days, bool)
+            or expires_days <= 0
+        ):
+            return None
         try:
             token = self.generate_token()
             expires_at = None
@@ -743,43 +830,59 @@ class RegistrationTokenModel:
 
         return True, "有效"
 
-    async def use_token(self, token: str, user_id: str, username: str, user_uuid: str) -> tuple[bool, str]:
-        """使用注册令牌并记录使用者信息"""
-        # 验证令牌
-        is_valid, message = await self.validate_token(token)
-        if not is_valid:
-            return False, message
-
+    async def use_token(self, token: str, user_id: str, username: str) -> tuple[bool, str]:
+        """Consume a registration token in one serialized transaction."""
+        now = datetime.now(timezone.utc)
         try:
-            from datetime import datetime, timezone
             async with self.db_manager.get_connection() as db:
-                # 增加使用次数
-                await db.execute("""
-                    UPDATE registration_tokens SET used_count = used_count + 1
-                    WHERE token = ?
-                """, (token,))
+                await db.execute("BEGIN IMMEDIATE")
+                async with db.execute(
+                    """
+                    SELECT max_uses, used_count, expires_at, is_active
+                    FROM registration_tokens WHERE token = ?
+                    """,
+                    (token,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if not row:
+                    await db.rollback()
+                    return False, "注册令牌不存在"
 
-                # 记录使用历史
-                await db.execute("""
+                max_uses, used_count, expires_at, is_active = row
+                if not is_active or used_count >= max_uses:
+                    await db.rollback()
+                    return False, "注册令牌已达到最大使用次数或已禁用"
+                if expires_at:
+                    expiry = datetime.fromisoformat(expires_at)
+                    if expiry.tzinfo is None:
+                        expiry = expiry.replace(tzinfo=timezone.utc)
+                    if now > expiry:
+                        await db.rollback()
+                        return False, "注册令牌已过期"
+
+                cursor = await db.execute(
+                    """
+                    UPDATE registration_tokens
+                    SET used_count = used_count + 1,
+                        is_active = CASE WHEN used_count + 1 >= max_uses THEN 0 ELSE is_active END
+                    WHERE token = ? AND is_active = 1 AND used_count < max_uses
+                    """,
+                    (token,),
+                )
+                if cursor.rowcount != 1:
+                    await db.rollback()
+                    return False, "注册令牌已达到最大使用次数"
+
+                await db.execute(
+                    """
                     INSERT INTO registration_token_history (
                         user_id, token, username, user_uuid, registered_at
                     ) VALUES (?, ?, ?, ?, ?)
-                """, (user_id, token, username, user_uuid, datetime.now(timezone.utc).isoformat()))
-
-                # 检查是否达到最大使用次数,如果达到则自动关闭
-                async with db.execute("""
-                    SELECT used_count, max_uses FROM registration_tokens WHERE token = ?
-                """, (token,)) as cursor:
-                    row = await cursor.fetchone()
-                    if row:
-                        used_count, max_uses = row
-                        if used_count >= max_uses:
-                            await db.execute("""
-                                UPDATE registration_tokens SET is_active = 0 WHERE token = ?
-                            """, (token,))
-
+                    """,
+                    (user_id, token, username, user_id, now.isoformat()),
+                )
                 await db.commit()
-                logger.info(f"注册令牌使用成功: user={username}, token={token}")
+                logger.info("注册令牌使用成功: user=%s, token=%s", username, token)
                 return True, "使用成功"
         except Exception as e:
             logger.error(f"使用注册令牌失败: {e}")
@@ -789,11 +892,14 @@ class RegistrationTokenModel:
         """禁用注册令牌"""
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     UPDATE registration_tokens SET is_active = 0 WHERE token = ?
                 """, (token,))
                 await db.commit()
-                logger.info(f"注册令牌已禁用")
+                if cursor.rowcount != 1:
+                    logger.warning("禁用注册令牌失败，令牌不存在")
+                    return False
+                logger.info("注册令牌已禁用")
                 return True
         except Exception as e:
             logger.error(f"禁用注册令牌失败: {e}")
@@ -803,11 +909,14 @@ class RegistrationTokenModel:
         """激活注册令牌"""
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     UPDATE registration_tokens SET is_active = 1 WHERE token = ?
                 """, (token,))
                 await db.commit()
-                logger.info(f"注册令牌已激活")
+                if cursor.rowcount != 1:
+                    logger.warning("激活注册令牌失败，令牌不存在")
+                    return False
+                logger.info("注册令牌已激活")
                 return True
         except Exception as e:
             logger.error(f"激活注册令牌失败: {e}")
@@ -882,11 +991,14 @@ class RegistrationTokenModel:
         """删除注册令牌"""
         try:
             async with self.db_manager.get_connection() as db:
-                await db.execute("""
+                cursor = await db.execute("""
                     DELETE FROM registration_tokens WHERE token = ?
                 """, (token,))
                 await db.commit()
-                logger.info(f"注册令牌已删除")
+                if cursor.rowcount != 1:
+                    logger.warning("删除注册令牌失败，令牌不存在")
+                    return False
+                logger.info("注册令牌已删除")
                 return True
         except Exception as e:
             logger.error(f"删除注册令牌失败: {e}")

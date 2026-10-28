@@ -3,12 +3,11 @@ import logging
 import time
 import traceback
 import random
-from typing import Dict, Any, Optional, Callable, List, Union, Type
-from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, Optional, Callable
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
 import aiohttp
-import json
 import re
 
 logger = logging.getLogger(__name__)
@@ -37,8 +36,8 @@ class RecoveryStrategy(Enum):
     RETRY = "retry"                    # 閲嶈瘯
     EXPONENTIAL_BACKOFF = "exp_backoff" # 鎸囨暟閫€閬块噸璇?
     CIRCUIT_BREAKER = "circuit_breaker" # 鐔旀柇鍣?
-    FALLBACK = "fallback"              # 闄嶇骇澶勭悊
-    ESCALATE = "escalate"              # 鍗囩骇澶勭悊
+    FALLBACK = "fallback"              # 降级处理
+    ESCALATE = "escalate"              # 升级处理
     IGNORE = "ignore"                  # 蹇界暐閿欒
     ABORT = "abort"                    # 涓鎿嶄綔
 
@@ -160,8 +159,8 @@ class ErrorClassifier:
                       operation: Optional[str] = None) -> tuple[ErrorType, ErrorSeverity]:
         """
         鍒嗙被閿欒
-        :param exception: 寮傚父瀵硅薄
-        :param operation: 鎿嶄綔绫诲瀷
+        :param exception: 异常对象
+        :param operation: 操作类型
         :return: (閿欒绫诲瀷, 涓ラ噸绋嬪害)
         """
         error_message = str(exception).lower()
@@ -182,7 +181,7 @@ class ErrorClassifier:
                         if pattern(exception):
                             classified_type = error_type
                             break
-                    except:
+                    except Exception:
                         continue
             if classified_type != ErrorType.UNKNOWN_ERROR:
                 break
@@ -211,7 +210,7 @@ class ErrorClassifier:
         
         severity = base_severity_map.get(error_type, ErrorSeverity.MEDIUM)
         
-        # 鍩轰簬鎿嶄綔绫诲瀷璋冩暣涓ラ噸绋嬪害
+        # 基于操作类型调整严重程度
         if operation:
             if operation in ['task_initialization', 'system_startup']:
                 # 鎻愬崌绯荤粺鍏抽敭鎿嶄綔鐨勪弗閲嶇▼搴?
@@ -253,12 +252,12 @@ class CircuitBreaker:
         return True
     
     def record_success(self):
-        """璁板綍鎴愬姛"""
+        """记录成功"""
         self.failure_count = 0
         self.state = 'closed'
     
     def record_failure(self):
-        """璁板綍澶辫触"""
+        """记录失败"""
         self.failure_count += 1
         self.last_failure_time = time.time()
         
@@ -361,8 +360,8 @@ class ErrorHandler:
                           metadata: Optional[Dict[str, Any]] = None) -> ErrorContext:
         """
         澶勭悊閿欒
-        :param exception: 寮傚父瀵硅薄
-        :param task_id: 浠诲姟ID
+        :param exception: 异常对象
+        :param task_id: 任务ID
         :param page_number: 椤甸潰缂栧彿
         :param operation: 鎿嶄綔鍚嶇О
         :param custom_config: 鑷畾涔夋仮澶嶉厤缃?
@@ -441,7 +440,7 @@ class ErrorHandler:
             error_context.retry_count += 1
             error_context.should_retry = True
 
-            # 璁＄畻寤惰繜鏃堕棿
+            # 计算延迟时间
             delay = config.base_delay
             if config.jitter:
                 delay += random.uniform(0, config.base_delay * 0.1)
@@ -490,7 +489,7 @@ class ErrorHandler:
             await self._handle_max_retries_exceeded(error_context)
     
     async def _handle_fallback(self, error_context: ErrorContext, config: RecoveryConfig):
-        """澶勭悊闄嶇骇绛栫暐"""
+        """处理降级策略"""
         fallback_message = {
             'type': 'fallback_activated',
             'error_id': error_context.error_id,
@@ -512,13 +511,13 @@ class ErrorHandler:
                 await config.fallback_handler(error_context)
                 self._error_stats['successful_recoveries'] += 1
             except Exception as e:
-                logger.error(f"闄嶇骇澶勭悊澶辫触: {e}")
+                logger.error(f"降级处理失败: {e}")
                 self._error_stats['failed_recoveries'] += 1
         
         logger.info(f"鎵ц闄嶇骇澶勭悊: {error_context.error_id}")
     
     async def _handle_escalation(self, error_context: ErrorContext, config: RecoveryConfig):
-        """澶勭悊鍗囩骇绛栫暐"""
+        """处理升级策略"""
         escalation_message = {
             'type': 'error_escalation',
             'error_id': error_context.error_id,
@@ -540,7 +539,7 @@ class ErrorHandler:
         logger.critical(f"閿欒鍗囩骇澶勭悊: {error_context.error_id} - {error_context.error_message}")
     
     async def _handle_ignore(self, error_context: ErrorContext, config: RecoveryConfig):
-        """澶勭悊蹇界暐绛栫暐"""
+        """处理忽略策略"""
         logger.info(f"蹇界暐閿欒: {error_context.error_id}")
         self._error_stats['successful_recoveries'] += 1
     
@@ -566,7 +565,7 @@ class ErrorHandler:
         self._error_stats['failed_recoveries'] += 1
     
     async def _handle_max_retries_exceeded(self, error_context: ErrorContext):
-        """澶勭悊閲嶈瘯娆℃暟瓒呴檺"""
+        """处理重试次数超限"""
         error_context.should_retry = False
         max_retries_message = {
             'type': 'max_retries_exceeded',
@@ -591,9 +590,9 @@ class ErrorHandler:
         """璁板綍閿欒鏃ュ織"""
         log_message = (
             f"閿欒澶勭悊 - ID: {error_context.error_id}, "
-            f"绫诲瀷: {error_context.error_type.value}, "
+            f"类型: {error_context.error_type.value}, "
             f"涓ラ噸绋嬪害: {error_context.severity.value}, "
-            f"浠诲姟: {error_context.task_id}, "
+            f"任务: {error_context.task_id}, "
             f"椤甸潰: {error_context.page_number}, "
             f"鎿嶄綔: {error_context.operation}, "
             f"娑堟伅: {error_context.error_message}"

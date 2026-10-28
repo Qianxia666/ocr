@@ -11,9 +11,17 @@ logger = logging.getLogger(__name__)
 class WebSocketConnection:
     """WebSocket连接包装类"""
     
-    def __init__(self, websocket: WebSocket, client_id: str):
+    def __init__(
+        self,
+        websocket: WebSocket,
+        client_id: str,
+        user_id: Optional[str] = None,
+        is_admin: bool = False,
+    ):
         self.websocket = websocket
         self.client_id = client_id
+        self.user_id = user_id
+        self.is_admin = is_admin
         self.connected_at = datetime.now(timezone.utc)
         self.last_heartbeat = datetime.now(timezone.utc)
         self.subscribed_tasks: Set[str] = set()
@@ -143,24 +151,30 @@ class WebSocketManager:
         await self.disconnect_all()
         logger.info("WebSocket管理器已停止")
     
-    async def connect(self, websocket: WebSocket, client_id: Optional[str] = None) -> str:
+    async def connect(
+        self,
+        websocket: WebSocket,
+        client_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        is_admin: bool = False,
+    ) -> str:
         """
         建立WebSocket连接
         :param websocket: WebSocket实例
         :param client_id: 客户端ID，如果不提供则自动生成
         :return: 客户端ID
         """
-        if client_id is None:
-            client_id = str(uuid.uuid4())
-
-        previous_connection = None
+        client_id = client_id or str(uuid.uuid4())
         async with self._lock:
-            previous_connection = self._detach_connection_locked(client_id)
-            connection = WebSocketConnection(websocket, client_id)
+            if client_id in self.connections:
+                client_id = f"{client_id}_{uuid.uuid4().hex[:8]}"
+            connection = WebSocketConnection(
+                websocket,
+                client_id,
+                user_id=user_id,
+                is_admin=is_admin,
+            )
             self.connections[client_id] = connection
-
-        if previous_connection:
-            await previous_connection.close(code=1000, reason="Connection replaced")
         
         logger.info(f"WebSocket连接已建立: {client_id}")
         
@@ -222,7 +236,14 @@ class WebSocketManager:
 
         return False
     
-    async def broadcast(self, message: Dict[str, Any], exclude_clients: Optional[Set[str]] = None) -> int:
+    async def broadcast(
+        self,
+        message: Dict[str, Any],
+        exclude_clients: Optional[Set[str]] = None,
+        *,
+        require_authenticated: bool = False,
+        require_admin: bool = False,
+    ) -> int:
         """
         广播消息给所有连接的客户端
         :param message: 要发送的消息
@@ -233,7 +254,12 @@ class WebSocketManager:
         sent_count = 0
         
         async with self._lock:
-            client_ids = list(self.connections.keys())
+            client_ids = [
+                client_id
+                for client_id, connection in self.connections.items()
+                if (not require_authenticated or connection.user_id)
+                and (not require_admin or connection.is_admin)
+            ]
         
         for client_id in client_ids:
             if client_id not in exclude_clients:
@@ -241,6 +267,33 @@ class WebSocketManager:
                     sent_count += 1
         
         return sent_count
+
+    async def _can_access_task(self, client_id: str, task_id: str) -> bool:
+        """Allow task messages only for the owner or an administrator."""
+        async with self._lock:
+            connection = self.connections.get(client_id)
+            if not connection or not connection.user_id:
+                return False
+            user_id = connection.user_id
+            is_admin = connection.is_admin
+
+        try:
+            from models.database import task_model
+
+            task = await task_model.get_task(task_id)
+        except Exception as exc:
+            logger.error("任务订阅权限检查失败 %s: %s", task_id, exc)
+            return False
+
+        return bool(task and (is_admin or task.get("user_id") == user_id))
+
+    async def _send_task_access_denied(self, client_id: str, task_id: str) -> None:
+        await self.send_to_client(client_id, {
+            'type': 'error',
+            'task_id': task_id,
+            'message': '无权访问任务',
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
     
     async def send_to_task_subscribers(self, task_id: str, message: Dict[str, Any]) -> int:
         """
@@ -316,6 +369,10 @@ class WebSocketManager:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             })
             return
+
+        if not await self._can_access_task(client_id, task_id):
+            await self._send_task_access_denied(client_id, task_id)
+            return
         
         async with self._lock:
             if client_id in self.connections:
@@ -373,6 +430,10 @@ class WebSocketManager:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             })
             return
+
+        if not await self._can_access_task(client_id, task_id):
+            await self._send_task_access_denied(client_id, task_id)
+            return
         
         try:
             # 集成任务管理器获取实际任务状态
@@ -392,9 +453,10 @@ class WebSocketManager:
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 })
         except Exception as e:
+            logger.error("获取任务状态失败 %s: %s", task_id, e)
             await self.send_to_client(client_id, {
                 'type': 'error',
-                'message': f'获取任务状态失败: {str(e)}',
+                'message': '获取任务状态失败',
                 'timestamp': datetime.now(timezone.utc).isoformat()
             })
     
@@ -460,6 +522,8 @@ class WebSocketManager:
             connection = self.connections[client_id]
             return {
                 'client_id': client_id,
+                'user_id': connection.user_id,
+                'is_admin': connection.is_admin,
                 'connected_at': connection.connected_at.isoformat(),
                 'last_heartbeat': connection.last_heartbeat.isoformat(),
                 'subscribed_tasks': list(connection.subscribed_tasks),

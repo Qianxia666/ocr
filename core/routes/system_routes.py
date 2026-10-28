@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
-import aiosqlite
-from fastapi import APIRouter, HTTPException
+from core import aiosqlite_compat as aiosqlite
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from models.database import db_manager
@@ -30,6 +30,12 @@ def register_system_routes(
         if not manager:
             raise HTTPException(status_code=503, detail="任务管理器未初始化")
         return manager
+
+    async def require_admin(request: Request):
+        auth_manager = get_auth_manager()
+        if not auth_manager:
+            raise HTTPException(status_code=503, detail="认证管理器未初始化")
+        return await auth_manager.require_admin(request)
 
     @public_router.get("/healthz")
     @public_router.get("/health")
@@ -63,8 +69,9 @@ def register_system_routes(
             )
 
     @protected_router.get("/api/system/health")
-    async def get_system_health_api():
+    async def get_system_health_api(request: Request):
         """Return current system health snapshot."""
+        await require_admin(request)
         task_manager = require_task_manager()
 
         try:
@@ -104,12 +111,13 @@ def register_system_routes(
                 }
             )
         except Exception as exc:
-            logger.error("get_system_health_failed: %s", exc)
-            raise HTTPException(status_code=500, detail=str(exc))
+            logger.error("get_system_health_failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="internal server error")
 
     @protected_router.get("/api/system/metrics")
-    async def get_system_metrics_api():
+    async def get_system_metrics_api(request: Request):
         """Return system metrics for dashboard consumption."""
+        await require_admin(request)
         task_manager = require_task_manager()
 
         try:
@@ -127,12 +135,13 @@ def register_system_routes(
 
             return JSONResponse({"status": "success", "data": metrics})
         except Exception as exc:
-            logger.error("get_system_metrics_failed: %s", exc)
-            raise HTTPException(status_code=500, detail=str(exc))
+            logger.error("get_system_metrics_failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="internal server error")
 
     @protected_router.get("/api/system/recovery")
-    async def get_recovery_stats_api():
+    async def get_recovery_stats_api(request: Request):
         """Return error/recovery statistics."""
+        await require_admin(request)
         task_manager = require_task_manager()
 
         try:
@@ -160,8 +169,8 @@ def register_system_routes(
                 }
             )
         except Exception as exc:
-            logger.error("get_recovery_stats_failed: %s", exc)
-            raise HTTPException(status_code=500, detail=str(exc))
+            logger.error("get_recovery_stats_failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="internal server error")
 
     app.include_router(public_router)
     app.include_router(protected_router)

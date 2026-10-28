@@ -7,13 +7,12 @@ import asyncio
 import json
 import logging
 import os
-import pickle
 import shutil
 import sqlite3
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Callable, Set, Tuple
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Any, Callable, Set
+from dataclasses import dataclass
 from pathlib import Path
 from contextlib import contextmanager
 from enum import Enum
@@ -1052,7 +1051,7 @@ class RecoveryManager:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
-            await self.websocket_manager.broadcast(message)
+            await self.websocket_manager.broadcast(message, require_admin=True)
             
         except Exception as e:
             logger.error(f"发送检查点通知失败: {e}")
@@ -1069,7 +1068,7 @@ class RecoveryManager:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
-            await self.websocket_manager.broadcast(message)
+            await self.websocket_manager.broadcast(message, require_admin=True)
             
         except Exception as e:
             logger.error(f"发送恢复通知失败: {e}")
@@ -1086,7 +1085,7 @@ class RecoveryManager:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
-            await self.websocket_manager.broadcast(message)
+            await self.websocket_manager.broadcast(message, require_admin=True)
             
         except Exception as e:
             logger.error(f"发送恢复任务通知失败: {e}")

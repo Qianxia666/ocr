@@ -1,12 +1,14 @@
-import uuid
 import secrets
 import logging
+import os
 from typing import Optional, Dict, Any
-from functools import wraps
 from fastapi import Request, HTTPException, Response
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _secure_session_cookie() -> bool:
+    return os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class AuthManager:
@@ -43,7 +45,8 @@ class AuthManager:
             path='/',
             max_age=30 * 24 * 60 * 60,  # 30天
             httponly=True,
-            samesite='lax'
+            samesite='lax',
+            secure=_secure_session_cookie(),
         )
 
         logger.info(f"用户 {username} 登录成功")
@@ -61,22 +64,18 @@ class AuthManager:
         if existing_user:
             return False, "用户名已存在", None
 
-        # 检查是否是首个用户
-        user_count = await self.user_model.count_users()
-        is_first_user = (user_count == 0)
-        is_admin = is_first_user
-        initial_pages = 1000000 if is_admin else 0  # 管理员获得100万页初始配额
-
-        # 创建用户
+        # The database transaction decides the first administrator atomically.
         user_id = await self.user_model.create_user(
             username=username,
             password=password,
-            is_admin=is_admin,
-            total_pages=initial_pages
+            auto_first_admin=True,
         )
 
         if not user_id:
             return False, "用户创建失败", None
+
+        created_user = await self.user_model.get_user(user_id)
+        is_first_user = bool(created_user and created_user.get("is_admin"))
 
         if is_first_user:
             logger.info(f"首个用户 {username} 注册成功,已设置为管理员")
@@ -114,6 +113,8 @@ class AuthManager:
             return None
 
         user = await self.user_model.get_user_by_session(session_token)
+        if user and user.get("is_disabled"):
+            return None
         return user
 
     async def require_user(self, request: Request) -> Dict[str, Any]:
@@ -132,6 +133,8 @@ class AuthManager:
 
     async def check_quota(self, user_id: str, required_pages: int) -> tuple[bool, str]:
         """检查用户配额是否充足"""
+        if not isinstance(required_pages, int) or isinstance(required_pages, bool) or required_pages <= 0:
+            return False, "请求页数无效"
         quota = await self.user_model.get_quota(user_id)
         if not quota:
             return False, "无法获取用户配额信息"

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
 from enum import Enum
 import json

@@ -1,17 +1,15 @@
 import asyncio
-import uuid
 import logging
 import time
 import fitz  # PyMuPDF
-from typing import Dict, Any, Optional, List, AsyncGenerator, Tuple
-from datetime import datetime, timezone
+from typing import Dict, Any, Optional, List
 import aiohttp
 import json
 from enum import Enum
 
 from models.database import (
-    TaskStatus, TaskType, task_model, page_result_model,
-    task_progress_model, page_batch_model
+    task_model, page_result_model,
+    page_batch_model
 )
 from core.image_utils import compress_image_to_target_ratio
 from core.ocr_client import OCRServiceError, request_ocr_markdown
@@ -118,7 +116,7 @@ class PageProcessor:
             task_data = await task_model.get_task(task_id)
             if task_data and task_data.get('file_name'):
                 return f"[{task_data['file_name']}] "
-        except:
+        except Exception:
             pass
         return ''
 
