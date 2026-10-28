@@ -92,7 +92,7 @@ class SystemIntegration:
             try:
                 await self.error_handler.initialize()
             except Exception as e:
-                logger.warning(f"閿欒澶勭悊鍣ㄥ垵濮嬪寲澶辫触: {e}")
+                logger.warning(f"错误处理器初始化失败: {e}")
             
             try:
                 await self.system_monitor.initialize()
@@ -102,7 +102,7 @@ class SystemIntegration:
             try:
                 await self.recovery_manager.initialize()
             except Exception as e:
-                logger.warning(f"鎭㈠绠＄悊鍣ㄥ垵濮嬪寲澶辫触: {e}")
+                logger.warning(f"恢复管理器初始化失败: {e}")
             
             # 鍚姩鐩戞帶浠诲姟
             asyncio.create_task(self._monitoring_loop())
@@ -133,7 +133,7 @@ class SystemIntegration:
             logger.info("system integration shutdown complete")
             
         except Exception as e:
-            logger.error(f"绯荤粺闆嗘垚鍣ㄥ叧闂け璐? {e}")
+            logger.error(f"系统集成器关闭失败: {e}")
     
     # ========== 任务处理相关方法 ==========
     
@@ -265,7 +265,7 @@ class SystemIntegration:
             return timeout_context
             
         except Exception as e:
-            logger.error(f"浠诲姟鐩戞帶鍚姩澶辫触 {task_id}: {e}")
+            logger.error(f"任务监控启动失败 {task_id}: {e}")
             raise
     
     async def complete_task_monitoring(self, task_id: str, timeout_context, success: bool = True):
@@ -344,7 +344,7 @@ class SystemIntegration:
             }
             
         except Exception as e:
-            logger.error(f"鑾峰彇绯荤粺鍋ュ悍鐘舵€佸け璐? {e}")
+            logger.error(f"获取系统健康状态失败: {e}")
             return {
                 "timestamp": datetime.now().isoformat(),
                 "overall_status": "error",
@@ -374,10 +374,10 @@ class SystemIntegration:
                     task_id, message.to_dict()
                 )
             
-            logger.warning(f"浠诲姟 {task_id} 瓒呮椂棰勮: {percentage:.1f}% ({elapsed_time:.1f}s/{total_timeout}s)")
+            logger.warning(f"任务 {task_id} 超时预警: {percentage:.1f}% ({elapsed_time:.1f}s/{total_timeout}s)")
             
         except Exception as e:
-            logger.error(f"澶勭悊瓒呮椂棰勮澶辫触: {e}")
+            logger.error(f"处理超时预警失败: {e}")
     
     async def _on_timeout_occurred(self, timeout_id: str, task_id: str, elapsed_time: float):
         """处理超时发生"""
@@ -430,10 +430,10 @@ class SystemIntegration:
                 )
             
             status = "成功" if success else "失败"
-            logger.info(f"浠诲姟 {task_id} 閿欒鎭㈠{status}: {error_type} -> {recovery_action}")
+            logger.info(f"任务 {task_id} 错误恢复{status}: {error_type} -> {recovery_action}")
             
         except Exception as e:
-            logger.error(f"澶勭悊閿欒鎭㈠澶辫触: {e}")
+            logger.error(f"处理错误恢复失败: {e}")
     
     async def _on_system_alert(self, alert_type: str, message: str, 
                              severity: str, metrics: Dict[str, Any]):
@@ -456,10 +456,10 @@ class SystemIntegration:
                     require_admin=True,
                 )
             
-            logger.warning(f"绯荤粺鍛婅 ({severity}): {alert_type} - {message}")
+            logger.warning(f"系统告警 ({severity}): {alert_type} - {message}")
             
         except Exception as e:
-            logger.error(f"澶勭悊绯荤粺鍛婅澶辫触: {e}")
+            logger.error(f"处理系统告警失败: {e}")
     
     async def _on_recovery_notification(self, event_type: str, task_id: str, 
                                       message: str, data: Dict[str, Any]):
@@ -479,10 +479,10 @@ class SystemIntegration:
                     task_id, recovery_message.to_dict()
                 )
             
-            logger.info(f"鎭㈠閫氱煡 {task_id}: {event_type} - {message}")
+            logger.info(f"恢复通知 {task_id}: {event_type} - {message}")
             
         except Exception as e:
-            logger.error(f"澶勭悊鎭㈠閫氱煡澶辫触: {e}")
+            logger.error(f"处理恢复通知失败: {e}")
     
     # ========== 鍐呴儴鏂规硶 ==========
     
@@ -511,7 +511,7 @@ class SystemIntegration:
                 )
             
         except Exception as e:
-            logger.error(f"澶勭悊瓒呮椂閿欒澶辫触: {e}")
+            logger.error(f"处理超时错误失败: {e}")
     
     async def _send_error_notification(self, task_id: str, error_msg: str):
         """鍙戦€侀敊璇€氱煡"""
@@ -524,7 +524,7 @@ class SystemIntegration:
                     task_id, message.to_dict()
                 )
         except Exception as e:
-            logger.error(f"鍙戦€侀敊璇€氱煡澶辫触: {e}")
+            logger.error(f"发送错误通知失败: {e}")
     
     async def _monitoring_loop(self):
         """鐩戞帶寰幆 - 瀹氭湡妫€鏌ョ郴缁熺姸鎬?"""
@@ -545,7 +545,7 @@ class SystemIntegration:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"鐩戞帶寰幆寮傚父: {e}")
+                logger.error(f"监控循环异常: {e}")
                 await asyncio.sleep(60)  # 鍙戠敓寮傚父鏃剁瓑寰呮洿闀挎椂闂?
 
 # 鍏ㄥ眬绯荤粺闆嗘垚鍣ㄥ疄渚?
