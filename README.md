@@ -16,7 +16,7 @@
 ## 目录
 
 - [功能特性](#功能特性)
-- [快速开始](#快速开始)
+- [部署指南（零基础）](#部署指南零基础)
 - [首次使用](#首次使用)
 - [使用方式](#使用方式)
 - [配置说明](#配置说明)
@@ -37,78 +37,281 @@
 | 安全与防滥用 | Session 登录、可选 Cloudflare Turnstile、同 IP 多账号检测与自动封停 |
 | 部署方式 | Docker / Docker Compose、健康检查、SQLite 持久化、运行参数在线调整 |
 
-## 快速开始
+## 部署指南（零基础）
 
-### 环境要求
+> 整个部署过程分为 6 步：安装 Docker → 准备 API Key → 下载项目 → 填写 `.env` → 启动服务 → 注册管理员。下面按顺序详细说明，照着复制命令即可。
 
-- Docker 与 Docker Compose（推荐），或 Python 3.10+（官方镜像基于 Python 3.12）
-- 一个 OpenAI 兼容的 API Key，且所用模型支持图片输入（默认 `gpt-4o`）
+### 部署前准备
 
-### 方式一：Docker Compose（推荐）
+| 需要准备 | 说明 |
+| --- | --- |
+| 一台电脑或服务器 | 普通电脑即可；云服务器建议 2 核 4GB 内存以上 |
+| Docker | 用来运行本服务，第 1 步会教你安装 |
+| 模型 API Key | 来自 OpenAI 或任意兼容 OpenAI 协议的服务商 |
+| 支持图片的模型名 | 例如 `gpt-4o`，模型必须能接收图片 |
+
+### 第 1 步：安装 Docker
+
+**Windows / macOS**
+
+1. 打开 [Docker Desktop 下载页](https://www.docker.com/products/docker-desktop/)。
+2. 下载对应系统的安装包并安装。
+   - Windows 安装时如果提示启用 WSL2，按提示开启并重启电脑。
+   - macOS 根据芯片选择 Apple Silicon 或 Intel 版本。
+3. 安装完成后启动 Docker Desktop，等待鲸鱼图标显示为运行状态。
+
+**Linux**
+
+按官方文档安装 Docker Engine 和 Compose 插件：[Docker Engine 安装指南](https://docs.docker.com/engine/install/)。
+
+安装完成后打开终端验证：
+
+```bash
+docker --version
+docker compose version
+```
+
+两条命令都能输出版本号，说明安装成功。如果提示 `docker compose` 不是有效命令，请先启动 Docker Desktop，或安装 Compose 插件。旧版本系统可能只有 `docker-compose` 命令，后续命令把 `docker compose` 换成 `docker-compose` 即可。
+
+### 第 2 步：准备 API Key 和模型
+
+本服务通过 OpenAI 兼容接口调用模型，需要在 `.env` 中填写三项：
+
+| 配置项 | 填什么 | 示例 |
+| --- | --- | --- |
+| `API_BASE_URL` | 服务商的 API 根地址，**不要带 `/v1`** | `https://api.openai.com` |
+| `OPENAI_API_KEY` | 服务商提供的 API Key | `sk-xxxxxxxx` |
+| `MODEL` | 支持图片输入的模型名称 | `gpt-4o` |
+
+- 使用 OpenAI 时，可在 [OpenAI API Keys](https://platform.openai.com/api-keys) 创建 Key。
+- 使用其他服务商或中转服务时，填写对方提供的地址、Key 和模型名即可。
+- API Key 等同于密码，不要发到群里、截图里，也不要提交到 GitHub。
+
+### 第 3 步：下载项目
+
+**方式 A：不安装 Git（推荐给新手）**
+
+1. 打开 [https://github.com/Qianxia666/ocr](https://github.com/Qianxia666/ocr)。
+2. 点击绿色 `Code` 按钮 → `Download ZIP`。
+3. 解压到一个**路径中不含中文和空格**的目录，例如 `D:\ocr` 或 `~/ocr`。
+
+**方式 B：使用 Git**
 
 ```bash
 git clone https://github.com/Qianxia666/ocr.git
 cd ocr
+```
 
+后面的命令都要在**项目文件夹**中执行。判断方法：该文件夹里能看到 `docker-compose.yml`、`main.py` 和 `.env.example`。
+
+- Windows：打开项目文件夹，点击顶部地址栏，输入 `cmd` 后回车。
+- macOS：打开「终端」，输入 `cd `（注意有空格），把项目文件夹拖进终端窗口后回车。
+- Linux：在项目文件夹中右键选择「在终端中打开」。
+
+### 第 4 步：创建并填写 `.env`
+
+复制配置模板：
+
+**Windows（命令提示符）**
+
+```bat
+copy .env.example .env
+notepad .env
+```
+
+**macOS / Linux**
+
+```bash
 cp .env.example .env
-# 编辑 .env，至少填写 OPENAI_API_KEY 和 MODEL
-
-docker compose up -d
+nano .env
 ```
 
-> 使用 Compose v1 时，请把 `docker compose` 换成 `docker-compose`。
+也可以用 VS Code 打开项目文件夹，把 `.env.example` 复制一份并改名为 `.env`，再编辑 `.env`。
 
-启动成功后可以访问：
+至少修改下面几行，其余保持默认：
 
-| 入口 | 地址 |
-| --- | --- |
-| 首页 | `http://localhost:54188` |
-| 管理后台 | `http://localhost:54188/admin` |
-| API 文档（Swagger） | `http://localhost:54188/docs` |
-| 健康检查 | `http://localhost:54188/healthz` |
+```env
+API_BASE_URL=https://api.openai.com
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
+MODEL=gpt-4o
+PASSWORD=myocr
+```
 
-> `PASSWORD` 是可选的 URL 访问前缀，**不是登录密码**。设置 `PASSWORD=abc` 后，业务页面和 API 路径前需要加上 `/abc`（例如 `/abc/api/async/image`）；留空则不启用前缀。`/login`、`/admin`、`/docs` 不受影响。
+填写说明：
+
+- 等号两边不要加空格，值不需要加引号。
+- `PASSWORD` 是**网址前缀**，不是登录密码。填写 `myocr` 后，登录后的主页是 `http://localhost:54188/myocr`；请换成自己容易记住的英文字母和数字。
+- 如果保留 `.env.example` 里的 `PASSWORD=your-password-here`，前缀就会是 `your-password-here`；如果留空或删除这一行，Docker Compose 会默认使用 `pwd`。所以请明确填一个值。
+- `.env` 保存着 API Key，不要删除、不要上传，也不要提交到 Git。
+
+### 第 5 步：启动服务
+
+在项目文件夹中执行：
+
+```bash
+docker compose up -d --build
+```
+
+第一次启动会下载镜像并安装依赖，等待命令执行结束即可。然后检查容器状态：
+
+```bash
+docker compose ps
+```
+
+当 `STATUS` 显示 `Up`（健康检查通过后还会显示 `healthy`）就表示启动成功。查看实时日志：
+
+```bash
+docker compose logs -f
+```
+
+看到 `应用启动完成` 和 `Uvicorn running on http://0.0.0.0:54188` 即正常。按 `Ctrl + C` 只会退出日志查看，不会停止服务。
+
+也可以直接用浏览器打开：
+
+```text
+http://localhost:54188/healthz
+```
+
+看到 `{"status":"healthy",...}` 说明服务正常。
+
+> 使用期间请保持 Docker Desktop 处于运行状态；关闭 Docker Desktop 后服务会停止。
 >
-> 注意：`docker-compose.yml` 在未提供 `PASSWORD` 时会默认使用 `pwd`，首次部署请确认该值。
+> 如果提示端口已被占用，把 `.env` 里的 `HOST_PORT` 改成另一个数字（如 `8080`），重新执行 `docker compose up -d --build`，然后访问 `http://localhost:8080`。
 
-### 方式二：Docker
+### 第 6 步：打开网页并注册管理员
+
+1. 浏览器访问 `http://localhost:54188`（改过 `HOST_PORT` 就用对应端口）。
+2. 点击「注册」，填写用户名和密码。
+3. **第一个注册的账号会自动成为管理员**。
+4. 如果 `PASSWORD=myocr`，登录后页面会自动跳转到 `http://localhost:54188/myocr`，建议收藏该地址。
+5. 管理后台地址：`http://localhost:54188/admin`。
+
+注册后的配额、关闭公开注册、生成兑换码等操作，请看下一节「首次使用」。
+
+> 公网部署建议：完成首个管理员注册后关闭公开注册，并为管理员设置强密码、启用 HTTPS；需要时再开启 Turnstile。
+
+### 部署完成检查
+
+- [ ] `docker compose ps` 中容器状态为 `Up`
+- [ ] 浏览器能打开 `/healthz` 并显示 `healthy`
+- [ ] 首页能正常打开并完成注册
+- [ ] 上传一张图片能正常识别
+
+### 停止、重启、升级与备份
 
 ```bash
-docker build -t ocr-service .
-
-docker run -d \
-  --name ocr-service \
-  --restart unless-stopped \
-  -p 54188:54188 \
-  -v "$(pwd)/data:/app/data" \
-  --env-file .env \
-  ocr-service
+docker compose logs -f          # 查看实时日志
+docker compose stop             # 停止服务（保留容器和数据）
+docker compose start            # 再次启动
+docker compose restart          # 重启
+docker compose down             # 停止并删除容器（data/ 数据仍在）
+docker compose up -d --build    # 重新构建并启动，升级代码后用
 ```
 
-### 方式三：本地运行
+- 用户、任务、配额等数据都在项目目录的 `data/` 文件夹中。
+- 备份：直接复制整个 `data/` 文件夹。
+- 升级：先备份 `data/`，Git 用户执行 `git pull`，ZIP 用户重新下载并覆盖代码，最后执行 `docker compose up -d --build`。
+
+### 部署常见问题
+
+**`docker: command not found` 或 `docker compose` 不是有效命令？**
+说明 Docker 未安装或没有启动。先启动 Docker Desktop，再执行 `docker --version` 和 `docker compose version` 验证。
+
+**Docker Desktop 一直启动失败或卡在启动中？**
+Windows 需要开启 CPU 虚拟化（在 BIOS/UEFI 中设置）并启用 WSL2；可先在 PowerShell 中执行 `wsl --update`，再重启 Docker Desktop。macOS 请确认已允许 Docker Desktop 的系统权限。
+
+**端口被占用 / `port is already allocated`？**
+修改 `.env` 中的 `HOST_PORT`（例如改为 `8080`），重新执行 `docker compose up -d --build`。
+
+**浏览器打不开，提示无法连接？**
+先执行 `docker compose ps` 确认容器是 `running`，再执行 `docker compose logs --tail=100` 查看报错。常见原因是 Docker 没启动、端口未放行或 `.env` 填写错误。
+
+**日志提示 401、403 或模型不存在？**
+检查 `API_BASE_URL`、`OPENAI_API_KEY`、`MODEL` 是否和服务商一致；`API_BASE_URL` 不要带 `/v1`，模型必须支持图片输入。
+
+**注册后上传任务失败或提示配额不足？**
+新用户默认 0 页配额。管理员需要在「管理后台 → 用户管理」中分配配额，或生成兑换码。
+
+**改了 `.env` 但不生效？**
+执行 `docker compose up -d --force-recreate`，让容器按新配置重新创建。
+
+**升级后数据会丢吗？**
+不会。数据保存在 `data/` 目录，只要不删除该目录即可。仍建议升级前备份。
+
+<details>
+<summary>备选方案一：不用 Docker，直接用 Python 运行</summary>
+
+适合想在本机调试、或无法安装 Docker 的用户。建议使用 Python 3.12（最低 3.10）。
+
+**1. 安装 Python**
+
+从 [python.org](https://www.python.org/downloads/) 下载并安装。Windows 安装时务必勾选 `Add Python to PATH`。
+
+安装后验证：
 
 ```bash
+python --version
+# macOS / Linux 如果没有 python 命令，改用 python3 --version
+```
+
+**2. 安装依赖并启动**
+
+在项目文件夹中执行。
+
+Windows（命令提示符）：
+
+```bat
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
+.venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env             # 编辑其中的 API 配置
 python main.py
-
-# 也可以指定监听地址和端口
-python main.py --host 0.0.0.0 --port 8000
 ```
 
-> 首次启动会自动创建 SQLite 数据库和所需目录。生产环境请把 `data/` 目录挂载到宿主机，避免容器重建后数据丢失。
+macOS / Linux：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 main.py
+```
+
+启动后访问 `http://localhost:54188`。如果端口被占用：
+
+```bash
+python main.py --port 8000
+```
+
+按 `Ctrl + C` 停止服务。本地运行时同样需要先创建 `.env` 并填写 API 配置；此时 `PASSWORD` 可以留空，登录后直接访问 `http://localhost:54188`。
+
+</details>
+
+<details>
+<summary>备选方案二：部署到云服务器（公网访问）</summary>
+
+1. 准备一台 Linux 云服务器（建议 2 核 4GB 内存以上），按上文的 Linux 步骤安装 Docker。
+2. 在云厂商控制台的**安全组**中放行要使用的端口（默认 `54188`）。
+3. 用 SSH 登录服务器，按「第 3 步～第 6 步」下载项目、填写 `.env`、启动服务。
+4. 浏览器访问 `http://服务器公网IP:54188`。
+
+如果需要域名和 HTTPS，建议在前面加一层 Nginx 或 Caddy 反向代理，并设置：
+
+```env
+TRUST_PROXY_HEADERS=true
+SESSION_COOKIE_SECURE=true
+```
+
+仅临时试用可以直接用 `IP:端口` 访问；正式使用时请配置 HTTPS、关闭公开注册并使用强密码。
+
+</details>
 
 ## 首次使用
 
-1. 打开首页并注册账号。**第一个注册的用户会自动成为管理员**。
-2. 新注册用户默认配额为 **0 页**。管理员可在「管理后台 → 用户管理」调整配额，或生成兑换码让用户自行兑换。
-3. 如需关闭公开注册，可在「管理后台 → 系统设置 → 注册功能」中关闭；关闭后使用「注册令牌」邀请注册（支持有效期和最大使用次数）。
-4. 登录后即可上传图片或 PDF，查看识别进度并导出结果。
+完成注册并登录后，建议按下面顺序完成初始设置：
 
-> 公网部署建议：完成首个管理员注册后关闭公开注册，并为管理员设置强密码、启用 HTTPS；需要时再开启 Turnstile。
+1. **确认管理员账号**：第一个注册的账号会自动成为管理员。后续注册的用户默认配额为 **0 页**，管理员可在「管理后台 → 用户管理」调整配额，或生成兑换码让用户自行兑换。
+2. **控制注册入口**：如需关闭公开注册，可在「管理后台 → 系统设置 → 注册功能」中关闭；关闭后使用「注册令牌」邀请注册（支持有效期和最大使用次数）。
+3. **开始识别**：上传图片或 PDF，查看识别进度并导出结果。
 
 ## 工作流程
 
