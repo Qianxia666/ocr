@@ -6,399 +6,159 @@
     <title>{{ title }}</title>
     <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        html {
-            scroll-behavior: smooth;
-            scroll-snap-type: y mandatory;
-        }
-
-        body {
-            margin: 0;
-            padding: 0;
-            overflow-x: hidden;
-            background: linear-gradient(to bottom right, #eff6ff, #e7e5ff) !important;
-        }
-
-        .section {
-            min-height: 100vh;
-            scroll-snap-align: start;
-            scroll-snap-stop: always;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
-
-        .blue-gradient-bg {
-            background: #2563eb !important;
-        }
-
-        .feature-card {
-            transition: all 0.3s ease;
-        }
-
-        .feature-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-        }
-
-        .hero-animation {
-            animation: fadeInUp 0.8s ease-out;
-        }
-
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .typewriter-text {
-            display: inline;
-        }
-
-        .typewriter-cursor {
-            display: inline-block;
-            width: 3px;
-            height: 1em;
-            background-color: currentColor;
-            margin-left: 2px;
-            animation: blink 0.75s step-end infinite;
-        }
-
-        @keyframes blink {
-            50% {
-                opacity: 0;
-            }
-        }
-
-        @keyframes fadeIn {
-            to {
-                opacity: 1;
-            }
-        }
-
-        .ocr-blue {
-            color: #2563eb;
-        }
-
-        .nav-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.5);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .nav-dot.active {
-            background: white;
-            transform: scale(1.2);
-        }
-
-        @media (max-width: 768px) {
-            .section {
-                min-height: 100vh;
-                min-height: 100dvh; /* 动态视口高度 */
-                padding-top: 5rem;
-                padding-bottom: 3rem;
-            }
-
-            .feature-card {
-                padding: 1.5rem !important;
-            }
-
-            nav h1 {
-                font-size: 1rem !important;
-            }
-
-            /* 调整间距以适应移动端全屏 */
-            .text-center.mb-8 {
-                margin-bottom: 2rem !important;
-            }
-
-            .grid.gap-6 {
-                gap: 1rem !important;
-            }
-        }
-
-        @media (max-width: 640px) {
-            .section {
-                padding-top: 4rem;
-                padding-bottom: 2rem;
-            }
-
-            .blue-gradient-bg.rounded-2xl {
-                padding: 2rem !important;
-            }
-        }
-
-        
-        @keyframes scroll {
-            0% {
-                transform: translateX(0);
-            }
-            100% {
-                transform: translateX(-50%);
-            }
-        }
-
-        
-        .animate-scroll {
-            display: inline-block;
-        }
-
-        /* 当文字过长时启用滚动 */
-        .broadcast-scroll .animate-scroll {
-            animation: scroll 20s linear infinite;
-            padding-right: 100%;
-        }
-
-        /* 广播条胶囊样式 - 还原截图 */
-        .broadcast-capsule {
-            position: relative;
-            background: rgba(255, 255, 255, 0.96);
-            border-radius: 50px;
-            padding: 12px 20px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-            backdrop-filter: blur(10px);
-            display: inline-flex;
-            align-items: center;
-            gap: 12px;
-            max-width: 90vw;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
-        .broadcast-capsule:hover {
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
-            transform: translateY(-2px);
-        }
-
-        .broadcast-link-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            text-decoration: none;
-            flex: 1;
-            min-width: 0;
-        }
-
-        .broadcast-text {
-            font-size: 15px;
-            font-weight: 500;
-            color: #1f2937;
-            white-space: nowrap;
-            letter-spacing: 0.01em;
-        }
-
-        .broadcast-emoji {
-            font-size: 20px;
-            flex-shrink: 0;
-        }
-
-        .broadcast-arrow {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: rgba(229, 231, 235, 0.6);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            transition: all 0.3s ease;
-        }
-
-        .broadcast-arrow svg {
-            color: #6b7280;
-            transition: transform 0.3s ease;
-        }
-
-        .broadcast-link-wrapper:hover .broadcast-arrow {
-            background: rgba(209, 213, 219, 0.8);
-        }
-
-        .broadcast-link-wrapper:hover .broadcast-arrow svg {
-            transform: translateX(2px);
-        }
-
-    </style>
+  <link rel="stylesheet" href="/static/console.css">
 </head>
-<body class="bg-gradient-to-br from-blue-50 to-indigo-100">
-    <!-- 导航栏 -->
-    <nav class="bg-white/90 backdrop-blur-md shadow-sm fixed w-full top-0 z-50">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between items-center h-14 sm:h-16">
-                <div class="flex items-center space-x-2">
-                    <svg class="w-6 h-6 sm:w-8 sm:h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                    <h1 class="text-base sm:text-xl font-bold text-gray-800 truncate max-w-[150px] sm:max-w-none">{{ title }}</h1>
-                </div>
-                <div class="flex items-center space-x-2 sm:space-x-4">
-                    <a href="/login" class="text-sm sm:text-base text-gray-600 hover:text-blue-600 font-medium transition">登录</a>
-                    {% if registration_enabled %}
-                    <a href="/login" onclick="showRegisterTab(event)" class="bg-blue-600 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-base font-medium hover:bg-blue-700 transition">注册</a>
-                    {% endif %}
-                </div>
+<body class="landing">
+    <nav class="topline">
+        <div class="topline-inner">
+            <a class="mark" href="/">
+                <span class="mark-box">OCR</span>
+                <span class="mark-name">识别台</span>
+            </a>
+            <div class="topline-actions">
+                <a class="link-quiet" href="/login">登录</a>
+                {% if registration_enabled %}
+                <a class="btn-mini" href="/login" onclick="showRegisterTab(event)">注册</a>
+                {% endif %}
             </div>
         </div>
     </nav>
 
-    <!-- 广播通知栏 -->
-    <div id="broadcast-bar" class="hidden fixed left-1/2 transform -translate-x-1/2 z-40" style="top: 110px;">
-        <div id="broadcast-content" class="broadcast-capsule">
-            <a id="broadcast-link" href="#" target="_blank" class="broadcast-link-wrapper">
-                <span id="broadcast-message" class="broadcast-text"></span>
-                <span id="broadcast-emoji" class="broadcast-emoji"></span>
-                <div class="broadcast-arrow">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M9 18l6-6-6-6"/>
-                    </svg>
-                </div>
-            </a>
-        </div>
+    <div id="broadcast-bar" class="hidden broadcast" style="top: 76px;">
+        <a id="broadcast-link" href="#" target="_blank" class="broadcast-link">
+            <span id="broadcast-message" class="broadcast-text"></span>
+            <span id="broadcast-emoji" class="broadcast-emoji"></span>
+            <span class="broadcast-arrow" aria-hidden="true">→</span>
+        </a>
     </div>
 
-    <!-- 导航指示器 -->
-    <div class="fixed right-8 top-1/2 transform -translate-y-1/2 z-40 hidden md:flex flex-col gap-3">
+    <div class="dot-rail" aria-hidden="true">
         <div class="nav-dot active" onclick="scrollToSection(0)"></div>
         <div class="nav-dot" onclick="scrollToSection(1)"></div>
         <div class="nav-dot" onclick="scrollToSection(2)"></div>
         <div class="nav-dot" onclick="scrollToSection(3)"></div>
     </div>
 
-    <!-- Hero 区域 -->
-    <section class="section px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-blue-50 to-indigo-100 pt-20 sm:pt-24" id="section-0">
-        <div class="max-w-7xl mx-auto">
-            <div class="text-center hero-animation">
-                <h2 class="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-gray-900 mb-4 sm:mb-6 leading-tight px-2" style="min-height: 4.5rem;">
-                    <span id="typewriter-container" class="typewriter-text"></span><span class="typewriter-cursor"></span>
-                </h2>
-                <p class="text-base sm:text-lg md:text-xl text-gray-700 mb-8 sm:mb-10 max-w-3xl mx-auto px-4">
-                    基于 AI 技术的专业 OCR 解决方案
-                </p>
-                <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 px-4" style="opacity: 0; animation: fadeIn 0.5s ease-in 3s forwards;">
-                    <a href="/login" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition shadow-lg hover:shadow-xl">
-                        立即使用
-                    </a>
+    <main class="landing-main">
+
+        <section class="section hero" id="section-0">
+            <div class="hero-grid">
+                <div class="hero-copy">
+                    <span class="section-label">01 / 概述</span>
+                    <h1>把图片和 PDF<br />变成可编辑的 Markdown</h1>
+                    <p class="hero-lede">上传文件，识别标题、列表与表格，结果直接可复制或导出。按页计费，不做多余的事。</p>
+
+                    <div class="hero-actions">
+                        <a class="btn-solid" href="/login">立即使用</a>
+                        {% if registration_enabled %}
+                        <a class="btn-line" href="/login" onclick="showRegisterTab(event)">免费注册</a>
+                        {% endif %}
+                    </div>
+
+                    <dl class="hero-specs">
+                        <div><dt>单图上限</dt><dd>{{ max_image_size_mb }} MB</dd></div>
+                        <div><dt>PDF 上限</dt><dd>{{ max_pdf_size_mb }} MB · {{ max_pdf_pages }} 页</dd></div>
+                        <div><dt>识别模型</dt><dd>{{ model }}</dd></div>
+                    </dl>
+                </div>
+
+                <aside class="hero-panel">
+                    <div class="panel-head">
+                        <span>识别输出</span>
+                        <span class="panel-tag">markdown</span>
+                    </div>
+                    <div class="panel-type">
+                        <span class="panel-label">OCR</span>
+                        <span id="typewriter-container" class="typewriter-text"></span><span class="typewriter-cursor"></span>
+                    </div>
+                    <pre class="panel-code"># 产品评审会
+
+- 导出模块字段映射已完成
+- CSV / Excel 两种格式均可用
+- 数据量超过 1 万条时需要压测
+
+| 字段 | 状态 |
+| --- | --- |
+| 标题 | 已完成 |
+| 附件 | 二期 |</pre>
+                    <div class="panel-foot">
+                        <span>pages 1 / 1</span>
+                        <span>1.8 s</span>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <section class="section band" id="section-1">
+            <div class="band-head">
+                <span class="section-label">02 / 能力</span>
+                <h2>三件事，做扎实</h2>
+                <p>不堆功能，把识别、分页和导出做稳。</p>
+            </div>
+
+            <div class="cap-grid">
+                <article class="cap">
+                    <span class="cap-no">01</span>
+                    <h3>图片识别</h3>
+                    <p>PNG、JPG、WebP 单文件 {{ max_image_size_mb }} MB 以内。识别后保留标题、列表与表格结构，而不是一整段纯文本。</p>
+                </article>
+                <article class="cap">
+                    <span class="cap-no">02</span>
+                    <h3>PDF 批量处理</h3>
+                    <p>{{ max_pdf_size_mb }} MB 以内、最多 {{ max_pdf_pages }} 页的 PDF，自动分页识别，按页返回结果。</p>
+                </article>
+                <article class="cap">
+                    <span class="cap-no">03</span>
+                    <h3>稳定并发</h3>
+                    <p>基于 {{ model }}，多页并发提交并自动重试；失败页单独标记，不影响整份文档。</p>
+                </article>
+            </div>
+        </section>
+
+        <section class="section band" id="section-2">
+            <div class="band-head">
+                <span class="section-label">03 / 流程</span>
+                <h2>三步出结果</h2>
+            </div>
+
+            <ol class="flow">
+                <li>
+                    <b>1</b>
+                    <div><h4>注册或兑换</h4><p>创建账号，或用激活码兑换识别页数。</p></div>
+                </li>
+                <li>
+                    <b>2</b>
+                    <div><h4>上传文件</h4><p>图片直接识别；PDF 自动拆页排队。</p></div>
+                </li>
+                <li>
+                    <b>3</b>
+                    <div><h4>取走结果</h4><p>逐页查看识别文本，复制或导出 Markdown。</p></div>
+                </li>
+            </ol>
+        </section>
+
+        <section class="section band cta" id="section-3">
+            <div class="cta-box">
+                <div class="cta-copy">
+                    <span class="section-label">04 / 开始</span>
+                    <h2>把文件丢进来</h2>
+                    <p>登录后即可上传。识别结果按页返还，随时可以导出。</p>
+                </div>
+                <div class="cta-actions">
+                    <a class="btn-solid" href="/login">登录账号</a>
                     {% if registration_enabled %}
-                    <a href="/login" onclick="showRegisterTab(event)" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-blue-600 bg-white rounded-lg hover:bg-gray-50 transition shadow-lg hover:shadow-xl border border-gray-200">
-                        免费注册
-                    </a>
+                    <a class="btn-ghost" href="/login" onclick="showRegisterTab(event)">免费注册</a>
                     {% endif %}
                 </div>
             </div>
-        </div>
-    </section>
 
-    <!-- 功能特性 -->
-    <section class="section px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-blue-50 to-indigo-100" id="section-1">
-        <div class="max-w-7xl mx-auto">
-            <div class="text-center mb-8 sm:mb-12 lg:mb-16">
-                <h3 class="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900 mb-3 sm:mb-4">产品功能</h3>
-                <p class="text-base sm:text-lg text-gray-700 px-4">企业级 OCR 识别能力，满足多样化业务需求</p>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
-                <!-- 功能卡片 1 -->
-                <div class="feature-card bg-white/95 backdrop-blur-sm rounded-2xl p-6 lg:p-8 shadow-xl border border-white/20">
-                    <div class="w-14 h-14 bg-blue-100 rounded-lg flex items-center justify-center mb-6">
-                        <svg class="w-7 h-7 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                        </svg>
-                    </div>
-                    <h4 class="text-xl font-semibold text-gray-900 mb-3">多格式图片识别</h4>
-                    <p class="text-gray-600 leading-relaxed">支持 PNG、JPG、JPEG、WEBP 等主流图片格式，单文件最大 {{ max_image_size_mb }}MB</p>
-                </div>
-
-                <!-- 功能卡片 2 -->
-                <div class="feature-card bg-white/95 backdrop-blur-sm rounded-2xl p-6 lg:p-8 shadow-xl border border-white/20">
-                    <div class="w-14 h-14 bg-blue-100 rounded-lg flex items-center justify-center mb-6">
-                        <svg class="w-7 h-7 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                        </svg>
-                    </div>
-                    <h4 class="text-xl font-semibold text-gray-900 mb-3">PDF 批量处理</h4>
-                    <p class="text-gray-600 leading-relaxed">支持 {{ max_pdf_size_mb }}MB 以内、最多 {{ max_pdf_pages }} 页的 PDF 文档，自动分页识别导出 Markdown</p>
-                </div>
-
-                <!-- 功能卡片 3 -->
-                <div class="feature-card bg-white/95 backdrop-blur-sm rounded-2xl p-6 lg:p-8 shadow-xl border border-white/20">
-                    <div class="w-14 h-14 bg-blue-100 rounded-lg flex items-center justify-center mb-6">
-                        <svg class="w-7 h-7 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                        </svg>
-                    </div>
-                    <h4 class="text-xl font-semibold text-gray-900 mb-3">智能高效</h4>
-                    <p class="text-gray-600 leading-relaxed">基于 {{ model }} 模型，支持并发处理和智能重试，确保识别准确性</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 使用流程 -->
-    <section class="section px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-blue-50 to-indigo-100" id="section-2">
-        <div class="max-w-7xl mx-auto">
-            <div class="text-center mb-8 sm:mb-12 lg:mb-16">
-                <h3 class="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900 mb-3 sm:mb-4">使用流程</h3>
-                <p class="text-base sm:text-lg text-gray-700 px-4">三步即可开始使用专业 OCR 识别服务</p>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 lg:gap-12">
-                <div class="text-center">
-                    <div class="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-lg">1</div>
-                    <h4 class="text-xl font-semibold text-gray-900 mb-2">注册账号</h4>
-                    <p class="text-gray-700">快速注册或使用激活码兑换使用次数</p>
-                </div>
-                <div class="text-center">
-                    <div class="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-lg">2</div>
-                    <h4 class="text-xl font-semibold text-gray-900 mb-2">上传文件</h4>
-                    <p class="text-gray-700">选择图片或 PDF 文件进行上传</p>
-                </div>
-                <div class="text-center">
-                    <div class="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-lg">3</div>
-                    <h4 class="text-xl font-semibold text-gray-900 mb-2">获取结果</h4>
-                    <p class="text-gray-700">实时查看识别进度，导出 Markdown 格式</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- CTA 区域 -->
-    <section class="section px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-blue-50 to-indigo-100" id="section-3">
-        <div class="max-w-4xl mx-auto text-center">
-            <div class="blue-gradient-bg rounded-2xl p-6 sm:p-8 md:p-12 shadow-2xl">
-                <h3 class="text-2xl sm:text-3xl md:text-4xl font-bold text-white mb-4 sm:mb-6">开始使用</h3>
-                <p class="text-base sm:text-lg md:text-xl text-white/90 mb-6 sm:mb-8 px-2">立即体验专业的智能 OCR 识别服务</p>
-                <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4">
-                    <a href="/login" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-blue-600 bg-white rounded-lg hover:bg-gray-100 transition shadow-lg">
-                        登录账号
-                    </a>
-                    {% if registration_enabled %}
-                    <a href="/login" onclick="showRegisterTab(event)" class="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 text-base sm:text-lg font-semibold text-white bg-white/20 border-2 border-white rounded-lg hover:bg-white/30 transition">
-                        免费注册
-                    </a>
-                    {% endif %}
-                </div>
-
-                <!-- 页脚信息 -->
-                <div class="mt-8 sm:mt-12 md:mt-16 pt-6 sm:pt-8 border-t border-white/20">
-                    <div class="flex flex-col md:flex-row justify-between items-center gap-3 sm:gap-4">
-                        <p class="text-white/80 text-xs sm:text-sm text-center md:text-left">&copy; 2024 {{ title }}. All rights reserved.</p>
-                        <a href="https://github.com/Qianxia666/ocr" target="_blank" class="inline-flex items-center gap-2 text-white hover:text-white/80 transition-colors">
-                            <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                            </svg>
-                            <span class="text-xs sm:text-sm">GitHub</span>
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
+            <footer class="landing-foot">
+                <span>© 2024 识别台 · OCR WORKBENCH</span>
+                <span class="foot-grow"></span>
+                <a href="https://github.com/Qianxia666/ocr" target="_blank" rel="noopener noreferrer">GitHub</a>
+            </footer>
+        </section>
+    </main>
 
     <script>
         // 打字机效果

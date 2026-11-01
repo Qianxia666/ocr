@@ -6,471 +6,150 @@
   <title>{{ title }}</title>
   <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
   <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    .success-rate {
-      color: #10b981;
-    }
-
-    .partial-success-rate {
-      color: #f59e0b;
-    }
-
-    .error-rate {
-      color: #ef4444;
-    }
-
-    /* 确保 Markdown 预览区域的文字可见 */
-    #markdown-preview {
-      color: #1f2937 !important;
-    }
-
-    #markdown-preview * {
-      color: inherit;
-    }
-
-    /* 复制按钮悬停效果 */
-    #copy-btn:hover {
-      background: linear-gradient(to right, #0284c7, #1d4ed8) !important;
-      box-shadow: 0 15px 30px -5px rgba(0, 0, 0, 0.2) !important;
-    }
-
-    /* 菜单样式 */
-    #menu-dropdown {
-      display: none;
-      position: absolute;
-      top: 100%;
-      right: 0;
-      margin-top: 0.5rem;
-      min-width: 180px;
-      background: white;
-      border: 1px solid #e0f2fe;
-      border-radius: 0.75rem;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
-      overflow: hidden;
-      z-index: 50;
-    }
-
-    #menu-dropdown.show {
-      display: block;
-    }
-
-    .menu-item {
-      display: flex;
-      align-items: center;
-      padding: 0.75rem 1rem;
-      color: #0c4a6e;
-      transition: all 0.2s;
-      cursor: pointer;
-      text-decoration: none;
-    }
-
-    .menu-item:hover {
-      background: #f0f9ff;
-    }
-
-    .menu-item:active {
-      background: #e0f2fe;
-    }
-
-    .menu-item svg {
-      margin-right: 0.75rem;
-      width: 1.25rem;
-      height: 1.25rem;
-      flex-shrink: 0;
-    }
-
-
-    /* 用户选择控制 */
-    .user-select-none {
-      user-select: none;
-      -webkit-user-select: none;
-      -moz-user-select: none;
-      -ms-user-select: none;
-    }
-
-    .user-select-text {
-      user-select: text;
-      -webkit-user-select: text;
-      -moz-user-select: text;
-      -ms-user-select: text;
-    }
-
-    /* 横向滚动容器 */
-    .card-container {
-      scrollbar-width: auto; /* Firefox - 默认滚动条 */
-      -ms-overflow-style: auto; /* IE/Edge */
-      overflow-x: auto !important;
-      overflow-y: hidden !important;
-      align-items: center;
-    }
-
-    /* 卡片样式 */
-    .card {
-      min-height: 400px;
-      max-height: 500px;
-      display: flex;
-      flex-direction: column;
-      flex-shrink: 0;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(59, 130, 246, 0.05) !important;
-      transition: all 0.3s ease;
-    }
-
-    .card:hover {
-      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(59, 130, 246, 0.1) !important;
-      transform: translateY(-2px);
-    }
-
-    .card .content {
-      overflow-y: auto;
-      word-wrap: break-word;
-      overflow-wrap: break-word;
-      line-height: 1.8;
-      scrollbar-width: auto;
-    }
-
-    /* 状态徽章(右上角) */
-    .status-badge {
-      padding: 0.25rem 0.75rem;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      flex-shrink: 0;
-    }
-
-    .status-processing {
-      background: #dbeafe;
-      color: #1e40af;
-    }
-
-    .status-completed {
-      background: #dcfce7;
-      color: #15803d;
-    }
-
-    .status-failed {
-      background: #fee2e2;
-      color: #b91c1c;
-    }
-
-    .status-pending {
-      background: #fef3c7;
-      color: #92400e;
-    }
-
-    .status-cancelled {
-      background: #f3f4f6;
-      color: #6b7280;
-    }
-
-    /* 双按钮样式 */
-    .copy-text-btn,
-    .copy-markdown-btn {
-      padding: 0.375rem 1rem;
-      border-radius: 9999px;
-      font-size: 0.875rem;
-      cursor: pointer;
-      transition: all 0.2s;
-      border: none;
-      white-space: nowrap;
-    }
-
-    .copy-text-btn {
-      background: #1E40AF;
-      color: white;
-    }
-
-    .copy-text-btn:hover {
-      background: #1e3a8a;
-    }
-
-    .copy-markdown-btn {
-      background: #f3f4f6;
-      color: #1f2937;
-      border: 1px solid #d1d5db;
-    }
-
-    .copy-markdown-btn:hover {
-      background: #e5e7eb;
-    }
-
-    /* 背景纹理效果 */
-    body::before {
-      content: '';
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-image:
-        radial-gradient(circle at 20% 50%, rgba(59, 130, 246, 0.03) 0%, transparent 50%),
-        radial-gradient(circle at 80% 80%, rgba(147, 197, 253, 0.04) 0%, transparent 50%),
-        radial-gradient(circle at 40% 20%, rgba(191, 219, 254, 0.03) 0%, transparent 50%);
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    body > * {
-      position: relative;
-      z-index: 1;
-    }
-
-    /* 公告模态框 Markdown 样式 */
-    #announcement-modal-content.markdown-body {
-      background: transparent;
-      font-size: 14px;
-      line-height: 1.8;
-      color: #1f2937;
-    }
-
-    #announcement-modal-content.markdown-body h1 {
-      font-size: 1.5em;
-      margin-top: 0;
-      margin-bottom: 16px;
-      border-bottom: 1px solid #d1d5db;
-      padding-bottom: 8px;
-    }
-
-    #announcement-modal-content.markdown-body h2 {
-      font-size: 1.25em;
-      margin-top: 24px;
-      margin-bottom: 12px;
-      border-bottom: 1px solid #e5e7eb;
-      padding-bottom: 6px;
-    }
-
-    #announcement-modal-content.markdown-body h3 {
-      font-size: 1.1em;
-      margin-top: 20px;
-      margin-bottom: 10px;
-    }
-
-    #announcement-modal-content.markdown-body p {
-      margin-top: 0;
-      margin-bottom: 12px;
-    }
-
-    #announcement-modal-content.markdown-body ul,
-    #announcement-modal-content.markdown-body ol {
-      margin-top: 0;
-      margin-bottom: 12px;
-      padding-left: 2em;
-    }
-
-    #announcement-modal-content.markdown-body li {
-      margin-top: 4px;
-    }
-
-    #announcement-modal-content.markdown-body code {
-      background: #f3f4f6;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.9em;
-    }
-
-    #announcement-modal-content.markdown-body pre {
-      background: #f3f4f6;
-      padding: 12px;
-      border-radius: 6px;
-      overflow-x: auto;
-      margin: 12px 0;
-    }
-
-    #announcement-modal-content.markdown-body pre code {
-      background: transparent;
-      padding: 0;
-    }
-
-    #announcement-modal-content.markdown-body blockquote {
-      border-left: 4px solid #d1d5db;
-      padding-left: 16px;
-      margin: 12px 0;
-      color: #6b7280;
-    }
-
-    #announcement-modal-content.markdown-body a {
-      color: #3b82f6;
-      text-decoration: underline;
-    }
-
-    #announcement-modal-content.markdown-body a:hover {
-      color: #2563eb;
-    }
-
-    #announcement-modal-content.markdown-body strong {
-      font-weight: 600;
-    }
-
-    #announcement-modal-content.markdown-body em {
-      font-style: italic;
-    }
-
-    #announcement-modal-content.markdown-body hr {
-      border: none;
-      border-top: 1px solid #e5e7eb;
-      margin: 20px 0;
-    }
-
-    #announcement-modal-content.markdown-body table {
-      border-collapse: collapse;
-      width: 100%;
-      margin: 12px 0;
-    }
-
-    #announcement-modal-content.markdown-body table th,
-    #announcement-modal-content.markdown-body table td {
-      border: 1px solid #d1d5db;
-      padding: 8px 12px;
-      text-align: left;
-    }
-
-    #announcement-modal-content.markdown-body table th {
-      background: #f3f4f6;
-      font-weight: 600;
-    }
-
-
-  </style>
   <!-- 引入 KaTeX 样式 -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.css">
   <!-- 引入 GitHub Markdown 样式 -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.5.1/github-markdown.min.css">
+  <link rel="stylesheet" href="/static/console.css">
 </head>
-<body class="h-screen flex flex-col overflow-hidden" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 50%, #dbeafe 100%);">
+<body class="h-screen flex flex-col overflow-hidden">
+
   <!-- 顶栏 -->
-  <header class="border-b border-blue-200 shadow-sm flex-shrink-0 z-40" style="height: 64px; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-full flex items-center justify-between relative">
-      <h1 class="text-lg sm:text-xl md:text-2xl font-bold text-blue-700">{{ title }}</h1>
+  <header class="ws-top">
+    <a class="mark" href="/">
+      <span class="mark-box">OCR</span>
+      <span class="mark-name">识别台</span>
+    </a>
 
-      <!-- 菜单 -->
-      <div class="flex items-center gap-2 sm:gap-3">
-        <!-- 菜单按钮 -->
-        <button id="menu-btn" class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-blue-50 active:bg-blue-100 rounded-lg transition-all duration-200 flex-shrink-0">
-          <svg class="w-6 h-6 sm:w-6 sm:h-6 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-          </svg>
-        </button>
-        <!-- 下拉菜单 -->
-        <div id="menu-dropdown">
-          <!-- 配额显示 -->
-          <div id="quota-menu-item" class="menu-item" style="display: none; cursor: default; background: #f0f9ff;">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
-            <span class="text-sm font-semibold">
-              <span id="remaining-pages">-</span>/<span id="total-pages-quota">-</span>页
-            </span>
-          </div>
+    <div class="ws-top-meta">
+      <span class="ws-crumb">工作台 / WORKBENCH</span>
+    </div>
 
-          <!-- 兑换选项 -->
-          <div id="redeem-menu-item" class="menu-item" style="display: none;">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-            </svg>
-            兑换
-          </div>
+    <div class="ws-top-actions">
+      <div class="quota-chip">
+        <span>页额</span>
+        <b id="remaining-pages">-</b>
+        <span>/</span>
+        <span id="total-pages-quota">-</span>
+      </div>
 
-          <!-- 管理选项 -->
-          <div id="admin-menu-item" class="menu-item" style="display: none;">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-            </svg>
-            管理
-          </div>
+      <button id="menu-btn" class="ws-menu-btn" aria-label="菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
 
-          <!-- 登出选项 -->
-          <div id="logout-menu-item" class="menu-item" style="display: none;">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-            </svg>
-            登出
-          </div>
-
-          <div style="border-top: 1px solid #e0f2fe; margin: 0.25rem 0;"></div>
-
-          <a href="https://github.com/Qianxia666/ocr" target="_blank" class="menu-item">
-            <svg fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-            </svg>
-            项目地址
-          </a>
-          <a href="https://github.com/gua12345/web_oai_img2text" target="_blank" class="menu-item">
-            <svg fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-            </svg>
-            原作者地址
-          </a>
-          <a href="#" class="menu-item" id="about-menu">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-            关于
-          </a>
+      <div id="menu-dropdown">
+        <div id="quota-menu-item" class="menu-row" style="display: none;">
+          <span class="menu-k">剩余页数</span>
+          <span class="menu-v"><span id="remaining-pages-mirror">-</span></span>
         </div>
+
+        <button id="redeem-menu-item" class="menu-item" style="display: none;">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+          </svg>
+          兑换额度
+        </button>
+
+        <button type="button" id="admin-menu-item" class="menu-item" style="display: none;">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          管理后台
+        </button>
+
+        <button id="logout-menu-item" class="menu-item" style="display: none;">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+          </svg>
+          退出登录
+        </button>
+
+        <div class="menu-sep"></div>
+
+        <a href="https://github.com/Qianxia666/ocr" target="_blank" class="menu-item">
+          <svg fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+          </svg>
+          项目地址
+        </a>
+        <a href="#" class="menu-item" id="about-menu">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          关于
+        </a>
+      </div>
     </div>
   </header>
 
   <!-- 公告模态框 -->
-  <div id="announcement-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px);">
-    <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col">
-      <!-- 标题栏 -->
-      <div id="announcement-modal-header" class="px-6 py-4 border-b flex items-center gap-3">
-        <svg id="announcement-modal-icon" class="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+  <div id="announcement-modal" class="ws-modal hidden">
+    <div class="ws-modal-box">
+      <div id="announcement-modal-header" class="ws-modal-head">
+        <svg id="announcement-modal-icon" class="ws-modal-icon" fill="currentColor" viewBox="0 0 20 20">
           <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
         </svg>
-        <h2 class="text-xl font-bold flex-1">系统公告</h2>
+        <h2>系统公告</h2>
       </div>
 
-      <!-- 公告内容区域 -->
-      <div class="flex-1 overflow-y-auto px-6 py-6">
+      <div class="ws-modal-body">
         <div id="announcement-modal-content" class="markdown-body"></div>
       </div>
 
-      <!-- 底部按钮 -->
-      <div class="px-6 py-4 border-t flex justify-end gap-3">
-        <button id="announcement-agree-btn"
-                onclick="agreeAnnouncement()"
-                class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-all transform hover:scale-105 shadow-lg">
-          我已知晓
-        </button>
+      <div class="ws-modal-foot">
+        <button id="announcement-agree-btn" onclick="agreeAnnouncement()" class="btn-solid">我已知晓</button>
       </div>
     </div>
   </div>
 
-  <!-- 主内容区 -->
-  <div class="flex-1 overflow-hidden">
-    <div class="card-container flex gap-4 md:gap-5 lg:gap-6 px-4 md:px-5 lg:px-7 py-6 h-full items-center">
+  <!-- 主体：左投递 + 右记录带 -->
+  <div class="ws-body">
 
-      <!-- 卡片1: 上传界面 -->
-      <div class="card flex-shrink-0 w-[280px] md:w-[300px] lg:w-[320px] xl:w-[325px] bg-white border-t border-b border-gray-200 rounded-lg p-5 md:p-6 shadow-md user-select-none">
-        <div class="flex justify-between items-center mb-2">
-          <h3 class="title text-xl md:text-2xl font-semibold text-black flex-1">上传文件</h3>
-        </div>
+    <aside class="intake">
+      <div class="intake-head">
+        <span class="intake-no">01 / 投递</span>
+        <h2>上传文件</h2>
+      </div>
 
-        <div class="mb-2">
-          <span class="text-xs md:text-sm text-gray-500">&nbsp;</span>
-        </div>
-
-        <div class="content h-[260px] md:h-[280px] lg:h-[300px] flex flex-col items-center justify-center border-2 border-dashed border-gray-300 hover:border-blue-400 active:border-blue-500 rounded-xl transition-all duration-300 cursor-pointer mb-3 md:mb-4" id="upload-box">
-          <div class="flex flex-col items-center justify-center text-center" id="upload-prompt">
-            <svg class="w-12 h-12 md:w-16 md:h-16 mb-3 text-gray-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-            </svg>
-            <div class="text-sm md:text-base font-medium text-gray-700 mb-2">点击或拖拽上传</div>
-            <div class="text-xs md:text-sm text-gray-600 mb-2">支持图片和PDF</div>
-          </div>
-        </div>
-
-        <div class="footer flex justify-end gap-2" style="visibility: hidden;">
-          <button class="copy-text-btn">占位</button>
-          <button class="copy-markdown-btn">占位</button>
+      <div id="upload-box" class="intake-drop">
+        <div id="upload-prompt">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.4" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+          </svg>
+          <div class="drop-main">点击或拖拽文件到此</div>
+          <div class="drop-sub">图片 / PDF 均可</div>
         </div>
       </div>
 
-      <!-- 卡片2-N: OCR结果卡片 (动态生成,直接插入这里) -->
+      <dl class="intake-spec">
+        <div><dt>图片上限</dt><dd id="spec-img">50 MB</dd></div>
+        <div><dt>PDF 上限</dt><dd id="spec-pdf">50 MB</dd></div>
+        <div><dt>识别语言</dt><dd>图文混排 / 表格</dd></div>
+        <div><dt>输出</dt><dd>Markdown</dd></div>
+      </dl>
 
-    </div>
+      <p class="intake-note">上传后自动排队识别，结果会按时间排进下方的记录带，可直接复制或导出。</p>
+    </aside>
+
+    <section class="strip">
+      <div class="strip-head">
+        <span>02 / 识别记录</span>
+        <span class="strip-hint">横向滚动查看 · 新的在最左</span>
+      </div>
+
+      <div class="strip-body">
+        <div class="card-container">
+          <div class="strip-empty">
+            <span class="strip-empty-no">空</span>
+            <p>还没有识别记录。左侧上传一张图片或一份 PDF，识别结果会依次排列在这里。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </div>
 
   <script>
@@ -725,27 +404,33 @@
       const status = statusConfig[task.status] || statusConfig['pending'];
 
       const card = document.createElement('div');
-      card.className = 'card flex-shrink-0 w-[280px] md:w-[300px] lg:w-[320px] xl:w-[325px] bg-white border-t border-b border-gray-200 rounded-lg p-5 md:p-6 shadow-md user-select-none';
+      card.className = 'card doc-card';
       card.dataset.taskId = task.id;
       card.dataset.taskStatus = task.status;
 
       card.innerHTML = `
-        <div class="flex justify-between items-center mb-2">
-          <h3 class="title text-xl md:text-2xl font-semibold text-black flex-1 truncate pr-2">${task.file_name || '未命名文件'}</h3>
+        <div class="doc-head">
+          <h3 class="title" title="${task.file_name || '未命名文件'}">${task.file_name || '未命名文件'}</h3>
           <span class="status-badge ${status.class}">${status.text}</span>
         </div>
 
-        <div class="mb-2">
-          <span class="date text-xs md:text-sm text-gray-500 user-select-none">${formatTaskTime(task.created_at)}</span>
+        <div class="doc-meta">
+          <span class="date">${formatTaskTime(task.created_at)}</span>
         </div>
 
-        <div class="content h-[260px] md:h-[280px] lg:h-[300px] text-sm md:text-base text-black mb-3 md:mb-4 user-select-text" id="content-${task.id}">
-          ${task.status === 'completed' ? '<div class="text-center text-gray-500 py-8">加载中...</div>' : '<div class="text-center text-gray-500 py-8">' + status.text + '</div>'}
+        <div class="content doc-body" id="content-${task.id}">
+          ${task.status === 'completed'
+            ? '<div class="doc-wait"><span class="doc-wait-label">正在读取结果…</span></div>'
+            : `<div class="doc-wait">
+                 <span class="doc-wait-label">${status.text}</span>
+                 <span class="doc-bar"><i style="width:${Math.round((task.progress || 0) * 100)}%"></i></span>
+                 <span class="doc-wait-meta">${task.processed_pages || 0} / ${task.total_pages || 1} 页</span>
+               </div>`}
         </div>
 
-        <div class="footer flex justify-end gap-2">
+        <div class="footer doc-foot">
           <button class="copy-text-btn" onclick="copyPlainText('${task.id}')">复制文本</button>
-          <button class="copy-markdown-btn" onclick="copyMarkdown('${task.id}')">复制Markdown</button>
+          <button class="copy-markdown-btn" onclick="copyMarkdown('${task.id}')">复制 Markdown</button>
         </div>
       `;
 
@@ -1015,6 +700,8 @@
 
           // 显示配额菜单项
           document.getElementById('remaining-pages').textContent = quota.remaining_pages.toLocaleString();
+          const mirror = document.getElementById('remaining-pages-mirror');
+          if (mirror) mirror.textContent = quota.remaining_pages.toLocaleString();
           document.getElementById('total-pages-quota').textContent = quota.total_pages.toLocaleString();
           document.getElementById('quota-menu-item').style.display = 'flex';
 
@@ -1248,10 +935,10 @@
 
       // 设置样式类型
       const typeStyles = {
-        'info': { bg: '#dbeafe', text: '#1e40af', icon: '#3b82f6', title: '系统公告' },
-        'warning': { bg: '#fef3c7', text: '#92400e', icon: '#f59e0b', title: '重要提醒' },
-        'success': { bg: '#d1fae5', text: '#065f46', icon: '#10b981', title: '通知' },
-        'error': { bg: '#fee2e2', text: '#991b1b', icon: '#ef4444', title: '紧急公告' }
+        'info': { bg: '#eceeec', text: '#101614', icon: '#14696b', title: '系统公告' },
+        'warning': { bg: '#f2efe6', text: '#3a3320', icon: '#7a6220', title: '重要提醒' },
+        'success': { bg: '#e7efee', text: '#0f5355', icon: '#14696b', title: '通知' },
+        'error': { bg: '#f7ebe7', text: '#7d2b17', icon: '#a33a22', title: '紧急公告' }
       };
       const style = typeStyles[announcementConfig.type] || typeStyles['info'];
 

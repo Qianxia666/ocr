@@ -13,88 +13,7 @@
       }
     }
   </script>
-  <style>
-
-    /* 移除所有按钮的聚焦外框 */
-    * {
-      outline: none !important;
-    }
-
-    *:focus,
-    *:focus-visible {
-      outline: none !important;
-      box-shadow: none !important;
-    }
-
-    *:active {
-      outline: none !important;
-      box-shadow: none !important;
-    }
-
-    button,
-    button:focus,
-    button:focus-visible,
-    button:active {
-      outline: none !important;
-      box-shadow: none !important;
-    }
-
-    /* 移除按钮周围的所有边框和线条 */
-    td button {
-      outline: none !important;
-      box-shadow: none !important;
-      border: none !important;
-    }
-
-    td {
-      border: none !important;
-    }
-
-    /* 菜单样式 */
-    #menu-dropdown {
-      display: none;
-      position: absolute;
-      top: 100%;
-      right: 0;
-      margin-top: 0.5rem;
-      min-width: 180px;
-      background: white;
-      border: 1px solid #e0f2fe;
-      border-radius: 0.75rem;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
-      overflow: hidden;
-      z-index: 50;
-    }
-
-    #menu-dropdown.show {
-      display: block;
-    }
-
-    .menu-item {
-      display: flex;
-      align-items: center;
-      padding: 0.75rem 1rem;
-      color: #0c4a6e;
-      transition: all 0.2s;
-      cursor: pointer;
-      text-decoration: none;
-    }
-
-    .menu-item:hover {
-      background: #f0f9ff;
-    }
-
-    .menu-item:active {
-      background: #e0f2fe;
-    }
-
-    .menu-item svg {
-      margin-right: 0.75rem;
-      width: 1.25rem;
-      height: 1.25rem;
-      flex-shrink: 0;
-    }
-  </style>
+  <link rel="stylesheet" href="/static/console.css">
 </head>
 <body class="h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
   <!-- 顶栏 -->
@@ -172,9 +91,6 @@
           <button onclick="loadTasks()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
             应用筛选
           </button>
-          <button id="load-data-btn" onclick="loadDataManually()" class="px-6 py-2 border-2 border-blue-600 bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-700 rounded-lg shadow-sm transition-all duration-200">
-            加载数据
-          </button>
         </div>
       </div>
 
@@ -196,7 +112,7 @@
             </thead>
             <tbody id="tasks-table" class="bg-white divide-y divide-gray-200">
               <tr>
-                <td colspan="8" class="px-6 py-4 text-center text-gray-500">请点击"加载数据"按钮加载任务列表</td>
+                <td colspan="8" class="px-6 py-4 text-center text-gray-500">暂无任务记录</td>
               </tr>
             </tbody>
           </table>
@@ -432,45 +348,46 @@
       // 状态徽章样式
       let statusBadge = '';
       if (task.status === 'completed') {
-        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">${statusText}</span>`;
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800" style="white-space:nowrap">${statusText}</span>`;
       } else if (task.status === 'processing') {
-        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">${statusText}</span>`;
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800" style="white-space:nowrap">${statusText}</span>`;
       } else if (task.status === 'failed') {
-        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">${statusText}</span>`;
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800" style="white-space:nowrap">${statusText}</span>`;
       } else if (task.status === 'pending') {
-        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">${statusText}</span>`;
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800" style="white-space:nowrap">${statusText}</span>`;
       } else if (task.status === 'cancelled') {
-        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">${statusText}</span>`;
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800" style="white-space:nowrap">${statusText}</span>`;
       } else {
-        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">${statusText}</span>`;
+        statusBadge = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800" style="white-space:nowrap">${statusText}</span>`;
       }
 
-      const taskType = task.task_type === 'pdf_ocr' ? 'PDF' : '图片';
-      const progressDetail = `${task.processed_pages || 0}/${task.total_pages || 0}`;
+      const taskType = ['pdf', 'pdf_ocr'].includes(task.task_type) ? 'PDF' : '图片';
+      const rawProgress = Number(task.progress || 0);
+      const progressDetail = `${Math.round(rawProgress <= 1 ? rawProgress * 100 : rawProgress)}%`;
       const createdAt = formatDateTime(task.created_at);
       const username = task.username || '未知用户';
       const detailLabel = taskDetailState.get(task.id) ? '收起详情' : '展开详情';
 
       const canViewContent = task.status === 'completed';
       const viewButton = canViewContent
-        ? `<button type="button" class="text-sm text-blue-600 hover:underline" onclick="event.stopPropagation(); viewContent('${task.id}')">查看结果</button>`
+        ? `<button type="button" class="text-sm hover:underline" onclick="event.stopPropagation(); viewContent('${task.id}')">查看结果</button>`
         : '';
 
       const canCancel = task.status === 'pending' || task.status === 'processing';
       const cancelButton = canCancel
-        ? `<button type="button" class="text-sm text-red-600 hover:underline" onclick="event.stopPropagation(); cancelTask('${task.id}')">停止任务</button>`
+        ? `<button type="button" class="text-sm is-danger hover:underline" onclick="event.stopPropagation(); cancelTask('${task.id}')">停止任务</button>`
         : '';
 
       return `
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${username}</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600" title="${task.id}">${task.id.substring(0, 8)}...</td>
+        <td class="px-6 py-4 whitespace-nowrap cell-code" title="${task.id}"><span class="id-clip">${task.id}</span></td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${task.file_name || '-'} </td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${taskType}</td>
         <td class="px-6 py-4 whitespace-nowrap">${statusBadge}</td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${progressDetail}</td>
         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${createdAt}</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 space-x-2">
-          <button type="button" class="text-sm text-gray-600 hover:underline" onclick="event.stopPropagation(); toggleTaskDetails('${task.id}')">${detailLabel}</button>
+        <td class="px-6 py-4 whitespace-nowrap ops">
+          <button type="button" class="text-sm hover:underline" onclick="event.stopPropagation(); toggleTaskDetails('${task.id}')">${detailLabel}</button>
           ${viewButton}
           ${cancelButton}
         </td>
@@ -749,15 +666,12 @@
         autoRefreshInterval = setInterval(() => {
           loadTasks();
         }, 60000);
-
-        // 隐藏加载按钮
-        document.getElementById('load-data-btn').style.display = 'none';
       }
     }
 
     // 页面加载时初始化
     window.addEventListener('load', () => {
-      // 不再自动加载数据，等待用户点击"加载数据"按钮
+      loadDataManually();
 
       // 搜索框输入时使用防抖
       const searchInput = document.getElementById('search-input');
