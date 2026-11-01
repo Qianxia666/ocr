@@ -3,426 +3,340 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录 - {{ title }}</title>
+    <title>登录 · 识别台</title>
     <link rel="icon" href="{{ favicon_url }}" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Markdown 渲染库 -->
     <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
-    <!-- Markdown 样式 -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.5.1/github-markdown.min.css">
-    <!-- Cloudflare Turnstile -->
     {% if turnstile_enabled %}
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     {% endif %}
-    <style>
-        /* 深蓝色渐变背景 - 与整体主题色匹配 */
-        .blue-gradient-bg {
-            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 50%, #2563eb 100%) !important;
-        }
-
-        /* Cloudflare Turnstile 样式定制 */
-        .cf-turnstile {
-            border: none !important;              /* 移除外围边框 */
-            padding: 0 !important;                /* 移除内边距 */
-            background: transparent !important;   /* 透明背景 */
-            box-shadow: none !important;          /* 移除默认阴影 */
-        }
-
-        /* 调整验证成功后的样式 */
-        .cf-turnstile iframe {
-            border-radius: 0.5rem !important;     /* 保持圆角 */
-        }
-    </style>
+    <link rel="stylesheet" href="/static/console.css">
 </head>
-<body class="min-h-screen flex" style="margin: 0; padding: 0;">
-    <!-- 左侧蓝色主题区域 -->
-    <div class="hidden md:flex md:w-1/2 blue-gradient-bg relative overflow-hidden">
-        <!-- 装饰性背景元素 -->
-        <div class="absolute inset-0 opacity-20">
-            <div class="absolute top-20 left-20 w-64 h-64 bg-white rounded-full blur-3xl"></div>
-            <div class="absolute bottom-20 right-20 w-96 h-96 bg-white rounded-full blur-3xl"></div>
+<body>
+
+<div class="gate">
+
+    <!-- 左：说明区 -->
+    <aside class="gate-side">
+        <div class="gate-mark">
+            <span class="mark-box">OCR</span>
+            <span class="mark-name">识别台</span>
         </div>
 
-        <!-- 内容 -->
-        <div class="relative z-10 flex flex-col justify-between p-12 text-white w-full">
-            <!-- 占位 -->
-            <div></div>
+        <div class="gate-side-mid">
+            <p class="gate-no">00 / 通行证</p>
+            <h1 class="gate-title">先登记，<br>再识别。</h1>
+            <p class="gate-lede">账户用于存放识别记录与额度。一次识别、一份归档，导出的 Markdown 随时取回。</p>
 
-            <!-- 中间标题 -->
-            <div class="flex items-center justify-center">
-                <h1 class="text-4xl font-bold">{{ title }}</h1>
-            </div>
-
-            <!-- 底部 GitHub 链接 -->
-            <div>
-                <a href="https://github.com/Qianxia666/ocr" target="_blank"
-                   class="inline-flex items-center gap-2 text-white hover:text-cyan-300 transition-colors group">
-                    <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                    </svg>
-                    <span class="group-hover:underline">GitHub 项目地址</span>
-                </a>
-            </div>
+            <dl class="gate-spec">
+                <div><dt>识别模型</dt><dd>gpt-4o 视觉</dd></div>
+                <div><dt>单档上限</dt><dd>50 MB / 文件</dd></div>
+                <div><dt>批量上限</dt><dd>200 MB · 500 页</dd></div>
+                <div><dt>导出格式</dt><dd>Markdown / 表格</dd></div>
+            </dl>
         </div>
-    </div>
 
-    <!-- 右侧登录/注册表单区域 -->
-    <div class="w-full md:w-1/2 flex flex-col justify-center p-8 bg-gray-50">
-        <div class="w-full max-w-md mx-auto">
-            <!-- 登录/注册卡片 -->
-            <div class="bg-white rounded-2xl shadow-xl p-8">
-                <!-- Tab 切换器 (只在开放注册时显示) -->
-                <div class="flex mb-6 bg-gray-100 rounded-lg p-1" id="tab-switcher" {% if not registration_enabled %}style="display: none;"{% endif %}>
-                    <button id="login-tab" class="flex-1 py-2 px-4 rounded-md font-medium transition-all bg-white text-blue-600 shadow">
-                        登录
-                    </button>
-                    <button id="register-tab" class="flex-1 py-2 px-4 rounded-md font-medium transition-all text-gray-600 hover:text-gray-800">
-                        注册
-                    </button>
+        <div class="gate-side-foot">
+            <span>v1.0</span>
+            <span>·</span>
+            <a href="https://github.com/Qianxia666/ocr" target="_blank">GitHub</a>
+        </div>
+    </aside>
+
+    <!-- 右：表单区 -->
+    <main class="gate-main">
+        <div class="gate-wrap">
+
+            <div class="gate-head">
+                <span class="gate-head-no">01 / 身份核验</span>
+                <h2 id="login-title">账户登录</h2>
+            </div>
+
+            <div class="gate-tabs{% if not registration_enabled %} hidden{% endif %}" id="tab-switcher">
+                <button type="button" id="login-tab" class="gate-tab on">登录 / SIGN IN</button>
+                <button type="button" id="register-tab" class="gate-tab">注册 / SIGN UP</button>
+            </div>
+
+            <!-- 登录 -->
+            <form id="login-form" class="gate-form">
+                <div class="fld">
+                    <label for="login-username"><span class="fld-no">01</span>用户名</label>
+                    <input type="text" id="login-username" required placeholder="请输入用户名" autocomplete="username">
+                </div>
+                <div class="fld">
+                    <label for="login-password"><span class="fld-no">02</span>密码</label>
+                    <input type="password" id="login-password" required placeholder="请输入密码" autocomplete="current-password">
                 </div>
 
-                <!-- 标题 (只在禁用注册时显示) -->
-                <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center" id="login-title" {% if registration_enabled %}style="display: none;"{% endif %}>用户登录</h2>
+                {% if turnstile_enabled %}
+                <div class="cf-turnstile"
+                     data-sitekey="{{ turnstile_site_key }}"
+                     data-callback="onLoginTurnstileSuccess"
+                     data-theme="light"
+                     data-size="flexible"></div>
+                {% endif %}
+                <input type="hidden" id="login-turnstile-token">
 
-                <!-- 登录表单 -->
-                <form id="login-form" class="space-y-4">
-                    <div>
-                        <label for="login-username" class="block text-sm font-medium text-gray-700 mb-1">用户名</label>
-                        <input type="text" id="login-username" required
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-                               placeholder="请输入用户名">
-                    </div>
-                    <div>
-                        <label for="login-password" class="block text-sm font-medium text-gray-700 mb-1">密码</label>
-                        <input type="password" id="login-password" required
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-                               placeholder="请输入密码">
-                    </div>
-                    <!-- Cloudflare Turnstile 验证组件 -->
-                    {% if turnstile_enabled %}
-                    <div class="cf-turnstile"
-                         data-sitekey="{{ turnstile_site_key }}"
-                         data-callback="onLoginTurnstileSuccess"
-                         data-theme="light"
-                         data-size="flexible"></div>
-                    {% endif %}
-                    <input type="hidden" id="login-turnstile-token">
-                    <!-- 用户协议复选框 -->
-                    <div class="flex items-start gap-2">
-                        <input type="checkbox" id="login-agree" required
-                               class="mt-1 w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
-                        <label for="login-agree" class="text-sm text-gray-700">
-                            我已阅读并同意
-                            <a href="#" onclick="showAgreement(event)" class="text-blue-600 hover:underline">《用户协议》</a>
-                        </label>
-                    </div>
-                    <button type="submit"
-                            class="w-full bg-blue-600 text-white py-2.5 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors">
-                        登录
-                    </button>
-                </form>
+                <div class="gate-check">
+                    <input type="checkbox" id="login-agree" required>
+                    <label for="login-agree">我已阅读并同意 <a href="#" onclick="showAgreement(event)">《用户协议》</a></label>
+                </div>
 
-                <!-- 注册表单 (只在开放注册时可用) -->
-                <form id="register-form" class="space-y-4 hidden">
-                    <div>
-                        <label for="register-username" class="block text-sm font-medium text-gray-700 mb-1">用户名</label>
-                        <input type="text" id="register-username" required
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-                               placeholder="请输入用户名 (3-20个字符)">
-                    </div>
-                    <div>
-                        <label for="register-password" class="block text-sm font-medium text-gray-700 mb-1">密码</label>
-                        <input type="password" id="register-password" required
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-                               placeholder="请输入密码 (至少6个字符)">
-                    </div>
-                    <div>
-                        <label for="register-password-confirm" class="block text-sm font-medium text-gray-700 mb-1">确认密码</label>
-                        <input type="password" id="register-password-confirm" required
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-                               placeholder="请再次输入密码">
-                    </div>
-                    <!-- Cloudflare Turnstile 验证组件 -->
-                    {% if turnstile_enabled %}
-                    <div class="cf-turnstile"
-                         data-sitekey="{{ turnstile_site_key }}"
-                         data-callback="onRegisterTurnstileSuccess"
-                         data-theme="light"
-                         data-size="flexible"></div>
-                    {% endif %}
-                    <input type="hidden" id="register-turnstile-token">
-                    <!-- 用户协议复选框 -->
-                    <div class="flex items-start gap-2">
-                        <input type="checkbox" id="register-agree" required
-                               class="mt-1 w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
-                        <label for="register-agree" class="text-sm text-gray-700">
-                            我已阅读并同意
-                            <a href="#" onclick="showAgreement(event)" class="text-blue-600 hover:underline">《用户协议》</a>
-                        </label>
-                    </div>
-                    <button type="submit"
-                            class="w-full bg-blue-600 text-white py-2.5 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors">
-                        注册
-                    </button>
-                </form>
+                <button type="submit" class="gate-submit">登录 →</button>
+            </form>
 
-                <!-- 消息提示区 -->
-                <div id="message" class="mt-4 hidden"></div>
+            <!-- 注册 -->
+            <form id="register-form" class="gate-form hidden">
+                <div class="fld">
+                    <label for="register-username"><span class="fld-no">01</span>用户名</label>
+                    <input type="text" id="register-username" required placeholder="3–20 个字符" autocomplete="username">
+                </div>
+                <div class="fld">
+                    <label for="register-password"><span class="fld-no">02</span>密码</label>
+                    <input type="password" id="register-password" required placeholder="至少 6 个字符" autocomplete="new-password">
+                </div>
+                <div class="fld">
+                    <label for="register-password-confirm"><span class="fld-no">03</span>确认密码</label>
+                    <input type="password" id="register-password-confirm" required placeholder="再次输入密码" autocomplete="new-password">
+                </div>
+
+                {% if turnstile_enabled %}
+                <div class="cf-turnstile"
+                     data-sitekey="{{ turnstile_site_key }}"
+                     data-callback="onRegisterTurnstileSuccess"
+                     data-theme="light"
+                     data-size="flexible"></div>
+                {% endif %}
+                <input type="hidden" id="register-turnstile-token">
+
+                <div class="gate-check">
+                    <input type="checkbox" id="register-agree" required>
+                    <label for="register-agree">我已阅读并同意 <a href="#" onclick="showAgreement(event)">《用户协议》</a></label>
+                </div>
+
+                <button type="submit" class="gate-submit">注册 →</button>
+            </form>
+
+            <div id="message" class="gate-msg hidden"></div>
+
+            <div class="gate-alt">
+                <span>识别台 / 账户入口</span>
+                <a href="/">返回首页</a>
             </div>
 
-            <!-- 移动端 GitHub 链接 -->
-            <div class="md:hidden mt-6 text-center">
-                <a href="https://github.com/Qianxia666/ocr" target="_blank"
-                   class="inline-flex items-center gap-2 text-gray-600 hover:text-blue-600 transition-colors">
-                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                    </svg>
-                    <span class="text-sm">GitHub 项目地址</span>
-                </a>
-            </div>
+        </div>
+    </main>
+
+</div>
+
+<!-- 用户协议 -->
+<div id="agreement-modal" class="gate-modal hidden">
+    <div class="gate-modal-box">
+        <div class="gate-modal-head">
+            <h3>用户协议 / TERMS</h3>
+            <button type="button" onclick="closeAgreement()" aria-label="关闭">✕</button>
+        </div>
+        <div class="gate-modal-body">
+            <div id="agreement-content" class="markdown-body"></div>
+        </div>
+        <div class="gate-modal-foot">
+            <button type="button" class="primary" onclick="acceptAndClose()">同意并继续</button>
+            <button type="button" onclick="closeAgreement()">关闭</button>
         </div>
     </div>
+</div>
 
-    <!-- 用户协议弹窗 -->
-    <div id="agreement-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
-        <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
-            <div class="p-4 border-b flex justify-between items-center">
-                <h3 class="text-lg font-bold text-gray-800">用户协议</h3>
-                <button onclick="closeAgreement()" class="text-gray-500 hover:text-gray-700">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-            <div class="p-6 overflow-y-auto flex-1">
-                <div id="agreement-content" class="markdown-body" style="font-size: 0.875rem;"></div>
-            </div>
-            <div class="p-4 border-t flex gap-3">
-                <button onclick="acceptAndClose()"
-                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg font-medium transition-colors">
-                    同意并继续
-                </button>
-                <button onclick="closeAgreement()"
-                        class="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-700 py-2 px-4 rounded-lg font-medium transition-colors">
-                    关闭
-                </button>
-            </div>
-        </div>
-    </div>
+<script>
+    const baseUrl = window.location.origin;
+    const registrationEnabled = {% if registration_enabled %}true{% else %}false{% endif %};
+    const turnstileEnabled = {% if turnstile_enabled %}true{% else %}false{% endif %};
+    const loginTab = document.getElementById('login-tab');
+    const registerTab = document.getElementById('register-tab');
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    const messageDiv = document.getElementById('message');
 
-    <script>
-        const baseUrl = window.location.origin;
-        const registrationEnabled = {% if registration_enabled %}true{% else %}false{% endif %};
-        const turnstileEnabled = {% if turnstile_enabled %}true{% else %}false{% endif %};
-        const loginTab = document.getElementById('login-tab');
-        const registerTab = document.getElementById('register-tab');
-        const loginForm = document.getElementById('login-form');
-        const registerForm = document.getElementById('register-form');
-        const messageDiv = document.getElementById('message');
+    // ==================== 用户协议 ====================
+    async function showAgreement(event) {
+        event.preventDefault();
+        try {
+            const response = await fetch(`${baseUrl}/api/user-agreement/current`);
+            const data = await response.json();
 
-        // ==================== 用户协议功能 ====================
+            if (data.status === 'success' && data.agreement) {
+                const content = data.agreement.content;
+                const modal = document.getElementById('agreement-modal');
+                const contentDiv = document.getElementById('agreement-content');
 
-        let currentFormType = 'login';  // 记录当前表单类型
-
-        async function showAgreement(event) {
-            event.preventDefault();
-            try {
-                const response = await fetch(`${baseUrl}/api/user-agreement/current`);
-                const data = await response.json();
-
-                if (data.status === 'success' && data.agreement) {
-                    const content = data.agreement.content;
-                    const modal = document.getElementById('agreement-modal');
-                    const contentDiv = document.getElementById('agreement-content');
-
-                    // 使用 marked 渲染 Markdown (兼容多版本)
-                    if (typeof marked !== 'undefined') {
-                        if (typeof marked.parse === 'function') {
-                            contentDiv.innerHTML = marked.parse(content);
-                        } else if (typeof marked === 'function') {
-                            contentDiv.innerHTML = marked(content);
-                        } else {
-                            console.error('marked库加载异常');
-                            contentDiv.innerHTML = content.replace(/\n/g, '<br>');
-                        }
+                if (typeof marked !== 'undefined') {
+                    if (typeof marked.parse === 'function') {
+                        contentDiv.innerHTML = marked.parse(content);
+                    } else if (typeof marked === 'function') {
+                        contentDiv.innerHTML = marked(content);
                     } else {
-                        console.warn('marked库未加载,使用纯文本显示');
                         contentDiv.innerHTML = content.replace(/\n/g, '<br>');
                     }
-
-                    modal.classList.remove('hidden');
                 } else {
-                    alert('暂无用户协议');
+                    contentDiv.innerHTML = content.replace(/\n/g, '<br>');
                 }
-            } catch (error) {
-                console.error('加载用户协议失败:', error);
-                alert('加载用户协议失败,请稍后重试');
+
+                modal.classList.remove('hidden');
+            } else {
+                alert('暂无用户协议');
             }
+        } catch (error) {
+            console.error('加载用户协议失败:', error);
+            alert('加载用户协议失败,请稍后重试');
+        }
+    }
+
+    function closeAgreement() {
+        document.getElementById('agreement-modal').classList.add('hidden');
+    }
+
+    function acceptAndClose() {
+        const loginFormActive = !loginForm.classList.contains('hidden');
+        const checkboxId = loginFormActive ? 'login-agree' : 'register-agree';
+        document.getElementById(checkboxId).checked = true;
+        closeAgreement();
+    }
+
+    function onLoginTurnstileSuccess(token) {
+        document.getElementById('login-turnstile-token').value = token;
+    }
+
+    function onRegisterTurnstileSuccess(token) {
+        document.getElementById('register-turnstile-token').value = token;
+    }
+
+    // ==================== 标签切换 ====================
+    if (registrationEnabled && loginTab && registerTab) {
+        loginTab.addEventListener('click', () => {
+            loginTab.classList.add('on');
+            registerTab.classList.remove('on');
+            loginForm.classList.remove('hidden');
+            registerForm.classList.add('hidden');
+            messageDiv.classList.add('hidden');
+        });
+
+        registerTab.addEventListener('click', () => {
+            registerTab.classList.add('on');
+            loginTab.classList.remove('on');
+            registerForm.classList.remove('hidden');
+            loginForm.classList.add('hidden');
+            messageDiv.classList.add('hidden');
+        });
+
+        if (window.location.hash === '#register') {
+            registerTab.click();
+        }
+    }
+
+    function showMessage(message, isError = false) {
+        messageDiv.textContent = message;
+        messageDiv.className = 'gate-msg ' + (isError ? 'err' : 'ok');
+        messageDiv.classList.remove('hidden');
+    }
+
+    // ==================== 登录 ====================
+    loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        const turnstileToken = document.getElementById('login-turnstile-token').value.trim();
+        const agreed = document.getElementById('login-agree').checked;
+
+        if (!username || !password) {
+            showMessage('请输入用户名和密码', true);
+            return;
+        }
+        if (!agreed) {
+            showMessage('请先阅读并同意用户协议', true);
+            return;
+        }
+        if (turnstileEnabled && !turnstileToken) {
+            showMessage('请完成人机验证', true);
+            return;
         }
 
-        function closeAgreement() {
-            document.getElementById('agreement-modal').classList.add('hidden');
-        }
-
-        function acceptAndClose() {
-            // 自动勾选当前活跃表单的协议复选框
-            const loginFormActive = !loginForm.classList.contains('hidden');
-            const checkboxId = loginFormActive ? 'login-agree' : 'register-agree';
-            document.getElementById(checkboxId).checked = true;
-            closeAgreement();
-        }
-
-        // Turnstile 验证成功回调
-        function onLoginTurnstileSuccess(token) {
-            document.getElementById('login-turnstile-token').value = token;
-        }
-
-        function onRegisterTurnstileSuccess(token) {
-            document.getElementById('register-turnstile-token').value = token;
-        }
-
-        // Tab 切换 (只在开放注册时启用)
-        if (registrationEnabled && loginTab && registerTab) {
-            loginTab.addEventListener('click', () => {
-                loginTab.classList.add('bg-white', 'text-blue-600', 'shadow');
-                loginTab.classList.remove('text-gray-600');
-                registerTab.classList.remove('bg-white', 'text-blue-600', 'shadow');
-                registerTab.classList.add('text-gray-600');
-                loginForm.classList.remove('hidden');
-                registerForm.classList.add('hidden');
-                messageDiv.classList.add('hidden');
+        try {
+            const response = await fetch(`${baseUrl}/api/auth/login`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ username, password, turnstile_token: turnstileToken })
             });
+            const data = await response.json();
 
-            registerTab.addEventListener('click', () => {
-                registerTab.classList.add('bg-white', 'text-blue-600', 'shadow');
-                registerTab.classList.remove('text-gray-600');
-                loginTab.classList.remove('bg-white', 'text-blue-600', 'shadow');
-                loginTab.classList.add('text-gray-600');
-                registerForm.classList.remove('hidden');
-                loginForm.classList.add('hidden');
-                messageDiv.classList.add('hidden');
-            });
-
-            // 检查 URL hash，如果是 #register 则自动切换到注册标签
-            if (window.location.hash === '#register') {
-                registerTab.click();
+            if (response.ok) {
+                window.location.href = '/';
+            } else {
+                showMessage(data.detail || '登录失败', true);
             }
+        } catch (error) {
+            console.error('登录错误:', error);
+            showMessage('网络错误，请稍后重试', true);
         }
+    });
 
-        // 显示消息
-        function showMessage(message, isError = false) {
-            messageDiv.textContent = message;
-            messageDiv.className = `mt-4 p-3 rounded-lg text-sm ${isError ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`;
-            messageDiv.classList.remove('hidden');
-        }
-
-        // 登录表单提交
-        loginForm.addEventListener('submit', async (e) => {
+    // ==================== 注册 ====================
+    if (registrationEnabled && registerForm) {
+        registerForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            const username = document.getElementById('register-username').value.trim();
+            const password = document.getElementById('register-password').value;
+            const passwordConfirm = document.getElementById('register-password-confirm').value;
+            const turnstileToken = document.getElementById('register-turnstile-token').value.trim();
+            const agreed = document.getElementById('register-agree').checked;
 
-            const username = document.getElementById('login-username').value.trim();
-            const password = document.getElementById('login-password').value;
-            const turnstileToken = document.getElementById('login-turnstile-token').value.trim();
-            const agreed = document.getElementById('login-agree').checked;
-
-            if (!username || !password) {
-                showMessage('请输入用户名和密码', true);
+            if (!username || !password || !passwordConfirm) {
+                showMessage('请填写所有字段', true);
                 return;
             }
-
             if (!agreed) {
                 showMessage('请先阅读并同意用户协议', true);
                 return;
             }
-
             if (turnstileEnabled && !turnstileToken) {
                 showMessage('请完成人机验证', true);
                 return;
             }
+            if (username.length < 3 || username.length > 20) {
+                showMessage('用户名长度应为3-20个字符', true);
+                return;
+            }
+            if (password.length < 6) {
+                showMessage('密码长度至少为6个字符', true);
+                return;
+            }
+            if (password !== passwordConfirm) {
+                showMessage('两次输入的密码不一致', true);
+                return;
+            }
 
             try {
-                const response = await fetch(`${baseUrl}/api/auth/login`, {
+                const response = await fetch(`${baseUrl}/api/auth/register`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ username, password, turnstile_token: turnstileToken })
+                    body: JSON.stringify({ username, password, token: '', turnstile_token: turnstileToken })
                 });
-
                 const data = await response.json();
 
                 if (response.ok) {
-                    window.location.href = '/';
+                    showMessage(data.message || '注册成功！请登录', false);
+                    setTimeout(() => {
+                        loginTab.click();
+                        document.getElementById('login-username').value = username;
+                    }, 1500);
                 } else {
-                    showMessage(data.detail || '登录失败', true);
+                    showMessage(data.detail || '注册失败', true);
                 }
             } catch (error) {
-                console.error('登录错误:', error);
                 showMessage('网络错误，请稍后重试', true);
             }
         });
-
-        // 注册表单提交 (只在开放注册时启用)
-        if (registrationEnabled && registerForm) {
-            registerForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const username = document.getElementById('register-username').value.trim();
-                const password = document.getElementById('register-password').value;
-                const passwordConfirm = document.getElementById('register-password-confirm').value;
-                const turnstileToken = document.getElementById('register-turnstile-token').value.trim();
-                const agreed = document.getElementById('register-agree').checked;
-
-                if (!username || !password || !passwordConfirm) {
-                    showMessage('请填写所有字段', true);
-                    return;
-                }
-
-                if (!agreed) {
-                    showMessage('请先阅读并同意用户协议', true);
-                    return;
-                }
-
-                if (turnstileEnabled && !turnstileToken) {
-                    showMessage('请完成人机验证', true);
-                    return;
-                }
-
-                if (username.length < 3 || username.length > 20) {
-                    showMessage('用户名长度应为3-20个字符', true);
-                    return;
-                }
-
-                if (password.length < 6) {
-                    showMessage('密码长度至少为6个字符', true);
-                    return;
-                }
-
-                if (password !== passwordConfirm) {
-                    showMessage('两次输入的密码不一致', true);
-                    return;
-                }
-
-                try {
-                    const response = await fetch(`${baseUrl}/api/auth/register`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ username, password, token: '', turnstile_token: turnstileToken })
-                    });
-
-                    const data = await response.json();
-
-                    if (response.ok) {
-                        showMessage(data.message || '注册成功！请登录', false);
-                        setTimeout(() => {
-                            loginTab.click();
-                            document.getElementById('login-username').value = username;
-                        }, 1500);
-                    } else {
-                        showMessage(data.detail || '注册失败', true);
-                    }
-                } catch (error) {
-                    showMessage('网络错误，请稍后重试', true);
-                }
-            });
-        }
-    </script>
+    }
+</script>
 </body>
 </html>
